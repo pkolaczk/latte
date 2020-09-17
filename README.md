@@ -27,7 +27,7 @@ This is work-in-progress.
 1. [Install Datastax C++ Driver 2.15](https://docs.datastax.com/en/developer/cpp-driver/2.15/topics/installation/) 
    with development packages
 2. [Install Rust toolchain](https://rustup.rs/)
-3. `cargo install --git https://github.com/riptano/latte`
+3. Run `cargo install --git https://github.com/pkolaczk/latte`
 
 ## Usage
 1. Start a Cassandra cluster somewhere (can be a local node)
