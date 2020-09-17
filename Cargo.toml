@@ -10,6 +10,7 @@ edition = "2018"
 [dependencies]
 cassandra-cpp = "0.15.1"
 clap = "3.0.0-beta.1"
+cpu-time = "1.0.0"
 hdrhistogram = "7.1.0"
 time = "0.1.44"
 tokio = { version = "0.2", features = ["full"] }

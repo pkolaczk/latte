@@ -3,7 +3,7 @@ use std::process::exit;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cassandra_cpp::{stmt, Cluster, Session};
+use cassandra_cpp::{stmt, Cluster, Session, BindRustType, CassResult};
 use clap::Clap;
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -31,11 +31,12 @@ fn connect(conf: &Config) -> cassandra_cpp::Result<Session> {
         .set_max_connections_per_host(conf.connections)
         .unwrap();
     cluster
-        .set_queue_size_event(conf.concurrency as u32)
+        .set_queue_size_event(conf.parallelism as u32)
         .unwrap();
-    cluster.set_queue_size_io(conf.concurrency as u32).unwrap();
-    cluster.set_num_threads_io(1).unwrap();
+    cluster.set_queue_size_io(conf.parallelism as u32).unwrap();
+    cluster.set_num_threads_io(conf.io_threads).unwrap();
     cluster.set_connect_timeout(time::Duration::seconds(5));
+    cluster.set_load_balance_round_robin();
     cluster.connect()
 }
 
@@ -47,13 +48,20 @@ async fn setup_schema(_conf: &Config, session: &Session) -> cassandra_cpp::Resul
              WITH replication = { 'class': 'SimpleStrategy', 'replication_factor': 1 }"
         ))
         .await?;
+
     session
         .execute(&stmt!(
-            "CREATE TABLE IF NOT EXISTS latte.espresso(pk BIGINT PRIMARY KEY, value BIGINT)"
+            "CREATE TABLE IF NOT EXISTS latte.espresso(pk BIGINT PRIMARY KEY, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)"
         ))
         .await?;
     Ok(())
 }
+
+async fn setup_data(session: &Session) -> cassandra_cpp::Result<()> {
+    session.execute(&stmt!("INSERT INTO latte.espresso(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)")).await?;
+    Ok(())
+}
+
 
 fn interval(conf: &Config) -> Interval {
     let interval = Duration::from_nanos(max(1, (1000000000.0 / conf.rate) as u64));
@@ -70,14 +78,18 @@ where
 {
     let mut stats = Stats::start();
     let mut interval = interval(conf);
-    let semaphore = Arc::new(Semaphore::new(conf.concurrency));
+    let semaphore = Arc::new(Semaphore::new(conf.parallelism));
 
     type Item = Result<Duration, ()>;
-    let (tx, mut rx): (Sender<Item>, Receiver<Item>) = tokio::sync::mpsc::channel(conf.concurrency);
+    let (tx, mut rx): (Sender<Item>, Receiver<Item>) = tokio::sync::mpsc::channel(conf.parallelism);
+    let mut concurrency_sum = 0;
 
     for i in 0..conf.count {
         interval.tick().await;
         let permit = semaphore.clone().acquire_owned().await;
+        let concurrent_count = conf.parallelism - semaphore.available_permits();
+        stats.enqueued(concurrent_count);
+
         while let Ok(d) = rx.try_recv() {
             stats.record(d)
         }
@@ -105,8 +117,7 @@ where
     stats
 }
 
-#[tokio::main]
-async fn main() {
+async fn async_main() {
     let opt: Config = Config::parse();
     let session = match connect(&opt) {
         Ok(s) => s,
@@ -124,15 +135,35 @@ async fn main() {
         }
     }
 
+    match setup_data(&session).await {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("Failed to prepare data: {}", e);
+            exit(1);
+        }
+    }
+
+
     let statement = session
-        .prepare("SELECT value FROM latte.espresso WHERE pk = 1")
+        .prepare("SELECT c1, c2, c3, c4, c5 FROM latte.espresso WHERE pk = ?")
         .unwrap()
         .await
         .unwrap();
     let ctx = Arc::new((session, statement));
-    let stats = benchmark(&opt, ctx, |(session, statement), _| {
-        session.execute(&statement.bind())
+    let stats = benchmark(&opt, ctx, |(session, statement), i| {
+        session.execute(&statement.bind().bind(0, 1 as i64).unwrap())
     })
-    .await;
+        .await;
     stats.print();
+}
+
+fn main() {
+    let mut runtime = tokio::runtime::Builder::new()
+        .max_threads(1)
+        .basic_scheduler()
+        .enable_time()
+        .build()
+        .unwrap();
+
+    runtime.block_on(async_main());
 }

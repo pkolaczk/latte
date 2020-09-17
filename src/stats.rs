@@ -1,5 +1,6 @@
 use hdrhistogram::Histogram;
 use tokio::time::{Duration, Instant};
+use cpu_time::{ThreadTime, ProcessTime};
 
 pub struct Stats {
     histogram: Histogram<u64>,
@@ -7,6 +8,10 @@ pub struct Stats {
     end: Instant,
     completed: u64,
     errors: u64,
+    process_cpu_time: ProcessTime,
+    benchmark_thread_cpu_time: ThreadTime,
+    enqueued: u64,
+    queue_len_sum: u64
 }
 
 impl Stats {
@@ -17,6 +22,10 @@ impl Stats {
             end: Instant::now(),
             completed: 0,
             errors: 0,
+            process_cpu_time: ProcessTime::now(),
+            benchmark_thread_cpu_time: ThreadTime::now(),
+            enqueued: 0,
+            queue_len_sum: 0
         }
     }
 
@@ -32,44 +41,55 @@ impl Stats {
         };
     }
 
+    pub fn enqueued(&mut self, queue_length: usize) {
+        self.enqueued += 1;
+        self.queue_len_sum += queue_length as u64;
+    }
+
     pub fn finish(&mut self) {
         self.end = Instant::now();
+        self.process_cpu_time = ProcessTime::now();
+        self.benchmark_thread_cpu_time = ThreadTime::now();
     }
 
     fn print_percentile(&self, percentile: f64) {
         println!(
-            "{:6.2}%   {:7} µs",
+            "  p{:<5} {:8.3} ms",
             percentile,
-            self.histogram.value_at_percentile(percentile)
+            self.histogram.value_at_percentile(percentile) as f64 / 1000.0
         );
     }
 
     pub fn print(&self) {
-        let duration = (self.end - self.start).as_secs_f64();
-        println!(" Completed: {} reqs", self.completed);
-        println!("    Errors: {} reqs", self.errors);
-        println!("   Elapsed: {:.3} s", duration);
-        println!("Throughput: {:.2} req/s", (self.completed as f64 / duration));
+        let wall_clock_time = (self.end - self.start).as_secs_f64();
+        let process_cpu_time = self.process_cpu_time.as_duration().as_secs_f64();
+        println!("------------------------------------");
+        println!("    Elapsed:  {:9.3} s", wall_clock_time);
+        println!("   CPU time:  {:9.3} s ({:6.1}%)", process_cpu_time, 100.0 * process_cpu_time / wall_clock_time);
+        println!("  Completed: {:9} reqs", self.completed);
+        println!("     Errors: {:9} reqs", self.errors);
+        println!(" Throughput: {:9.1} req/s", (self.completed as f64 / wall_clock_time));
+        println!("Concurrency: {:9.1} reqs", self.queue_len_sum as f64 / self.enqueued as f64);
+        println!("------------------------------------");
 
         let histogram = &self.histogram;
         if !histogram.is_empty() {
             println!();
-            println!("Latency summary:");
-            println!("percentile   latency");
-            println!("    min   {:7} µs", histogram.min());
+            println!("Latency:");
+            println!("  min    {:8.3} ms", histogram.min() as f64 / 1000.0);
+
             for p in &[50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99] {
                 self.print_percentile(*p);
             }
-            println!("    max   {:7} µs", histogram.max());
+            println!("  max    {:8.3} ms", histogram.max() as f64 / 1000.0);
 
             println!();
-            println!("Histogram:");
-            println!("percentile   latency     count");
+            println!("Percentile   Latency     Count");
             for x in self.histogram.iter_log(histogram.min(), 1.3) {
                 println!(
-                    "{:6.2}%   {:7} µs  {:8}   |{}",
+                    "{:6.2}   {:8.3} ms  {:8}   |{}",
                     x.percentile(),
-                    x.value_iterated_to(),
+                    x.value_iterated_to() as f64 / 1000.0,
                     x.count_since_last_iteration(),
                     "*".repeat((100 * x.count_since_last_iteration() / histogram.len()) as usize)
                 )
