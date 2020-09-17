@@ -3,15 +3,16 @@ use std::process::exit;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cassandra_cpp::{stmt, Cluster, Session, BindRustType, CassResult};
+use cassandra_cpp::{stmt, BindRustType, Cluster, Session};
 use clap::Clap;
+use tokio::macros::support::Future;
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Semaphore;
 use tokio::time::Interval;
 
 use config::Config;
-use tokio::macros::support::Future;
+
 use crate::stats::Stats;
 
 mod config;
@@ -34,7 +35,7 @@ fn connect(conf: &Config) -> cassandra_cpp::Result<Session> {
         .set_queue_size_event(conf.parallelism as u32)
         .unwrap();
     cluster.set_queue_size_io(conf.parallelism as u32).unwrap();
-    cluster.set_num_threads_io(conf.io_threads).unwrap();
+    cluster.set_num_threads_io(conf.threads).unwrap();
     cluster.set_connect_timeout(time::Duration::seconds(5));
     cluster.set_load_balance_round_robin();
     cluster.connect()
@@ -58,13 +59,43 @@ async fn setup_schema(_conf: &Config, session: &Session) -> cassandra_cpp::Resul
 }
 
 async fn setup_data(session: &Session) -> cassandra_cpp::Result<()> {
-    session.execute(&stmt!("INSERT INTO latte.espresso(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)")).await?;
+    session
+        .execute(&stmt!(
+            "INSERT INTO latte.espresso(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)"
+        ))
+        .await?;
     Ok(())
 }
 
+/// Runs action as fast as possible within the parallelism limit, without measuring anything
+async fn warmup<F, C, R, RR, RE>(conf: &Config, context: Arc<C>, action: F)
+where
+    F: Fn(&C, u64) -> R + Send + Sync + Copy + 'static,
+    R: Future<Output = Result<RR, RE>> + Send,
+    C: Send + Sync + 'static,
+    RR: Send,
+    RE: Send,
+{
+    let (tx, mut rx): (Sender<()>, Receiver<()>) = tokio::sync::mpsc::channel(conf.parallelism);
+    let semaphore = Arc::new(Semaphore::new(conf.parallelism));
+    for i in 0..conf.warmup_count {
+        let permit = semaphore.clone().acquire_owned().await;
+        let context = context.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let _discard = action(&context, i).await;
+            // need to move the permit and tx to inside of the spawned task,
+            // so we drop it not earlier than the task is done
+            drop(permit);
+            drop(tx);
+        });
+    }
+    drop(tx);
+    rx.next().await; // wait until all coroutines finish
+}
 
-fn interval(conf: &Config) -> Interval {
-    let interval = Duration::from_nanos(max(1, (1000000000.0 / conf.rate) as u64));
+fn interval(rate: f32) -> Interval {
+    let interval = Duration::from_nanos(max(1, (1000000000.0 / rate) as u64));
     tokio::time::interval(interval)
 }
 
@@ -76,27 +107,28 @@ where
     RR: Send,
     RE: Send,
 {
+    if conf.warmup_count > 0 {
+        warmup(conf, context.clone(), action).await;
+    }
+
     let mut stats = Stats::start();
-    let mut interval = interval(conf);
+    let mut interval = interval(conf.rate);
     let semaphore = Arc::new(Semaphore::new(conf.parallelism));
 
     type Item = Result<Duration, ()>;
     let (tx, mut rx): (Sender<Item>, Receiver<Item>) = tokio::sync::mpsc::channel(conf.parallelism);
-    let mut concurrency_sum = 0;
 
     for i in 0..conf.count {
         interval.tick().await;
         let permit = semaphore.clone().acquire_owned().await;
         let concurrent_count = conf.parallelism - semaphore.available_permits();
         stats.enqueued(concurrent_count);
-
         while let Ok(d) = rx.try_recv() {
             stats.record(d)
         }
         let mut tx = tx.clone();
         let context = context.clone();
         tokio::spawn(async move {
-            let _permit = permit;
             let start = Instant::now();
             match action(&context, i).await {
                 Ok(_) => {
@@ -106,6 +138,7 @@ where
                 }
                 Err(_) => tx.send(Err(())).await.unwrap(),
             }
+            drop(permit);
         });
     }
     drop(tx);
@@ -143,18 +176,20 @@ async fn async_main() {
         }
     }
 
-
     let statement = session
         .prepare("SELECT c1, c2, c3, c4, c5 FROM latte.espresso WHERE pk = ?")
         .unwrap()
         .await
         .unwrap();
     let ctx = Arc::new((session, statement));
-    let stats = benchmark(&opt, ctx, |(session, statement), i| {
+
+    let stats = benchmark(&opt, ctx, |(session, statement), _i| {
         session.execute(&statement.bind().bind(0, 1 as i64).unwrap())
     })
-        .await;
-    stats.print();
+    .await;
+
+    opt.print();
+    stats.print(&opt);
 }
 
 fn main() {
