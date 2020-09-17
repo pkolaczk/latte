@@ -104,7 +104,7 @@ where
     rx.next().await; // wait until all coroutines finish
 }
 
-fn interval(rate: f32) -> Interval {
+fn interval(rate: f64) -> Interval {
     let interval = Duration::from_nanos(max(1, (1000000000.0 / rate) as u64));
     tokio::time::interval(interval)
 }
@@ -123,14 +123,16 @@ where
 
     let progress = Arc::new(FastProgressBar::new_progress_bar("Running...", conf.count));
     let mut stats = Stats::start();
-    let mut interval = interval(conf.rate);
+    let mut interval = interval(conf.rate.unwrap_or(f64::MAX));
     let semaphore = Arc::new(Semaphore::new(conf.parallelism));
 
     type Item = Result<Duration, ()>;
     let (tx, mut rx): (Sender<Item>, Receiver<Item>) = tokio::sync::mpsc::channel(conf.parallelism);
 
     for i in 0..conf.count {
-        interval.tick().await;
+        if conf.rate.is_some() {
+            interval.tick().await;
+        }
         let permit = semaphore.clone().acquire_owned().await;
         let concurrent_count = conf.parallelism - semaphore.available_permits();
         stats.enqueued(concurrent_count);

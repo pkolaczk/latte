@@ -4,9 +4,9 @@ use clap::Clap;
 #[derive(Clap, Debug)]
 pub struct Config {
     /// Number of requests per second to send.
-    /// If 0 the requests will be sent as fast as possible within the parallelism limit/
-    #[clap(short("r"), long, default_value = "0")]
-    pub rate: f32,
+    /// If not given the requests will be sent as fast as possible within the parallelism limit
+    #[clap(short("r"), long)]
+    pub rate: Option<f64>,
 
     /// Number of non-measured, warmup requests
     #[clap(short("w"), long("warmup"), default_value = "0")]
@@ -38,7 +38,12 @@ impl Config {
         println!("CONFIG ----------------------------------------");
         println!("           Threads: {:11}", self.threads);
         println!("       Connections: {:11}", self.threads * self.connections);
-        println!("        Rate limit: {:11.1} req/s", self.rate);
+        match self.rate {
+            Some(rate) =>
+                println!("        Rate limit: {:11.1} req/s", rate),
+            None =>
+                println!("        Rate limit:         disabled"),
+        }
         println!(" Concurrency limit: {:11} reqs", self.parallelism);
         println!();
     }

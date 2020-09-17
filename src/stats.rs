@@ -70,7 +70,7 @@ impl Stats {
         let completed_rate = 100.0 * self.completed as f64 / self.enqueued as f64;
         let error_rate = 100.0 * self.errors as f64 / self.enqueued as f64;
         let throughput = self.completed as f64 / wall_clock_time;
-        let throughput_ratio = 100.0 * throughput / conf.rate as f64;
+        let throughput_ratio = 100.0 * throughput / conf.rate.unwrap_or(f64::MAX);
         let concurrency = self.queue_len_sum as f64 / self.enqueued as f64;
         let concurrency_ratio = 100.0 * concurrency / conf.parallelism as f64;
 
