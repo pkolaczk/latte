@@ -13,9 +13,11 @@ use tokio::time::Interval;
 
 use config::Config;
 
+use crate::progress::FastProgressBar;
 use crate::stats::Stats;
 
 mod config;
+mod progress;
 mod stats;
 
 /// Prepares the connection to Cassandra.
@@ -52,7 +54,8 @@ async fn setup_schema(_conf: &Config, session: &Session) -> cassandra_cpp::Resul
 
     session
         .execute(&stmt!(
-            "CREATE TABLE IF NOT EXISTS latte.espresso(pk BIGINT PRIMARY KEY, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)"
+            "CREATE TABLE IF NOT EXISTS latte.tiny\
+            (pk BIGINT PRIMARY KEY, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)"
         ))
         .await?;
     Ok(())
@@ -61,7 +64,7 @@ async fn setup_schema(_conf: &Config, session: &Session) -> cassandra_cpp::Resul
 async fn setup_data(session: &Session) -> cassandra_cpp::Result<()> {
     session
         .execute(&stmt!(
-            "INSERT INTO latte.espresso(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)"
+            "INSERT INTO latte.tiny(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)"
         ))
         .await?;
     Ok(())
@@ -76,19 +79,26 @@ where
     RR: Send,
     RE: Send,
 {
+    let progress = Arc::new(FastProgressBar::new_progress_bar(
+        "Warming up...",
+        conf.count,
+    ));
     let (tx, mut rx): (Sender<()>, Receiver<()>) = tokio::sync::mpsc::channel(conf.parallelism);
     let semaphore = Arc::new(Semaphore::new(conf.parallelism));
     for i in 0..conf.warmup_count {
         let permit = semaphore.clone().acquire_owned().await;
         let context = context.clone();
+        let progress = progress.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
             let _discard = action(&context, i).await;
+            progress.tick();
             // need to move the permit and tx to inside of the spawned task,
             // so we drop it not earlier than the task is done
             drop(permit);
             drop(tx);
         });
+        //progress.tick();
     }
     drop(tx);
     rx.next().await; // wait until all coroutines finish
@@ -111,6 +121,7 @@ where
         warmup(conf, context.clone(), action).await;
     }
 
+    let progress = Arc::new(FastProgressBar::new_progress_bar("Running...", conf.count));
     let mut stats = Stats::start();
     let mut interval = interval(conf.rate);
     let semaphore = Arc::new(Semaphore::new(conf.parallelism));
@@ -128,6 +139,7 @@ where
         }
         let mut tx = tx.clone();
         let context = context.clone();
+        let progress = progress.clone();
         tokio::spawn(async move {
             let start = Instant::now();
             match action(&context, i).await {
@@ -138,6 +150,7 @@ where
                 }
                 Err(_) => tx.send(Err(())).await.unwrap(),
             }
+            progress.tick();
             drop(permit);
         });
     }
@@ -177,7 +190,7 @@ async fn async_main() {
     }
 
     let statement = session
-        .prepare("SELECT c1, c2, c3, c4, c5 FROM latte.espresso WHERE pk = ?")
+        .prepare("SELECT c1, c2, c3, c4, c5 FROM latte.tiny WHERE pk = ?")
         .unwrap()
         .await
         .unwrap();

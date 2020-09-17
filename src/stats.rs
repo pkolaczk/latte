@@ -62,7 +62,10 @@ impl Stats {
 
     pub fn print(&self, conf: &Config) {
         let wall_clock_time = (self.end - self.start).as_secs_f64();
-        let cpu_time = self.end_cpu_time.duration_since(self.start_cpu_time).as_secs_f64();
+        let cpu_time = self
+            .end_cpu_time
+            .duration_since(self.start_cpu_time)
+            .as_secs_f64();
         let cpu_util = 100.0 * cpu_time / wall_clock_time;
         let completed_rate = 100.0 * self.completed as f64 / self.enqueued as f64;
         let error_rate = 100.0 * self.errors as f64 / self.enqueued as f64;
@@ -93,7 +96,6 @@ impl Stats {
             "       Concurrency: {:11.1} reqs    {:6.1}%",
             concurrency, concurrency_ratio
         );
-
 
         let histogram = &self.histogram;
         println!();
