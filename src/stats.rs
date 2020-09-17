@@ -74,7 +74,7 @@ impl Stats {
         let concurrency = self.queue_len_sum as f64 / self.enqueued as f64;
         let concurrency_ratio = 100.0 * concurrency / conf.parallelism as f64;
 
-        println!("STATS -----------------------------------------");
+        println!("SUMMARY ----------------------------------------");
         println!("           Elapsed: {:11.3} s", wall_clock_time);
         println!(
             "          CPU time: {:11.3} s       {:6.1}%",
@@ -93,13 +93,13 @@ impl Stats {
             throughput, throughput_ratio
         );
         println!(
-            "       Concurrency: {:11.1} reqs    {:6.1}%",
+            "  Avg. concurrency: {:11.1} reqs    {:6.1}%",
             concurrency, concurrency_ratio
         );
 
         let histogram = &self.histogram;
         println!();
-        println!("LATENCY ---------------------------------------");
+        println!("RESPONSE TIMES ---------------------------------");
         println!(
             "               Min: {:11.3} ms",
             histogram.min() as f64 / 1000.0
@@ -114,11 +114,11 @@ impl Stats {
         );
 
         println!();
-        println!("HISTOGRAM ------------------------------------");
-        println!("Percentile   Latency     Count");
+        println!("DETAILED HISTOGRAM -----------------------------");
+        println!("Percentile   Resp. time      Count");
         for x in self.histogram.iter_log(histogram.min(), 1.3) {
             println!(
-                "{:6.2}   {:8.3} ms  {:8}   |{}",
+                "{:6.2}     {:9.3} ms  {:9}   |{}",
                 x.percentile(),
                 x.value_iterated_to() as f64 / 1000.0,
                 x.count_since_last_iteration(),

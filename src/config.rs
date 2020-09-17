@@ -35,9 +35,9 @@ pub struct Config {
 
 impl Config {
     pub fn print(&self) {
-        println!("CONFIG ----------------------------------------");
+        println!("CONFIG -----------------------------------------");
         println!("           Threads: {:11}", self.threads);
-        println!("       Connections: {:11}", self.threads * self.connections);
+        println!(" Total connections: {:11}", self.threads * self.connections);
         match self.rate {
             Some(rate) =>
                 println!("        Rate limit: {:11.1} req/s", rate),
