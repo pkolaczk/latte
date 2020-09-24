@@ -16,7 +16,9 @@ use config::Config;
 use crate::progress::FastProgressBar;
 use crate::session::*;
 use crate::stats::BenchmarkStats;
-use crate::workload::ReadSame;
+use crate::workload::read_none::*;
+use crate::workload::read_same::*;
+use crate::workload::write::*;
 use crate::workload::Workload;
 
 mod config;
@@ -37,9 +39,13 @@ fn unwrap_workload<W: Workload>(w: cassandra_cpp::Result<W>) -> W {
     }
 }
 
-async fn workload(_conf: &Config, session: Session) -> Arc<dyn Workload> {
+async fn workload(conf: &Config, session: Session) -> Arc<dyn Workload> {
     let session = Box::new(session);
-    Arc::new(unwrap_workload(ReadSame::new(session).await))
+    match conf.workload {
+        config::Workload::ReadNone => Arc::new(unwrap_workload(ReadNone::new(session).await)),
+        config::Workload::ReadSame => Arc::new(unwrap_workload(ReadSame::new(session).await)),
+        config::Workload::Write => Arc::new(unwrap_workload(Write::new(session).await)),
+    }
 }
 
 fn interval(rate: f64) -> Interval {

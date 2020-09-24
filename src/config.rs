@@ -1,4 +1,24 @@
 use clap::Clap;
+use std::fmt::{Display, Formatter};
+use core::fmt;
+
+#[derive(Clap, Debug)]
+pub enum Workload {
+    ReadNone,
+    ReadSame,
+    Write,
+}
+
+impl Display for Workload {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Workload::ReadNone => write!(f, "read-none")?,
+            Workload::ReadSame => write!(f, "read-same")?,
+            Workload::Write => write!(f, "write")?,
+        };
+        Ok(())
+    }
+}
 
 /// Latency Tester for Apache Cassandra
 #[derive(Clap, Debug)]
@@ -13,7 +33,7 @@ pub struct Config {
     pub rate: Option<f64>,
 
     /// Number of non-measured, warmup requests
-    #[clap(short("w"), long("warmup"), default_value = "0")]
+    #[clap(short("w"), long("warmup"), default_value = "10000")]
     pub warmup_count: u64,
 
     /// Number of measured requests
@@ -32,6 +52,10 @@ pub struct Config {
     #[clap(short("p"), long("concurrency"), default_value = "1024")]
     pub concurrency: usize,
 
+    /// Workload type
+    #[clap(arg_enum, name = "workload", required = true)]
+    pub workload: Workload,
+
     /// List of Cassandra addresses to connect to
     #[clap(name = "addresses", required = true, default_value = "localhost")]
     pub addresses: Vec<String>,
@@ -40,11 +64,12 @@ pub struct Config {
 impl Config {
     pub fn print(&self) {
         println!("CONFIG -----------------------------------------");
+        println!("          Workload: {:>11}", self.workload.to_string());
         println!("           Threads: {:11}", self.threads);
         println!(" Total connections: {:11}", self.threads * self.connections);
         match self.rate {
             Some(rate) => println!("        Rate limit: {:11.1} req/s", rate),
-            None => println!("        Rate limit:         disabled"),
+            None =>            println!("        Rate limit: {:>11} req/s", "-"),
         }
         println!(" Concurrency limit: {:11} reqs", self.concurrency);
         println!();

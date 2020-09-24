@@ -105,7 +105,7 @@ impl BenchmarkStats {
             histogram.min() as f64 / 1000.0
         );
 
-        for p in &[25.0, 50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99] {
+        for p in &[25.0, 50.0, 75.0, 90.0, 95.0, 98.0, 99.0, 99.9, 99.99] {
             self.print_percentile(*p);
         }
         println!(

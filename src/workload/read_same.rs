@@ -1,40 +1,20 @@
-use async_trait::async_trait;
-use cassandra_cpp::{stmt, PreparedStatement, Result, Session};
 use std::sync::Arc;
 
-pub struct WorkloadStats {
-    pub partition_count: u64,
-    pub row_count: u64,
-}
+use async_trait::async_trait;
+use cassandra_cpp::{stmt, PreparedStatement, Result, Session};
 
-/// Allows us to easily extend latte with new workload types.
-#[async_trait]
-pub trait Workload
-where
-    Self: Sync + Send,
-{
-    /// Controls how many times `populate` should be called
-    fn population_size(&self) -> u64;
+use crate::workload::{Workload, WorkloadStats};
 
-    /// Inserts a chunk of information into the test table and returns the
-    /// number of inserted partitions and rows
-    async fn populate(self: Arc<Self>, iteration: u64) -> Result<WorkloadStats>;
-
-    /// Executes queries to be benchmarked and
-    /// returns the number of processed partitions and rows
-    async fn run(self: Arc<Self>, iteration: u64) -> Result<WorkloadStats>;
-}
-
-/// A workload that reads the same tiny row from a 6 column table.
+/// A workload that reads the same row from a 6 column table.
 /// Preparation:
 /// ```
-/// CREATE TABLE tiny (pk BIGINT PRIMARY KEY, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)
-/// INSERT INTO tiny(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)
+/// CREATE TABLE read_same (pk BIGINT PRIMARY KEY, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)
+/// INSERT INTO read_same(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)
 /// ```
 ///
 /// Benchmarked query:
 /// ```
-/// SELECT * FROM tiny WHERE pk = 1
+/// SELECT * FROM read_same WHERE pk = 1
 /// ```
 pub struct ReadSame<S>
 where
@@ -51,12 +31,12 @@ where
     pub async fn new(session: S) -> Result<Self> {
         let s = session.as_ref();
         let result = s.execute(&stmt!(
-            "CREATE TABLE IF NOT EXISTS tiny\
+            "CREATE TABLE IF NOT EXISTS read_same\
             (pk BIGINT PRIMARY KEY, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)"
         ));
         result.await?;
 
-        let read_statement = s.prepare("SELECT * FROM tiny WHERE pk = 1")?.await?;
+        let read_statement = s.prepare("SELECT * FROM read_same WHERE pk = 1")?.await?;
         Ok(ReadSame {
             session,
             read_statement,
@@ -79,7 +59,7 @@ where
     {
         let s = self.session.as_ref();
         let result = s.execute(&stmt!(
-            "INSERT INTO tiny(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)"
+            "INSERT INTO read_same(pk, c1, c2, c3, c4, c5) VALUES (1, 1, 2, 3, 4, 5)"
         ));
         result.await?;
         Ok(WorkloadStats {
