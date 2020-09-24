@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::{stmt, PreparedStatement, Result, Session, BindRustType};
+use cassandra_cpp::{stmt, BindRustType, PreparedStatement, Result, Session};
 
 use crate::workload::{Workload, WorkloadStats};
 

@@ -15,11 +15,11 @@ use config::Config;
 
 use crate::progress::FastProgressBar;
 use crate::session::*;
-use crate::stats::BenchmarkStats;
+use crate::stats::{ActionStats, BenchmarkStats};
 use crate::workload::read_none::*;
 use crate::workload::read_same::*;
 use crate::workload::write::*;
-use crate::workload::Workload;
+use crate::workload::{Workload, WorkloadStats};
 
 mod config;
 mod progress;
@@ -65,7 +65,7 @@ fn interval(rate: f64) -> Interval {
 ///   - `context`: a shared object to be passed to all invocations of `action`,
 ///      used to share e.g. a Cassandra session or Workload
 ///   - `action`: an async function to call; this function may fail and return an `Err`
-async fn par_execute<F, C, R, RR, RE>(
+async fn par_execute<F, C, R, RE>(
     name: &str,
     count: u64,
     concurrency: usize,
@@ -76,8 +76,7 @@ async fn par_execute<F, C, R, RR, RE>(
 where
     F: Fn(Arc<C>, u64) -> R + Send + Sync + Copy + 'static,
     C: ?Sized + Send + Sync + 'static,
-    R: Future<Output = Result<RR, RE>> + Send,
-    RR: Send,
+    R: Future<Output = Result<WorkloadStats, RE>> + Send,
     RE: Send,
 {
     let progress = Arc::new(FastProgressBar::new_progress_bar(name, count));
@@ -85,7 +84,7 @@ where
     let mut interval = interval(rate.unwrap_or(f64::MAX));
     let semaphore = Arc::new(Semaphore::new(concurrency));
 
-    type Item = Result<Duration, ()>;
+    type Item = Result<ActionStats, ()>;
     let (tx, mut rx): (Sender<Item>, Receiver<Item>) = tokio::sync::mpsc::channel(concurrency);
 
     for i in 0..count {
@@ -104,10 +103,14 @@ where
         tokio::spawn(async move {
             let start = Instant::now();
             match action(context, i).await {
-                Ok(_) => {
+                Ok(result) => {
                     let end = Instant::now();
-                    let duration = max(Duration::from_micros(1), end - start);
-                    tx.send(Ok(duration)).await.unwrap();
+                    let s = ActionStats {
+                        duration: max(Duration::from_micros(1), end - start),
+                        row_count: result.row_count,
+                        partition_count: result.partition_count,
+                    };
+                    tx.send(Ok(s)).await.unwrap();
                 }
                 Err(_) => tx.send(Err(())).await.unwrap(),
             }

@@ -1,6 +1,6 @@
 use clap::Clap;
-use std::fmt::{Display, Formatter};
 use core::fmt;
+use std::fmt::{Display, Formatter};
 
 #[derive(Clap, Debug)]
 pub enum Workload {
@@ -69,7 +69,7 @@ impl Config {
         println!(" Total connections: {:11}", self.threads * self.connections);
         match self.rate {
             Some(rate) => println!("        Rate limit: {:11.1} req/s", rate),
-            None =>            println!("        Rate limit: {:>11} req/s", "-"),
+            None => println!("        Rate limit: {:>11} req/s", "-"),
         }
         println!(" Concurrency limit: {:11} reqs", self.concurrency);
         println!();

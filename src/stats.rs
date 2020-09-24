@@ -3,12 +3,21 @@ use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use tokio::time::{Duration, Instant};
 
+#[derive(Debug)]
+pub struct ActionStats {
+    pub duration: Duration,
+    pub row_count: u64,
+    pub partition_count: u64,
+}
+
 pub struct BenchmarkStats {
     histogram: Histogram<u64>,
     start: Instant,
     end: Instant,
     completed: u64,
     errors: u64,
+    rows: u64,
+    partitions: u64,
     start_cpu_time: ProcessTime,
     end_cpu_time: ProcessTime,
     enqueued: u64,
@@ -23,6 +32,8 @@ impl BenchmarkStats {
             end: Instant::now(),
             completed: 0,
             errors: 0,
+            rows: 0,
+            partitions: 0,
             start_cpu_time: ProcessTime::now(),
             end_cpu_time: ProcessTime::now(),
             enqueued: 0,
@@ -30,11 +41,15 @@ impl BenchmarkStats {
         }
     }
 
-    pub fn record<E>(&mut self, item: Result<Duration, E>) {
+    pub fn record<E>(&mut self, item: Result<ActionStats, E>) {
         match item {
-            Ok(d) => {
+            Ok(s) => {
                 self.completed += 1;
-                self.histogram.record(d.as_micros() as u64).unwrap();
+                self.rows += s.row_count;
+                self.partitions += s.partition_count;
+                self.histogram
+                    .record(s.duration.as_micros() as u64)
+                    .unwrap();
             }
             Err(_) => {
                 self.errors += 1;
@@ -71,6 +86,9 @@ impl BenchmarkStats {
         let error_rate = 100.0 * self.errors as f64 / self.enqueued as f64;
         let throughput = self.completed as f64 / wall_clock_time;
         let throughput_ratio = 100.0 * throughput / conf.rate.unwrap_or(f64::MAX);
+        let partitions_per_sec = self.partitions as f64 / wall_clock_time;
+        let rows_per_sec = self.rows as f64 / wall_clock_time;
+
         let concurrency = self.queue_len_sum as f64 / self.enqueued as f64;
         let concurrency_ratio = 100.0 * concurrency / conf.concurrency as f64;
 
@@ -81,19 +99,26 @@ impl BenchmarkStats {
             cpu_time, cpu_util
         );
         println!(
-            "         Completed: {:11} reqs    {:6.1}%",
+            "         Completed: {:11} req     {:6.1}%",
             self.completed, completed_rate
         );
         println!(
-            "            Errors: {:11} reqs    {:6.1}%",
+            "            Errors: {:11} req     {:6.1}%",
             self.errors, error_rate
         );
+
+        println!("        Partitions: {:11}", self.partitions);
+        println!("              Rows: {:11}", self.rows);
+
         println!(
-            "        Throughput: {:11.1} req/s   {:6.1}%",
-            throughput, throughput_ratio
+            "        Throughput: {:11.1} req/s   {:6.1}%\n\
+          \x20                   {:11.1} par/s\n\
+          \x20                   {:11.1} row/s ",
+            throughput, throughput_ratio, partitions_per_sec, rows_per_sec
         );
+
         println!(
-            "  Avg. concurrency: {:11.1} reqs    {:6.1}%",
+            "  Avg. concurrency: {:11.1} req     {:6.1}%",
             concurrency, concurrency_ratio
         );
 
