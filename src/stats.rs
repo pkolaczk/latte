@@ -3,7 +3,7 @@ use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use tokio::time::{Duration, Instant};
 
-pub struct Stats {
+pub struct BenchmarkStats {
     histogram: Histogram<u64>,
     start: Instant,
     end: Instant,
@@ -15,9 +15,9 @@ pub struct Stats {
     queue_len_sum: u64,
 }
 
-impl Stats {
-    pub fn start() -> Stats {
-        Stats {
+impl BenchmarkStats {
+    pub fn start() -> BenchmarkStats {
+        BenchmarkStats {
             histogram: Histogram::<u64>::new(3).unwrap(),
             start: Instant::now(),
             end: Instant::now(),
@@ -66,13 +66,13 @@ impl Stats {
             .end_cpu_time
             .duration_since(self.start_cpu_time)
             .as_secs_f64();
-        let cpu_util = 100.0 * cpu_time / wall_clock_time;
+        let cpu_util = 100.0 * cpu_time / wall_clock_time / num_cpus::get() as f64;
         let completed_rate = 100.0 * self.completed as f64 / self.enqueued as f64;
         let error_rate = 100.0 * self.errors as f64 / self.enqueued as f64;
         let throughput = self.completed as f64 / wall_clock_time;
         let throughput_ratio = 100.0 * throughput / conf.rate.unwrap_or(f64::MAX);
         let concurrency = self.queue_len_sum as f64 / self.enqueued as f64;
-        let concurrency_ratio = 100.0 * concurrency / conf.parallelism as f64;
+        let concurrency_ratio = 100.0 * concurrency / conf.concurrency as f64;
 
         println!("SUMMARY ----------------------------------------");
         println!("           Elapsed: {:11.3} s", wall_clock_time);

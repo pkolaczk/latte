@@ -3,6 +3,10 @@ use clap::Clap;
 /// Latency Tester for Apache Cassandra
 #[derive(Clap, Debug)]
 pub struct Config {
+    /// Name of the keyspace
+    #[clap(short("k"), long, default_value = "latte")]
+    pub keyspace: String,
+
     /// Number of requests per second to send.
     /// If not given the requests will be sent as fast as possible within the parallelism limit
     #[clap(short("r"), long)]
@@ -21,12 +25,12 @@ pub struct Config {
     pub threads: u32,
 
     /// Number of connections per io_thread
-    #[clap(short, long, default_value = "1")]
+    #[clap(short("c"), long, default_value = "1")]
     pub connections: u32,
 
-    /// Max number of concurrent requests
-    #[clap(short("p"), long, default_value = "1024")]
-    pub parallelism: usize,
+    /// Max number of concurrent async requests
+    #[clap(short("p"), long("concurrency"), default_value = "1024")]
+    pub concurrency: usize,
 
     /// List of Cassandra addresses to connect to
     #[clap(name = "addresses", required = true, default_value = "localhost")]
@@ -39,12 +43,10 @@ impl Config {
         println!("           Threads: {:11}", self.threads);
         println!(" Total connections: {:11}", self.threads * self.connections);
         match self.rate {
-            Some(rate) =>
-                println!("        Rate limit: {:11.1} req/s", rate),
-            None =>
-                println!("        Rate limit:         disabled"),
+            Some(rate) => println!("        Rate limit: {:11.1} req/s", rate),
+            None => println!("        Rate limit:         disabled"),
         }
-        println!(" Concurrency limit: {:11} reqs", self.parallelism);
+        println!(" Concurrency limit: {:11} reqs", self.concurrency);
         println!();
     }
 }
