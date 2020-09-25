@@ -3,8 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cassandra_cpp::Result;
 
-pub mod read_none;
-pub mod read_same;
+pub mod read;
 pub mod write;
 
 pub struct WorkloadStats {
@@ -18,10 +17,12 @@ pub trait Workload
 where
     Self: Sync + Send,
 {
-    /// Controls how many times `populate` should be called
-    fn population_size(&self) -> u64;
+    /// Controls how many rows should be inserted into the test table before the test.
+    /// Should return None if the number of rows should be determined from the iteration
+    /// count or the value given by the user.
+    fn populate_count(&self) -> u64;
 
-    /// Inserts a chunk of information into the test table and returns the
+    /// Inserts a row into the test table and returns the
     /// number of inserted partitions and rows
     async fn populate(self: Arc<Self>, iteration: u64) -> Result<WorkloadStats>;
 

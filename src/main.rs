@@ -16,9 +16,8 @@ use config::Config;
 use crate::progress::FastProgressBar;
 use crate::session::*;
 use crate::stats::{ActionStats, BenchmarkStats};
-use crate::workload::read_none::*;
-use crate::workload::read_same::*;
-use crate::workload::write::*;
+use crate::workload::read::Read;
+use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
 
 mod config;
@@ -41,10 +40,10 @@ fn unwrap_workload<W: Workload>(w: cassandra_cpp::Result<W>) -> W {
 
 async fn workload(conf: &Config, session: Session) -> Arc<dyn Workload> {
     let session = Box::new(session);
+    let row_count = conf.rows.unwrap_or(conf.count);
     match conf.workload {
-        config::Workload::ReadNone => Arc::new(unwrap_workload(ReadNone::new(session).await)),
-        config::Workload::ReadSame => Arc::new(unwrap_workload(ReadSame::new(session).await)),
-        config::Workload::Write => Arc::new(unwrap_workload(Write::new(session).await)),
+        config::Workload::Read => Arc::new(unwrap_workload(Read::new(session, row_count).await)),
+        config::Workload::Write => Arc::new(unwrap_workload(Write::new(session, row_count).await)),
     }
 }
 
@@ -137,7 +136,7 @@ async fn async_main() {
 
     par_execute(
         "Populating...",
-        workload.population_size(),
+        workload.populate_count(),
         conf.concurrency,
         None, // make it as fast as possible
         workload.clone(),

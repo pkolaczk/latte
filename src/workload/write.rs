@@ -21,6 +21,7 @@ where
     S: AsRef<Session> + Sync + Send,
 {
     session: S,
+    row_count: u64,
     write_statement: PreparedStatement,
 }
 
@@ -28,7 +29,7 @@ impl<S> Write<S>
 where
     S: AsRef<Session> + Sync + Send,
 {
-    pub async fn new(session: S) -> Result<Self> {
+    pub async fn new(session: S, row_count: u64) -> Result<Self> {
         let s = session.as_ref();
         let result = s.execute(&stmt!(
             "CREATE TABLE IF NOT EXISTS write (pk BIGINT PRIMARY KEY, \
@@ -41,6 +42,7 @@ where
             .await?;
         Ok(Write {
             session,
+            row_count,
             write_statement,
         })
     }
@@ -51,7 +53,7 @@ impl<S> Workload for Write<S>
 where
     S: AsRef<Session> + Sync + Send,
 {
-    fn population_size(&self) -> u64 {
+    fn populate_count(&self) -> u64 {
         0
     }
 
@@ -71,7 +73,7 @@ where
     {
         let s = self.session.as_ref();
         let mut statement = self.write_statement.bind();
-        statement.bind(0, iteration as i64)?;
+        statement.bind(0, (iteration % self.row_count) as i64)?;
         let result = s.execute(&statement);
         result.await?;
         Ok(WorkloadStats {

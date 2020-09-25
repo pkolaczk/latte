@@ -4,16 +4,14 @@ use std::fmt::{Display, Formatter};
 
 #[derive(Clap, Debug)]
 pub enum Workload {
-    ReadNone,
-    ReadSame,
+    Read,
     Write,
 }
 
 impl Display for Workload {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Workload::ReadNone => write!(f, "read-none")?,
-            Workload::ReadSame => write!(f, "read-same")?,
+            Workload::Read => write!(f, "read")?,
             Workload::Write => write!(f, "write")?,
         };
         Ok(())
@@ -39,6 +37,11 @@ pub struct Config {
     /// Number of measured requests
     #[clap(short("n"), long, default_value = "1000000")]
     pub count: u64,
+
+    /// Total number of distinct rows in the data-set.
+    /// Applies to read and write workloads. Defaults to count.
+    #[clap(short("d"), long)]
+    pub rows: Option<u64>,
 
     /// Number of I/O threads used by the driver
     #[clap(short("t"), long, default_value = "1")]
