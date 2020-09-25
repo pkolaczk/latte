@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::{stmt, BindRustType, PreparedStatement, Result, Session};
+use cassandra_cpp::{stmt, BindRustType, PreparedStatement, Session};
 
-use crate::workload::{Workload, WorkloadStats};
+use crate::workload::{Result, Workload, WorkloadStats};
 
 pub struct Read<S>
 where

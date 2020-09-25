@@ -1,10 +1,20 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::Result;
+use err_derive::*;
 
 pub mod read;
 pub mod write;
+
+#[derive(Debug, Error)]
+pub enum WorkloadError {
+    #[error(display = "Cassandra error: {}", _0)]
+    Cassandra(#[source] cassandra_cpp::Error),
+    #[error(display = "{}", _0)]
+    Other(String)
+}
+
+pub type Result<T> = std::result::Result<T, WorkloadError>;
 
 pub struct WorkloadStats {
     pub partition_count: u64,

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::{stmt, BindRustType, PreparedStatement, Result, Session};
+use cassandra_cpp::{stmt, BindRustType, PreparedStatement, Session};
 
-use crate::workload::{Workload, WorkloadStats};
+use crate::workload::{Result, Workload, WorkloadStats, WorkloadError};
 
 /// A workload that writes tiny rows to the table
 ///
@@ -30,6 +30,10 @@ where
     S: AsRef<Session> + Sync + Send,
 {
     pub async fn new(session: S, row_count: u64) -> Result<Self> {
+        if row_count == 0 {
+            return Err(WorkloadError::Other("Number of rows cannot be 0 for a write workload".to_owned()))
+        }
+
         let s = session.as_ref();
         let result = s.execute(&stmt!(
             "CREATE TABLE IF NOT EXISTS write (pk BIGINT PRIMARY KEY, \

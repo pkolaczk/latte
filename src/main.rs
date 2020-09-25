@@ -28,11 +28,11 @@ mod workload;
 
 /// Reports an error and aborts the program if workload creation fails.
 /// Returns unwrapped workload.
-fn unwrap_workload<W: Workload>(w: cassandra_cpp::Result<W>) -> W {
+fn unwrap_workload<W: Workload>(w: workload::Result<W>) -> W {
     match w {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("Failed to initialize workload: {}", e);
+            eprintln!("error: Failed to initialize workload: {}", e);
             exit(1);
         }
     }
