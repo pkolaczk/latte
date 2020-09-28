@@ -1,7 +1,6 @@
 use std::cmp::max;
 use std::process::exit;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use cassandra_cpp::Session;
 use clap::Clap;
@@ -9,7 +8,7 @@ use tokio::macros::support::Future;
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Semaphore;
-use tokio::time::Interval;
+use tokio::time::{Duration, Instant, Interval};
 
 use config::Config;
 
@@ -69,6 +68,7 @@ async fn par_execute<F, C, R, RE>(
     count: u64,
     concurrency: usize,
     rate: Option<f64>,
+    sampling_period: Duration,
     context: Arc<C>,
     action: F,
 ) -> BenchmarkStats
@@ -93,6 +93,11 @@ where
         let permit = semaphore.clone().acquire_owned().await;
         let concurrent_count = concurrency - semaphore.available_permits();
         stats.enqueued(concurrent_count);
+
+        if Instant::now() - stats.last_sample_time() > sampling_period {
+            stats.sample();
+        }
+
         while let Ok(d) = rx.try_recv() {
             stats.record(d)
         }
@@ -139,6 +144,7 @@ async fn async_main() {
         workload.populate_count(),
         conf.concurrency,
         None, // make it as fast as possible
+        Duration::from_secs(u64::MAX),
         workload.clone(),
         |w, i| w.populate(i),
     )
@@ -149,6 +155,7 @@ async fn async_main() {
         conf.warmup_count,
         conf.concurrency,
         None,
+        Duration::from_secs(u64::MAX),
         workload.clone(),
         |w, i| w.run(i),
     )
@@ -159,6 +166,7 @@ async fn async_main() {
         conf.count,
         conf.concurrency,
         conf.rate,
+        Duration::from_secs_f64(conf.sampling_period),
         workload.clone(),
         |w, i| w.run(i),
     )

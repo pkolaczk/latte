@@ -31,7 +31,7 @@ pub struct Config {
     pub rate: Option<f64>,
 
     /// Number of non-measured, warmup requests
-    #[clap(short("w"), long("warmup"), default_value = "10000")]
+    #[clap(short("w"), long("warmup"), default_value = "1")]
     pub warmup_count: u64,
 
     /// Number of measured requests
@@ -55,6 +55,10 @@ pub struct Config {
     #[clap(short("p"), long("concurrency"), default_value = "1024")]
     pub concurrency: usize,
 
+    /// Throughput sampling period, in seconds
+    #[clap(short("s"), long, default_value = "1.0")]
+    pub sampling_period: f64,
+
     /// Workload type
     #[clap(arg_enum, name = "workload", required = true)]
     pub workload: Workload,
@@ -66,15 +70,19 @@ pub struct Config {
 
 impl Config {
     pub fn print(&self) {
-        println!("CONFIG -----------------------------------------");
-        println!("          Workload: {:>11}", self.workload.to_string());
-        println!("           Threads: {:11}", self.threads);
-        println!(" Total connections: {:11}", self.threads * self.connections);
+        println!("CONFIG ------------------------------------------------------------------");
+        println!("           Workload: {:>11}", self.workload.to_string());
+        println!("            Threads: {:11}", self.threads);
+        println!("  Total connections: {:11}", self.threads * self.connections);
         match self.rate {
-            Some(rate) => println!("        Rate limit: {:11.1} req/s", rate),
-            None => println!("        Rate limit: {:>11} req/s", "-"),
+            Some(rate) => println!("         Rate limit: {:11.1} req/s", rate),
+            None => println!("         Rate limit: {:>11} req/s", "-"),
         }
-        println!(" Concurrency limit: {:11} reqs", self.concurrency);
+        println!("  Concurrency limit: {:11} req", self.concurrency);
+        println!("  Warmup iterations: {:11} req", self.warmup_count);
+        println!("Measured iterations: {:11} req", self.count);
+        println!("Throughput sampling: {:11.1} s", self.sampling_period);
+
         println!();
     }
 }

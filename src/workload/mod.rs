@@ -11,7 +11,7 @@ pub enum WorkloadError {
     #[error(display = "Cassandra error: {}", _0)]
     Cassandra(#[source] cassandra_cpp::Error),
     #[error(display = "{}", _0)]
-    Other(String)
+    Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, WorkloadError>;
