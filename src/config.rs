@@ -1,6 +1,8 @@
 use clap::Clap;
 use core::fmt;
 use std::fmt::{Display, Formatter};
+use tokio::time::Instant;
+use chrono::{DateTime, Utc, Local};
 
 #[derive(Clap, Debug)]
 pub enum Workload {
@@ -59,9 +61,14 @@ pub struct Config {
     #[clap(short("s"), long, default_value = "1.0")]
     pub sampling_period: f64,
 
+    /// Label that will be added to the report to help identifying the test
+    #[clap(short, long)]
+    pub label: Option<String>,
+
     /// Workload type
     #[clap(arg_enum, name = "workload", required = true)]
     pub workload: Workload,
+
 
     /// List of Cassandra addresses to connect to
     #[clap(name = "addresses", required = true, default_value = "localhost")]
@@ -71,7 +78,9 @@ pub struct Config {
 impl Config {
     pub fn print(&self) {
         println!("CONFIG ===================================================================================");
-        println!("           Workload: {:>11}", self.workload.to_string());
+        println!("               Time: {}", Local::now().to_rfc2822());
+        println!("              Label: {}", self.label.as_ref().unwrap_or(&"".to_owned()));
+        println!("           Workload: {}", self.workload.to_string());
         println!("            Threads: {:11}", self.threads);
         println!(
             "  Total connections: {:11}",
