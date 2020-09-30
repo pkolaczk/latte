@@ -70,7 +70,7 @@ pub struct Config {
 
 impl Config {
     pub fn print(&self) {
-        println!("CONFIG ====================================================================================");
+        println!("CONFIG ===================================================================================");
         println!("           Workload: {:>11}", self.workload.to_string());
         println!("            Threads: {:11}", self.threads);
         println!(

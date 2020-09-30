@@ -40,7 +40,7 @@ pub struct FastProgressBar {
 #[allow(unused)]
 impl FastProgressBar {
     /// Width of the progress bar in characters
-    const WIDTH: usize = 50;
+    const WIDTH: usize = 70;
     /// Spinner animation looks like this (moves right and left):
     const SPACESHIP: &'static str = "<===>";
     /// Progress bar looks like this:
@@ -90,7 +90,7 @@ impl FastProgressBar {
     pub fn new_spinner(msg: &str) -> FastProgressBar {
         let inner = ProgressBar::new_spinner();
         let template =
-            style("{msg:28}").cyan().bold().for_stderr().to_string() + "[{spinner}] {pos:>10}";
+            style("{msg:18}").cyan().bold().for_stderr().to_string() + "[{spinner}] {pos:>10}";
         let tick_strings = Self::gen_tick_strings();
         let tick_strings: Vec<&str> = tick_strings.iter().map(|s| s as &str).collect();
         inner.set_style(
@@ -105,7 +105,7 @@ impl FastProgressBar {
     /// Create a new preconfigured progress bar with given message.
     pub fn new_progress_bar(msg: &str, len: u64) -> FastProgressBar {
         let inner = ProgressBar::new(len);
-        let template = "{msg:28}[{bar:WIDTH}] {pos:>10}/{len}"
+        let template = "{msg:18}[{bar:WIDTH}] {pos:>10}/{len}"
             .to_string()
             .replace("WIDTH", Self::WIDTH.to_string().as_str());
 

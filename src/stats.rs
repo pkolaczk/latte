@@ -131,7 +131,9 @@ impl Log {
     }
 
     fn record(&mut self, duration: Duration) {
-        self.curr_histogram.record(duration.as_micros() as u64).unwrap();
+        self.curr_histogram
+            .record(duration.as_micros() as u64)
+            .unwrap();
     }
 
     fn next(&mut self, time: Instant) -> &Sample {
@@ -280,8 +282,7 @@ impl BenchmarkStats {
         let concurrency_ratio = 100.0 * concurrency / conf.concurrency as f64;
 
         println!("SUMMARY STATS ============================================================================");
-        println!(
-            "            Elapsed: {:11.3}          s", wall_clock_time);
+        println!("            Elapsed: {:11.3}          s", wall_clock_time);
         println!(
             "           CPU time: {:11.3}          s       {:6.1}%",
             cpu_time, cpu_util

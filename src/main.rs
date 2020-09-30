@@ -52,6 +52,14 @@ fn interval(rate: f64) -> Interval {
     tokio::time::interval(interval)
 }
 
+/// Rounds the duration down to the highest number of whole periods
+fn round(duration: Duration, period: Duration) -> Duration {
+    let mut duration = duration.as_micros();
+    duration /= period.as_micros();
+    duration *= period.as_micros();
+    Duration::from_micros(duration as u64)
+}
+
 /// Executes the given function many times in parallel.
 /// Draws a progress bar.
 /// Returns the statistics such as throughput or duration histogram.
@@ -98,7 +106,9 @@ where
         let now = Instant::now();
         if now - stats.last_sample_time() > sampling_period {
             let start_time = stats.start_time;
-            let log_line = stats.sample(now).to_string(start_time);
+            let elapsed_rounded = round(now - start_time, sampling_period);
+            let sample_time = start_time + elapsed_rounded;
+            let log_line = stats.sample(sample_time).to_string(start_time);
             progress.println(log_line);
         }
 
