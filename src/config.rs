@@ -70,10 +70,13 @@ pub struct Config {
 
 impl Config {
     pub fn print(&self) {
-        println!("CONFIG ------------------------------------------------------------------");
+        println!("CONFIG ====================================================================================");
         println!("           Workload: {:>11}", self.workload.to_string());
         println!("            Threads: {:11}", self.threads);
-        println!("  Total connections: {:11}", self.threads * self.connections);
+        println!(
+            "  Total connections: {:11}",
+            self.threads * self.connections
+        );
         match self.rate {
             Some(rate) => println!("         Rate limit: {:11.1} req/s", rate),
             None => println!("         Rate limit: {:>11} req/s", "-"),
@@ -81,7 +84,7 @@ impl Config {
         println!("  Concurrency limit: {:11} req", self.concurrency);
         println!("  Warmup iterations: {:11} req", self.warmup_count);
         println!("Measured iterations: {:11} req", self.count);
-        println!("Throughput sampling: {:11.1} s", self.sampling_period);
+        println!("           Sampling: {:11.1} s", self.sampling_period);
 
         println!();
     }

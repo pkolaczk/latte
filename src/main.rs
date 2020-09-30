@@ -14,11 +14,12 @@ use config::Config;
 
 use crate::progress::FastProgressBar;
 use crate::session::*;
-use crate::stats::{ActionStats, BenchmarkStats};
+use crate::stats::{ActionStats, BenchmarkStats, Sample};
 use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
 
+mod bootstrap;
 mod config;
 mod progress;
 mod session;
@@ -94,8 +95,11 @@ where
         let concurrent_count = concurrency - semaphore.available_permits();
         stats.enqueued(concurrent_count);
 
-        if Instant::now() - stats.last_sample_time() > sampling_period {
-            stats.sample();
+        let now = Instant::now();
+        if now - stats.last_sample_time() > sampling_period {
+            let start_time = stats.start_time;
+            let log_line = stats.sample(now).to_string(start_time);
+            progress.println(log_line);
         }
 
         while let Ok(d) = rx.try_recv() {
@@ -139,6 +143,8 @@ async fn async_main() {
     let session = connect_keyspace_or_abort(&mut cluster, conf.keyspace.as_str()).await;
     let workload = workload(&conf, session).await;
 
+    conf.print();
+
     par_execute(
         "Populating...",
         workload.populate_count(),
@@ -161,6 +167,7 @@ async fn async_main() {
     )
     .await;
 
+    Sample::print_log_header();
     let stats = par_execute(
         "Running...",
         conf.count,
@@ -172,7 +179,7 @@ async fn async_main() {
     )
     .await;
 
-    conf.print();
+    println!();
     stats.print(&conf);
 }
 

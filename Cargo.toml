@@ -18,5 +18,7 @@ err-derive = "0.2.4"
 hdrhistogram = "7.1.0"
 indicatif = "0.15.0"
 num_cpus = "1.13.0"
+rand = "0.7.3"
+statrs = "0.13.0"
 time = "0.1.44"
 tokio = { version = "0.2", features = ["full"] }

@@ -1,26 +1,31 @@
 # Latency Tester for Apache Cassandra
 
-This tiny program issues concurrent CQL queries to an Apache Cassandra
+A tiny native program that issues concurrent CQL queries to an Apache Cassandra
 cluster and measures throughput and response times. 
 
 ## Why Yet Another Benchmarking Program?
 
-Contrary to `cassandra-stress`, `latte` is written in Rust and uses
-DataStax C++ Driver for Cassandra. This enables it to achieve higher
-performance and better predictability: 
+Contrary to `cassandra-stress` or `nosql-bench`, 
+`latte` has been written in Rust and uses DataStax C++ Driver for Cassandra. 
+This enables it to achieve superior performance and predictability: 
 
+* Over **50x lower memory footprint** (typically below 20 MB instead of 1+ GB)  
+* Over **6x better CPU efficiency**. This means you can test larger clusters or reduce the 
+  number of client machines.  
+* Can run on one of the nodes without significant performance impact on the server.
+  In this setup, throughput levels achieved by `latte` tests are typically over 2x higher than 
+  when using the other tools, because almost all the processing power is available to the server, instead of
+  half of it being consumed by the benchmarking tool.
 * No client code warmup needed. The client code works with maximum 
   performance from the first iteration. If the server is already warmed-up,
-  this means much shorter tests and quicker iteration.
-* Low memory footprint (typically below 20 MB instead of 1+ GB). 
-* High CPU efficiency. We don't want to be bottlenecked by the client.
-* Can run on one of the nodes without significant performance impact on the server.
+  this means much shorter tests and quicker iteration. This also allows for accurate 
+  measurement of warmup effects happening on the benchmarked server(s). 
 * No GC pauses nor HotSpot recompilation happening in the middle of the test. 
-  We want to measure hiccups of the server, not the benchmarking tool.
+  We want to measure hiccups of the server, not the benchmarking tool. 
     
 ## Limitations
 This is work-in-progress.
-* Workload selection is currently limited to a hardcoded query reading a single row.
+* Workload selection is currently limited to hardcoded read and write workloads dealing with tiny rows
 * No verification of received data - this is a benchmarking tool, not a testing tool.
 
 ## Installation
@@ -31,7 +36,7 @@ This is work-in-progress.
 
 ## Usage
 1. Start a Cassandra cluster somewhere (can be a local node)
-2. Run `latte <node address>`
+2. Run `latte <workload> <node address>`, where `<workload>` can be `read` or `write`
 
 Run `latte -h` to display help with the available options.
 
