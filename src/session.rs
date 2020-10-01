@@ -15,9 +15,9 @@ pub fn cluster(conf: &Config) -> Cluster {
         .set_max_connections_per_host(conf.connections)
         .unwrap();
     cluster
-        .set_queue_size_event(conf.concurrency as u32)
+        .set_queue_size_event(conf.parallelism as u32)
         .unwrap();
-    cluster.set_queue_size_io(conf.concurrency as u32).unwrap();
+    cluster.set_queue_size_io(conf.parallelism as u32).unwrap();
     cluster.set_num_threads_io(conf.threads).unwrap();
     cluster.set_connect_timeout(time::Duration::seconds(5));
     cluster.set_load_balance_round_robin();

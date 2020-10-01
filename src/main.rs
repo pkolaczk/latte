@@ -1,9 +1,12 @@
 use std::cmp::max;
+use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
+use std::{fs, io};
 
 use cassandra_cpp::Session;
 use clap::Clap;
+use serde::{Deserialize, Serialize};
 use tokio::macros::support::Future;
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -14,7 +17,7 @@ use config::Config;
 
 use crate::progress::FastProgressBar;
 use crate::session::*;
-use crate::stats::{ActionStats, BenchmarkStats, Recorder, Sample};
+use crate::stats::{ActionStats, BenchmarkStats, Recorder, Sample, PERCENTILES};
 use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
@@ -145,6 +148,26 @@ where
     stats.finish()
 }
 
+#[derive(Serialize, Deserialize)]
+struct Report {
+    conf: Config,
+    percentiles: Vec<f32>,
+    result: BenchmarkStats,
+}
+
+/// Saves benchmark results to a JSON file
+fn save_report(conf: Config, stats: BenchmarkStats, path: &PathBuf) -> io::Result<()> {
+    let percentile_legend: Vec<f32> = PERCENTILES.iter().map(|p| p.value() as f32).collect();
+    let report = Report {
+        conf,
+        percentiles: percentile_legend,
+        result: stats,
+    };
+    let f = fs::File::create(path)?;
+    serde_json::to_writer_pretty(f, &report)?;
+    Ok(())
+}
+
 async fn async_main() {
     let conf: Config = Config::parse();
     let mut cluster = cluster(&conf);
@@ -158,7 +181,7 @@ async fn async_main() {
     par_execute(
         "Populating...",
         workload.populate_count(),
-        conf.concurrency,
+        conf.parallelism,
         None, // make it as fast as possible
         Duration::from_secs(u64::MAX),
         workload.clone(),
@@ -169,7 +192,7 @@ async fn async_main() {
     par_execute(
         "Warming up...",
         conf.warmup_count,
-        conf.concurrency,
+        conf.parallelism,
         None,
         Duration::from_secs(u64::MAX),
         workload.clone(),
@@ -181,7 +204,7 @@ async fn async_main() {
     let stats = par_execute(
         "Running...",
         conf.count,
-        conf.concurrency,
+        conf.parallelism,
         conf.rate,
         Duration::from_secs_f64(conf.sampling_period),
         workload.clone(),
@@ -191,6 +214,18 @@ async fn async_main() {
 
     println!();
     stats.print();
+
+    let path = conf
+        .output
+        .clone()
+        .unwrap_or(PathBuf::from(".latte-report.json"));
+    match save_report(conf, stats, &path) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("Failed to save report to {}: {}", path.display(), e);
+            exit(1)
+        }
+    }
 }
 
 fn main() {

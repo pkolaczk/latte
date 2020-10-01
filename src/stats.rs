@@ -4,6 +4,8 @@ use statrs::statistics::Statistics;
 use tokio::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use std::io;
+use std::path::PathBuf;
 
 const ERR_MARGIN: f64 = 3.29; // 0.999 confidence, 2-sided
 
@@ -34,7 +36,7 @@ pub enum Percentile {
     Max,
 }
 
-const PERCENTILES: [Percentile; 15] = [
+pub const PERCENTILES: [Percentile; 15] = [
     Percentile::Min,
     Percentile::P1,
     Percentile::P2,
@@ -53,7 +55,7 @@ const PERCENTILES: [Percentile; 15] = [
 ];
 
 impl Percentile {
-    fn value(&self) -> f64 {
+    pub fn value(&self) -> f64 {
         match self {
             Percentile::Min => 0.0,
             Percentile::P1 => 1.0,
@@ -73,7 +75,7 @@ impl Percentile {
         }
     }
 
-    fn name(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             Percentile::Min => "  Min",
             Percentile::P1 => "    1",
@@ -120,13 +122,13 @@ impl Sample {
             "{:8.3} {:11.0} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
             self.time_s,
             self.throughput,
-            self.resp_time_percentiles[Percentile::Min as usize] / 1000.0,
-            self.resp_time_percentiles[Percentile::P25 as usize] / 1000.0,
-            self.resp_time_percentiles[Percentile::P50 as usize] / 1000.0,
-            self.resp_time_percentiles[Percentile::P75 as usize] / 1000.0,
-            self.resp_time_percentiles[Percentile::P90 as usize] / 1000.0,
-            self.resp_time_percentiles[Percentile::P99 as usize] / 1000.0,
-            self.resp_time_percentiles[Percentile::Max as usize] / 1000.0
+            self.resp_time_percentiles[Percentile::Min as usize],
+            self.resp_time_percentiles[Percentile::P25 as usize],
+            self.resp_time_percentiles[Percentile::P50 as usize],
+            self.resp_time_percentiles[Percentile::P75 as usize],
+            self.resp_time_percentiles[Percentile::P90 as usize],
+            self.resp_time_percentiles[Percentile::P99 as usize],
+            self.resp_time_percentiles[Percentile::Max as usize]
         )
     }
 }
@@ -156,12 +158,12 @@ impl Log {
         let histogram = &self.curr_histogram;
         let mut percentiles: [f32; PERCENTILES.len()] = [0.0; PERCENTILES.len()];
         for (i, p) in PERCENTILES.iter().enumerate() {
-            percentiles[i] = histogram.value_at_percentile(p.value()) as f32;
+            percentiles[i] = histogram.value_at_percentile(p.value()) as f32 / 1000.0;
         }
         let result = Sample {
             time_s: (time - self.start).as_secs_f32(),
             throughput: 1000000.0 * histogram.len() as f32 / (time - self.start).as_micros() as f32,
-            mean_resp_time: histogram.mean() as f32,
+            mean_resp_time: histogram.mean() as f32 / 1000.0,
             resp_time_percentiles: percentiles,
         };
         self.curr_histogram.clear();
@@ -214,7 +216,7 @@ impl Log {
 #[derive(Serialize, Deserialize)]
 pub struct RespTimeCount {
     pub percentile: f32,
-    pub resp_time_us: f32,
+    pub resp_time_ms: f32,
     pub count: u64,
 }
 
@@ -230,10 +232,10 @@ pub struct BenchmarkStats {
     rows: u64,
     partitions: u64,
     throughput: f32,
-    throughput_ratio: f32,
+    throughput_ratio: Option<f32>,
     throughput_err: f32,
     throughput_percentiles: [f32; PERCENTILES.len()],
-    resp_time_us: f32,
+    resp_time_ms: f32,
     resp_time_err: f32,
     resp_time_percentiles: [f32; PERCENTILES.len()],
     resp_time_percentiles_err: [f32; PERCENTILES.len()],
@@ -266,14 +268,18 @@ impl BenchmarkStats {
         println!("         Partitions: {:9}", self.partitions);
         println!("               Rows: {:9}", self.rows);
 
+        let throughput_ratio_str = match self.throughput_ratio {
+            Some(r) => format!("{:6.1}%", r),
+            None => "".to_owned(),
+        };
         println!(
-            "    Mean throughput: {:9.0} ± {:<6.0} req/s   {:6.1}%",
-            self.throughput, self.throughput_err, self.throughput_ratio,
+            "    Mean throughput: {:9.0} ± {:<6.0} req/s   {}",
+            self.throughput, self.throughput_err, throughput_ratio_str
         );
 
         println!(
             "    Mean resp. time: {:9.2} ± {:<6.2} ms",
-            self.resp_time_us, self.resp_time_err
+            self.resp_time_ms, self.resp_time_err
         );
 
         println!(
@@ -324,8 +330,8 @@ impl BenchmarkStats {
             println!(
                 "              {:5}: {:9.2} ± {:<6.2} ms",
                 p.name(),
-                self.resp_time_percentiles[*p as usize] / 1000.0,
-                self.resp_time_percentiles_err[*p as usize] / 1000.0,
+                self.resp_time_percentiles[*p as usize],
+                self.resp_time_percentiles_err[*p as usize],
             );
         }
 
@@ -336,7 +342,7 @@ impl BenchmarkStats {
             println!(
                 " {:9.5} {:9.2} ms  {:9}   {}",
                 x.percentile,
-                x.resp_time_us / 1000.0,
+                x.resp_time_ms,
                 x.count,
                 "*".repeat((100 * x.count / self.completed_requests) as usize)
             )
@@ -389,7 +395,7 @@ impl Recorder {
                 self.rows += s.row_count;
                 self.partitions += s.partition_count;
                 self.log.record(s.duration);
-                self.resp_time_sum += s.duration.as_micros() as f64;
+                self.resp_time_sum += s.duration.as_micros() as f64 / 1000.0;
                 self.resp_times
                     .record(s.duration.as_micros() as u64)
                     .unwrap();
@@ -440,7 +446,7 @@ impl Recorder {
         let mut resp_time_percentiles_err = [0.0; PERCENTILES.len()];
         for p in PERCENTILES.iter() {
             resp_time_percentiles[*p as usize] =
-                self.resp_times.value_at_percentile(p.value()) as f32;
+                self.resp_times.value_at_percentile(p.value()) as f32 / 1000.0;
             resp_time_percentiles_err[*p as usize] = self.log.resp_time_percentile_err(*p) as f32;
         }
 
@@ -448,7 +454,7 @@ impl Recorder {
         for x in self.resp_times.iter_log(self.resp_times.min(), 1.25) {
             resp_time_distribution.push(RespTimeCount {
                 percentile: x.percentile() as f32,
-                resp_time_us: x.value_iterated_to() as f32,
+                resp_time_ms: x.value_iterated_to() as f32 / 1000.0,
                 count: x.count_since_last_iteration(),
             });
         }
@@ -465,10 +471,10 @@ impl Recorder {
             partitions: self.partitions,
             throughput,
             throughput_err: self.log.throughput_err() as f32,
-            throughput_ratio: 100.0 * throughput / self.rate_limit.unwrap_or(f32::MAX),
+            throughput_ratio: self.rate_limit.map(|r| 100.0 * throughput / r),
             throughput_percentiles: self.log.throughput_percentiles(),
-            resp_time_us: (self.resp_time_sum / self.completed as f64 / 1000.0) as f32,
-            resp_time_err: (self.log.mean_resp_time_err() / 1000.0) as f32,
+            resp_time_ms: (self.resp_time_sum / self.completed as f64) as f32,
+            resp_time_err: self.log.mean_resp_time_err() as f32,
             resp_time_percentiles,
             resp_time_percentiles_err,
             resp_time_distribution,

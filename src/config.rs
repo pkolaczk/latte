@@ -4,7 +4,10 @@ use std::fmt::{Display, Formatter};
 use chrono::Local;
 use clap::Clap;
 
-#[derive(Clap, Debug)]
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Clap, Debug, Serialize, Deserialize)]
 pub enum Workload {
     Read,
     Write,
@@ -21,7 +24,7 @@ impl Display for Workload {
 }
 
 /// Latency Tester for Apache Cassandra
-#[derive(Clap, Debug)]
+#[derive(Clap, Debug, Serialize, Deserialize)]
 pub struct Config {
     /// Name of the keyspace
     #[clap(short("k"), long, default_value = "latte")]
@@ -54,8 +57,8 @@ pub struct Config {
     pub connections: u32,
 
     /// Max number of concurrent async requests
-    #[clap(short("p"), long("concurrency"), default_value = "1024")]
-    pub concurrency: usize,
+    #[clap(short("p"), long, default_value = "1024")]
+    pub parallelism: usize,
 
     /// Throughput sampling period, in seconds
     #[clap(short("s"), long, default_value = "1.0")]
@@ -64,6 +67,11 @@ pub struct Config {
     /// Label that will be added to the report to help identifying the test
     #[clap(short, long)]
     pub label: Option<String>,
+
+    /// Path to the output file to store the report in JSON
+    #[clap(short("o"), long)]
+    #[serde(skip)]
+    pub output: Option<PathBuf>,
 
     /// Workload type
     #[clap(arg_enum, name = "workload", required = true)]
@@ -84,15 +92,12 @@ impl Config {
         );
         println!("           Workload: {}", self.workload.to_string());
         println!("            Threads: {:9}", self.threads);
-        println!(
-            "  Total connections: {:9}",
-            self.threads * self.connections
-        );
+        println!("  Total connections: {:9}", self.threads * self.connections);
         match self.rate {
             Some(rate) => println!("         Rate limit: {:9.1} req/s", rate),
             None => println!("         Rate limit: {:>9} req/s", "-"),
         }
-        println!("  Concurrency limit: {:9} req", self.concurrency);
+        println!("  Concurrency limit: {:9} req", self.parallelism);
         println!("  Warmup iterations: {:9} req", self.warmup_count);
         println!("Measured iterations: {:9} req", self.count);
         println!("           Sampling: {:9.1} s", self.sampling_period);
