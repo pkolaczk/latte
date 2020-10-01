@@ -1,8 +1,8 @@
-use clap::Clap;
 use core::fmt;
 use std::fmt::{Display, Formatter};
-use tokio::time::Instant;
-use chrono::{DateTime, Utc, Local};
+
+use chrono::Local;
+use clap::Clap;
 
 #[derive(Clap, Debug)]
 pub enum Workload {
@@ -30,7 +30,7 @@ pub struct Config {
     /// Number of requests per second to send.
     /// If not given the requests will be sent as fast as possible within the parallelism limit
     #[clap(short("r"), long)]
-    pub rate: Option<f64>,
+    pub rate: Option<f32>,
 
     /// Number of non-measured, warmup requests
     #[clap(short("w"), long("warmup"), default_value = "1")]
@@ -69,7 +69,6 @@ pub struct Config {
     #[clap(arg_enum, name = "workload", required = true)]
     pub workload: Workload,
 
-
     /// List of Cassandra addresses to connect to
     #[clap(name = "addresses", required = true, default_value = "localhost")]
     pub addresses: Vec<String>,
@@ -79,21 +78,24 @@ impl Config {
     pub fn print(&self) {
         println!("CONFIG ===================================================================================");
         println!("               Time: {}", Local::now().to_rfc2822());
-        println!("              Label: {}", self.label.as_ref().unwrap_or(&"".to_owned()));
-        println!("           Workload: {}", self.workload.to_string());
-        println!("            Threads: {:11}", self.threads);
         println!(
-            "  Total connections: {:11}",
+            "              Label: {}",
+            self.label.as_ref().unwrap_or(&"".to_owned())
+        );
+        println!("           Workload: {}", self.workload.to_string());
+        println!("            Threads: {:9}", self.threads);
+        println!(
+            "  Total connections: {:9}",
             self.threads * self.connections
         );
         match self.rate {
-            Some(rate) => println!("         Rate limit: {:11.1} req/s", rate),
-            None => println!("         Rate limit: {:>11} req/s", "-"),
+            Some(rate) => println!("         Rate limit: {:9.1} req/s", rate),
+            None => println!("         Rate limit: {:>9} req/s", "-"),
         }
-        println!("  Concurrency limit: {:11} req", self.concurrency);
-        println!("  Warmup iterations: {:11} req", self.warmup_count);
-        println!("Measured iterations: {:11} req", self.count);
-        println!("           Sampling: {:11.1} s", self.sampling_period);
+        println!("  Concurrency limit: {:9} req", self.concurrency);
+        println!("  Warmup iterations: {:9} req", self.warmup_count);
+        println!("Measured iterations: {:9} req", self.count);
+        println!("           Sampling: {:9.1} s", self.sampling_period);
 
         println!();
     }

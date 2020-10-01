@@ -3,7 +3,7 @@ use hdrhistogram::Histogram;
 use statrs::statistics::Statistics;
 use tokio::time::{Duration, Instant};
 
-use crate::config::Config;
+use serde::{Deserialize, Serialize};
 
 const ERR_MARGIN: f64 = 3.29; // 0.999 confidence, 2-sided
 
@@ -18,6 +18,10 @@ pub struct ActionStats {
 #[derive(Copy, Clone)]
 pub enum Percentile {
     Min = 0,
+    P1,
+    P2,
+    P5,
+    P10,
     P25,
     P50,
     P75,
@@ -30,8 +34,12 @@ pub enum Percentile {
     Max,
 }
 
-const PERCENTILES: [Percentile; 11] = [
+const PERCENTILES: [Percentile; 15] = [
     Percentile::Min,
+    Percentile::P1,
+    Percentile::P2,
+    Percentile::P5,
+    Percentile::P10,
     Percentile::P25,
     Percentile::P50,
     Percentile::P75,
@@ -48,6 +56,10 @@ impl Percentile {
     fn value(&self) -> f64 {
         match self {
             Percentile::Min => 0.0,
+            Percentile::P1 => 1.0,
+            Percentile::P2 => 2.0,
+            Percentile::P5 => 5.0,
+            Percentile::P10 => 10.0,
             Percentile::P25 => 25.0,
             Percentile::P50 => 50.0,
             Percentile::P75 => 75.0,
@@ -64,6 +76,10 @@ impl Percentile {
     fn name(&self) -> &'static str {
         match self {
             Percentile::Min => "  Min",
+            Percentile::P1 => "    1",
+            Percentile::P2 => "    2",
+            Percentile::P5 => "    5",
+            Percentile::P10 => "   10",
             Percentile::P25 => "   25",
             Percentile::P50 => "   50",
             Percentile::P75 => "   75",
@@ -79,9 +95,9 @@ impl Percentile {
 }
 
 /// Records basic statistics for a sample of requests
+#[derive(Serialize, Deserialize)]
 pub struct Sample {
-    pub start_time: Instant,
-    pub end_time: Instant,
+    pub time_s: f32,
     pub throughput: f32,
     pub mean_resp_time: f32,
     pub resp_time_percentiles: [f32; PERCENTILES.len()],
@@ -99,18 +115,18 @@ impl Sample {
         )
     }
 
-    pub fn to_string(&self, benchmark_start: Instant) -> String {
+    pub fn to_string(&self) -> String {
         format!(
             "{:8.3} {:11.0} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
-            (self.end_time - benchmark_start).as_secs_f32(),
+            self.time_s,
             self.throughput,
-            self.resp_time_percentiles[0] / 1000.0,
-            self.resp_time_percentiles[1] / 1000.0,
-            self.resp_time_percentiles[2] / 1000.0,
-            self.resp_time_percentiles[3] / 1000.0,
-            self.resp_time_percentiles[4] / 1000.0,
-            self.resp_time_percentiles[6] / 1000.0,
-            self.resp_time_percentiles[10] / 1000.0
+            self.resp_time_percentiles[Percentile::Min as usize] / 1000.0,
+            self.resp_time_percentiles[Percentile::P25 as usize] / 1000.0,
+            self.resp_time_percentiles[Percentile::P50 as usize] / 1000.0,
+            self.resp_time_percentiles[Percentile::P75 as usize] / 1000.0,
+            self.resp_time_percentiles[Percentile::P90 as usize] / 1000.0,
+            self.resp_time_percentiles[Percentile::P99 as usize] / 1000.0,
+            self.resp_time_percentiles[Percentile::Max as usize] / 1000.0
         )
     }
 }
@@ -143,8 +159,7 @@ impl Log {
             percentiles[i] = histogram.value_at_percentile(p.value()) as f32;
         }
         let result = Sample {
-            start_time: self.start,
-            end_time: time,
+            time_s: (time - self.start).as_secs_f32(),
             throughput: 1000000.0 * histogram.len() as f32 / (time - self.start).as_micros() as f32,
             mean_resp_time: histogram.mean() as f32,
             resp_time_percentiles: percentiles,
@@ -168,6 +183,15 @@ impl Log {
         histogram
     }
 
+    fn throughput_percentiles(&self) -> [f32; PERCENTILES.len()] {
+        let histogram = self.throughput_histogram();
+        let mut result = [0.0; PERCENTILES.len()];
+        for p in PERCENTILES.iter() {
+            result[*p as usize] = histogram.value_at_percentile(p.value()) as f32;
+        }
+        result
+    }
+
     fn mean_resp_time_err(&self) -> f64 {
         let std_dev = self
             .samples
@@ -177,7 +201,7 @@ impl Log {
         std_dev / (self.samples.len() as f64).sqrt() * ERR_MARGIN
     }
 
-    fn percentile_err(&self, p: Percentile) -> f64 {
+    fn resp_time_percentile_err(&self, p: Percentile) -> f64 {
         let std_dev = self
             .samples
             .iter()
@@ -187,9 +211,144 @@ impl Log {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct RespTimeCount {
+    pub percentile: f32,
+    pub resp_time_us: f32,
+    pub count: u64,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct BenchmarkStats {
+    elapsed_time_s: f32,
+    cpu_time_s: f32,
+    cpu_util: f32,
+    completed_requests: u64,
+    completed_ratio: f32,
+    errors: u64,
+    errors_ratio: f32,
+    rows: u64,
+    partitions: u64,
+    throughput: f32,
+    throughput_ratio: f32,
+    throughput_err: f32,
+    throughput_percentiles: [f32; PERCENTILES.len()],
+    resp_time_us: f32,
+    resp_time_err: f32,
+    resp_time_percentiles: [f32; PERCENTILES.len()],
+    resp_time_percentiles_err: [f32; PERCENTILES.len()],
+    resp_time_distribution: Vec<RespTimeCount>,
+    parallelism: f32,
+    parallelism_ratio: f32,
+    samples: Vec<Sample>,
+}
+
+impl BenchmarkStats {
+    pub fn print(&self) {
+        println!("SUMMARY STATS ============================================================================");
+        println!(
+            "            Elapsed: {:9.3}          s",
+            self.elapsed_time_s
+        );
+        println!(
+            "           CPU time: {:9.3}          s       {:6.1}%",
+            self.cpu_time_s, self.cpu_util
+        );
+        println!(
+            "          Completed: {:9.0}          req     {:6.1}%",
+            self.completed_requests, self.completed_ratio
+        );
+        println!(
+            "             Errors: {:9.0}          req     {:6.1}%",
+            self.errors, self.errors_ratio
+        );
+
+        println!("         Partitions: {:9}", self.partitions);
+        println!("               Rows: {:9}", self.rows);
+
+        println!(
+            "    Mean throughput: {:9.0} ± {:<6.0} req/s   {:6.1}%",
+            self.throughput, self.throughput_err, self.throughput_ratio,
+        );
+
+        println!(
+            "    Mean resp. time: {:9.2} ± {:<6.2} ms",
+            self.resp_time_us, self.resp_time_err
+        );
+
+        println!(
+            "   Mean parallelism: {:9.2}          req     {:6.1}%",
+            self.parallelism, self.parallelism_ratio
+        );
+
+        println!();
+        println!("THROUGHPUT ===============================================================================");
+        let throughput_percentiles = [
+            Percentile::Min,
+            Percentile::P1,
+            Percentile::P2,
+            Percentile::P5,
+            Percentile::P10,
+            Percentile::P25,
+            Percentile::P50,
+            Percentile::P75,
+            Percentile::P90,
+            Percentile::P95,
+            Percentile::Max,
+        ];
+        for p in throughput_percentiles.iter() {
+            println!(
+                "              {:5}: {:9}          req/s",
+                p.name(),
+                self.throughput_percentiles[*p as usize]
+            );
+        }
+
+        let resp_time_percentiles = [
+            Percentile::Min,
+            Percentile::P25,
+            Percentile::P50,
+            Percentile::P75,
+            Percentile::P90,
+            Percentile::P95,
+            Percentile::P98,
+            Percentile::P99,
+            Percentile::P99_9,
+            Percentile::P99_99,
+            Percentile::Max,
+        ];
+
+        println!();
+        println!("RESPONSE TIMES ===========================================================================");
+        for p in resp_time_percentiles.iter() {
+            println!(
+                "              {:5}: {:9.2} ± {:<6.2} ms",
+                p.name(),
+                self.resp_time_percentiles[*p as usize] / 1000.0,
+                self.resp_time_percentiles_err[*p as usize] / 1000.0,
+            );
+        }
+
+        println!();
+        println!("RESPONSE TIME DISTRIBUTION ==============================================================");
+        println!("Percentile   Resp. time      Count");
+        for x in self.resp_time_distribution.iter() {
+            println!(
+                " {:9.5} {:9.2} ms  {:9}   {}",
+                x.percentile,
+                x.resp_time_us / 1000.0,
+                x.count,
+                "*".repeat((100 * x.count / self.completed_requests) as usize)
+            )
+        }
+    }
+}
+
+pub struct Recorder {
     pub start_time: Instant,
-    end_time: Instant,
+    pub end_time: Instant,
+    rate_limit: Option<f32>,
+    parallelism_limit: usize,
     resp_times: Histogram<u64>,
     resp_time_sum: f64,
     log: Log,
@@ -202,12 +361,14 @@ pub struct BenchmarkStats {
     queue_len_sum: u64,
 }
 
-impl BenchmarkStats {
-    pub fn start() -> BenchmarkStats {
+impl Recorder {
+    pub fn start(rate_limit: Option<f32>, parallelism_limit: usize) -> Recorder {
         let start_time = Instant::now();
-        BenchmarkStats {
+        Recorder {
             resp_times: Histogram::<u64>::new(4).unwrap(),
             log: Log::new(start_time),
+            rate_limit,
+            parallelism_limit,
             start_time: start_time,
             end_time: start_time,
             completed: 0,
@@ -251,105 +412,69 @@ impl BenchmarkStats {
         self.queue_len_sum += queue_length as u64;
     }
 
-    pub fn finish(&mut self) {
+    pub fn finish(mut self) -> BenchmarkStats {
         self.end_time = Instant::now();
         self.end_cpu_time = ProcessTime::now();
         if self.log.samples.is_empty() {
             self.sample(self.end_time);
         }
+        self.stats()
     }
 
-    pub fn print(&self, conf: &Config) {
-        let wall_clock_time = (self.end_time - self.start_time).as_secs_f64();
-        let cpu_time = self
+    /// Computes the final statistics based on collected data
+    /// and turn them into report that can be serialized
+    pub fn stats(self) -> BenchmarkStats {
+        let elapsed_time_s = (self.end_time - self.start_time).as_secs_f32();
+        let cpu_time_s = self
             .end_cpu_time
             .duration_since(self.start_cpu_time)
-            .as_secs_f64();
+            .as_secs_f32();
+        let cpu_util = 100.0 * cpu_time_s / elapsed_time_s / num_cpus::get() as f32;
         let count = self.completed + self.errors;
-        let cpu_util = 100.0 * cpu_time / wall_clock_time / num_cpus::get() as f64;
-        let completed_rate = 100.0 * self.completed as f64 / count as f64;
-        let error_rate = 100.0 * self.errors as f64 / count as f64;
-        let mean_resp_time = self.resp_time_sum / self.completed as f64 / 1000.0;
-        let mean_resp_time_err = self.log.mean_resp_time_err() / 1000.0;
 
-        let throughput = self.completed as f64 / wall_clock_time;
-        let throughput_err = self.log.throughput_err();
-        let throughput_ratio = 100.0 * throughput / conf.rate.unwrap_or(f64::MAX);
-        let partitions_per_sec = self.partitions as f64 / wall_clock_time;
-        let rows_per_sec = self.rows as f64 / wall_clock_time;
+        let throughput = self.completed as f32 / elapsed_time_s;
+        let parallelism = self.queue_len_sum as f32 / count as f32;
+        let parallelism_ratio = 100.0 * parallelism / self.parallelism_limit as f32;
 
-        let concurrency = self.queue_len_sum as f64 / count as f64;
-        let concurrency_ratio = 100.0 * concurrency / conf.concurrency as f64;
-
-        println!("SUMMARY STATS ============================================================================");
-        println!("            Elapsed: {:11.3}          s", wall_clock_time);
-        println!(
-            "           CPU time: {:11.3}          s       {:6.1}%",
-            cpu_time, cpu_util
-        );
-        println!(
-            "          Completed: {:11.0}          req     {:6.1}%",
-            self.completed, completed_rate
-        );
-        println!(
-            "             Errors: {:11.0}          req     {:6.1}%",
-            self.errors, error_rate
-        );
-
-        println!("         Partitions: {:11}", self.partitions);
-        println!("               Rows: {:11}", self.rows);
-
-        println!(
-            "    Mean throughput: {:11.0} ± {:<6.0} req/s   {:6.1}%",
-            throughput, throughput_err, throughput_ratio,
-        );
-
-        println!(
-            "    Mean resp. time: {:11.2} ± {:<6.2} ms",
-            mean_resp_time, mean_resp_time_err
-        );
-
-        println!(
-            "   Mean concurrency: {:11.2}          req     {:6.1}%",
-            concurrency, concurrency_ratio
-        );
-
-        println!();
-        let histogram = self.log.throughput_histogram();
-        println!("THROUGHPUT ===============================================================================");
-        println!("                Min: {:11}          req/s", histogram.min());
-        for p in &[1.0, 5.0, 25.0, 50.0, 75.0, 95.0] {
-            println!(
-                "              {:5}: {:11}          req/s",
-                *p,
-                histogram.value_at_percentile(*p)
-            );
-        }
-        println!("                Max: {:11}          req/s", histogram.max());
-
-        let histogram = &self.resp_times;
-        println!();
-        println!("RESPONSE TIMES ===========================================================================");
+        let mut resp_time_percentiles = [0.0; PERCENTILES.len()];
+        let mut resp_time_percentiles_err = [0.0; PERCENTILES.len()];
         for p in PERCENTILES.iter() {
-            println!(
-                "              {:5}: {:11.2} ± {:<6.2} ms",
-                p.name(),
-                self.resp_times.value_at_percentile(p.value()) as f64 / 1000.0,
-                self.log.percentile_err(*p) / 1000.0,
-            );
+            resp_time_percentiles[*p as usize] =
+                self.resp_times.value_at_percentile(p.value()) as f32;
+            resp_time_percentiles_err[*p as usize] = self.log.resp_time_percentile_err(*p) as f32;
         }
 
-        println!();
-        println!("RESPONSE TIME DISTRIBUTION ==============================================================");
-        println!("Percentile   Resp. time      Count");
-        for x in self.resp_times.iter_log(histogram.min(), 1.25) {
-            println!(
-                " {:9.5} {:9.2} ms  {:9}   {}",
-                x.percentile(),
-                x.value_iterated_to() as f64 / 1000.0,
-                x.count_since_last_iteration(),
-                "*".repeat((100 * x.count_since_last_iteration() / histogram.len()) as usize)
-            )
+        let mut resp_time_distribution = Vec::new();
+        for x in self.resp_times.iter_log(self.resp_times.min(), 1.25) {
+            resp_time_distribution.push(RespTimeCount {
+                percentile: x.percentile() as f32,
+                resp_time_us: x.value_iterated_to() as f32,
+                count: x.count_since_last_iteration(),
+            });
+        }
+
+        BenchmarkStats {
+            elapsed_time_s,
+            cpu_time_s,
+            cpu_util,
+            completed_requests: self.completed,
+            completed_ratio: 100.0 * self.completed as f32 / count as f32,
+            errors: self.errors,
+            errors_ratio: 100.0 * self.errors as f32 / count as f32,
+            rows: self.rows,
+            partitions: self.partitions,
+            throughput,
+            throughput_err: self.log.throughput_err() as f32,
+            throughput_ratio: 100.0 * throughput / self.rate_limit.unwrap_or(f32::MAX),
+            throughput_percentiles: self.log.throughput_percentiles(),
+            resp_time_us: (self.resp_time_sum / self.completed as f64 / 1000.0) as f32,
+            resp_time_err: (self.log.mean_resp_time_err() / 1000.0) as f32,
+            resp_time_percentiles,
+            resp_time_percentiles_err,
+            resp_time_distribution,
+            parallelism,
+            parallelism_ratio,
+            samples: self.log.samples,
         }
     }
 }

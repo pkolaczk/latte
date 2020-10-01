@@ -14,7 +14,7 @@ use config::Config;
 
 use crate::progress::FastProgressBar;
 use crate::session::*;
-use crate::stats::{ActionStats, BenchmarkStats, Sample};
+use crate::stats::{ActionStats, BenchmarkStats, Recorder, Sample};
 use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
@@ -75,8 +75,8 @@ fn round(duration: Duration, period: Duration) -> Duration {
 async fn par_execute<F, C, R, RE>(
     name: &str,
     count: u64,
-    concurrency: usize,
-    rate: Option<f64>,
+    parallelism_limit: usize,
+    rate_limit: Option<f32>,
     sampling_period: Duration,
     context: Arc<C>,
     action: F,
@@ -88,19 +88,20 @@ where
     RE: Send,
 {
     let progress = Arc::new(FastProgressBar::new_progress_bar(name, count));
-    let mut stats = BenchmarkStats::start();
-    let mut interval = interval(rate.unwrap_or(f64::MAX));
-    let semaphore = Arc::new(Semaphore::new(concurrency));
+    let mut stats = Recorder::start(rate_limit, parallelism_limit);
+    let mut interval = interval(rate_limit.unwrap_or(f32::MAX) as f64);
+    let semaphore = Arc::new(Semaphore::new(parallelism_limit));
 
     type Item = Result<ActionStats, ()>;
-    let (tx, mut rx): (Sender<Item>, Receiver<Item>) = tokio::sync::mpsc::channel(concurrency);
+    let (tx, mut rx): (Sender<Item>, Receiver<Item>) =
+        tokio::sync::mpsc::channel(parallelism_limit);
 
     for i in 0..count {
-        if rate.is_some() {
+        if rate_limit.is_some() {
             interval.tick().await;
         }
         let permit = semaphore.clone().acquire_owned().await;
-        let concurrent_count = concurrency - semaphore.available_permits();
+        let concurrent_count = parallelism_limit - semaphore.available_permits();
         stats.enqueued(concurrent_count);
 
         let now = Instant::now();
@@ -108,7 +109,7 @@ where
             let start_time = stats.start_time;
             let elapsed_rounded = round(now - start_time, sampling_period);
             let sample_time = start_time + elapsed_rounded;
-            let log_line = stats.sample(sample_time).to_string(start_time);
+            let log_line = stats.sample(sample_time).to_string();
             progress.println(log_line);
         }
 
@@ -141,8 +142,7 @@ where
     while let Some(d) = rx.next().await {
         stats.record(d)
     }
-    stats.finish();
-    stats
+    stats.finish()
 }
 
 async fn async_main() {
@@ -190,7 +190,7 @@ async fn async_main() {
     .await;
 
     println!();
-    stats.print(&conf);
+    stats.print();
 }
 
 fn main() {
