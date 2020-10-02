@@ -208,7 +208,7 @@ where
     /// If the object is None, returns an empty string.
     fn fmt_measurement(&self, v: Option<V>) -> String {
         v.map(|v| format!("{}", (self.f)(v)))
-            .unwrap_or("".to_owned())
+            .unwrap_or_else(|| "".to_owned())
     }
 
     /// Computes the relative difference between v2 and v1 as: 100.0 * f(v2) / f(v1) - 100.0.
@@ -229,7 +229,7 @@ where
                     }
                 })
             })
-            .unwrap_or("".to_string())
+            .unwrap_or_else(|| "".to_string())
     }
 
     fn fmt_unit(&self) -> String {
@@ -287,7 +287,7 @@ impl ConfigCmp<'_> {
                 let utc = NaiveDateTime::from_timestamp(ts, 0);
                 Local.from_utc_datetime(&utc).format(format).to_string()
             })
-            .unwrap_or("".to_string())
+            .unwrap_or_else(|| "".to_string())
     }
 }
 
@@ -304,7 +304,7 @@ impl<'a> Display for ConfigCmp<'a> {
                 self.format_time(conf, "%H:%M:%S %z")
             ),
             self.make_line("Label", "", |conf|
-                conf.label.clone().unwrap_or("".to_string())
+                conf.label.clone().unwrap_or_else(|| "".to_string())
             ),
             self.make_line("Workload", "", |conf|
                 conf.workload.to_string()

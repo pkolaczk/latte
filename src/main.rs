@@ -21,7 +21,6 @@ use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
 
-mod bootstrap;
 mod config;
 mod progress;
 mod report;
@@ -216,7 +215,7 @@ async fn async_main() {
     let path = conf
         .output
         .clone()
-        .unwrap_or(PathBuf::from(".latte-report.json"));
+        .unwrap_or_else(|| PathBuf::from(".latte-report.json"));
     match save_report(conf, stats, &path) {
         Ok(()) => {}
         Err(e) => {

@@ -269,7 +269,7 @@ impl Recorder {
             log: Log::new(start_time),
             rate_limit,
             parallelism_limit,
-            start_time: start_time,
+            start_time,
             end_time: start_time,
             completed: 0,
             errors: 0,
