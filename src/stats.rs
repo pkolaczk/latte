@@ -1,11 +1,8 @@
 use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
+use serde::{Deserialize, Serialize};
 use statrs::statistics::Statistics;
 use tokio::time::{Duration, Instant};
-
-use serde::{Deserialize, Serialize};
-use std::io;
-use std::path::PathBuf;
 
 const ERR_MARGIN: f64 = 3.29; // 0.999 confidence, 2-sided
 
@@ -108,18 +105,18 @@ pub struct Sample {
 impl Sample {
     pub fn print_log_header() {
         println!(
-            "LOG ======================================================================================");
+            "LOG =================================================================================================");
         println!(
-            "                      ----------------------- Response times [ms]-------------------------"
+            "                         ----------------------- Response times [ms]-------------------------"
         );
         println!(
-            "Time [s]  Throughput       Min        25        50        75        90        99       Max"
+            "Time [s]  Throughput          Min        25        50        75        90        99       Max"
         )
     }
 
     pub fn to_string(&self) -> String {
         format!(
-            "{:8.3} {:11.0} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
+            "{:8.3} {:11.0}    {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
             self.time_s,
             self.throughput,
             self.resp_time_percentiles[Percentile::Min as usize],
@@ -135,6 +132,7 @@ impl Sample {
 
 struct Log {
     start: Instant,
+    last_sample_time: Instant,
     samples: Vec<Sample>,
     curr_histogram: Histogram<u64>,
 }
@@ -143,6 +141,7 @@ impl Log {
     fn new(start_time: Instant) -> Log {
         Log {
             start: start_time,
+            last_sample_time: start_time,
             samples: Vec::new(),
             curr_histogram: Histogram::new(4).unwrap(),
         }
@@ -162,12 +161,12 @@ impl Log {
         }
         let result = Sample {
             time_s: (time - self.start).as_secs_f32(),
-            throughput: 1000000.0 * histogram.len() as f32 / (time - self.start).as_micros() as f32,
+            throughput: 1000000.0 * histogram.len() as f32 / (time - self.last_sample_time).as_micros() as f32,
             mean_resp_time: histogram.mean() as f32 / 1000.0,
             resp_time_percentiles: percentiles,
         };
         self.curr_histogram.clear();
-        self.start = time;
+        self.last_sample_time = time;
         self.samples.push(result);
         self.samples.last().unwrap()
     }
@@ -222,132 +221,27 @@ pub struct RespTimeCount {
 
 #[derive(Serialize, Deserialize)]
 pub struct BenchmarkStats {
-    elapsed_time_s: f32,
-    cpu_time_s: f32,
-    cpu_util: f32,
-    completed_requests: u64,
-    completed_ratio: f32,
-    errors: u64,
-    errors_ratio: f32,
-    rows: u64,
-    partitions: u64,
-    throughput: f32,
-    throughput_ratio: Option<f32>,
-    throughput_err: f32,
-    throughput_percentiles: [f32; PERCENTILES.len()],
-    resp_time_ms: f32,
-    resp_time_err: f32,
-    resp_time_percentiles: [f32; PERCENTILES.len()],
-    resp_time_percentiles_err: [f32; PERCENTILES.len()],
-    resp_time_distribution: Vec<RespTimeCount>,
-    parallelism: f32,
-    parallelism_ratio: f32,
-    samples: Vec<Sample>,
-}
-
-impl BenchmarkStats {
-    pub fn print(&self) {
-        println!("SUMMARY STATS ============================================================================");
-        println!(
-            "            Elapsed: {:9.3}          s",
-            self.elapsed_time_s
-        );
-        println!(
-            "           CPU time: {:9.3}          s       {:6.1}%",
-            self.cpu_time_s, self.cpu_util
-        );
-        println!(
-            "          Completed: {:9.0}          req     {:6.1}%",
-            self.completed_requests, self.completed_ratio
-        );
-        println!(
-            "             Errors: {:9.0}          req     {:6.1}%",
-            self.errors, self.errors_ratio
-        );
-
-        println!("         Partitions: {:9}", self.partitions);
-        println!("               Rows: {:9}", self.rows);
-
-        let throughput_ratio_str = match self.throughput_ratio {
-            Some(r) => format!("{:6.1}%", r),
-            None => "".to_owned(),
-        };
-        println!(
-            "    Mean throughput: {:9.0} ± {:<6.0} req/s   {}",
-            self.throughput, self.throughput_err, throughput_ratio_str
-        );
-
-        println!(
-            "    Mean resp. time: {:9.2} ± {:<6.2} ms",
-            self.resp_time_ms, self.resp_time_err
-        );
-
-        println!(
-            "   Mean parallelism: {:9.2}          req     {:6.1}%",
-            self.parallelism, self.parallelism_ratio
-        );
-
-        println!();
-        println!("THROUGHPUT ===============================================================================");
-        let throughput_percentiles = [
-            Percentile::Min,
-            Percentile::P1,
-            Percentile::P2,
-            Percentile::P5,
-            Percentile::P10,
-            Percentile::P25,
-            Percentile::P50,
-            Percentile::P75,
-            Percentile::P90,
-            Percentile::P95,
-            Percentile::Max,
-        ];
-        for p in throughput_percentiles.iter() {
-            println!(
-                "              {:5}: {:9}          req/s",
-                p.name(),
-                self.throughput_percentiles[*p as usize]
-            );
-        }
-
-        let resp_time_percentiles = [
-            Percentile::Min,
-            Percentile::P25,
-            Percentile::P50,
-            Percentile::P75,
-            Percentile::P90,
-            Percentile::P95,
-            Percentile::P98,
-            Percentile::P99,
-            Percentile::P99_9,
-            Percentile::P99_99,
-            Percentile::Max,
-        ];
-
-        println!();
-        println!("RESPONSE TIMES ===========================================================================");
-        for p in resp_time_percentiles.iter() {
-            println!(
-                "              {:5}: {:9.2} ± {:<6.2} ms",
-                p.name(),
-                self.resp_time_percentiles[*p as usize],
-                self.resp_time_percentiles_err[*p as usize],
-            );
-        }
-
-        println!();
-        println!("RESPONSE TIME DISTRIBUTION ==============================================================");
-        println!("Percentile   Resp. time      Count");
-        for x in self.resp_time_distribution.iter() {
-            println!(
-                " {:9.5} {:9.2} ms  {:9}   {}",
-                x.percentile,
-                x.resp_time_ms,
-                x.count,
-                "*".repeat((100 * x.count / self.completed_requests) as usize)
-            )
-        }
-    }
+    pub elapsed_time_s: f32,
+    pub cpu_time_s: f32,
+    pub cpu_util: f32,
+    pub completed_requests: u64,
+    pub completed_ratio: f32,
+    pub errors: u64,
+    pub errors_ratio: f32,
+    pub rows: u64,
+    pub partitions: u64,
+    pub throughput: f32,
+    pub throughput_ratio: Option<f32>,
+    pub throughput_err: f32,
+    pub throughput_percentiles: [f32; PERCENTILES.len()],
+    pub resp_time_ms: f32,
+    pub resp_time_err: f32,
+    pub resp_time_percentiles: [f32; PERCENTILES.len()],
+    pub resp_time_percentiles_err: [f32; PERCENTILES.len()],
+    pub resp_time_distribution: Vec<RespTimeCount>,
+    pub parallelism: f32,
+    pub parallelism_ratio: f32,
+    pub samples: Vec<Sample>,
 }
 
 pub struct Recorder {
@@ -411,7 +305,7 @@ impl Recorder {
     }
 
     pub fn last_sample_time(&self) -> Instant {
-        self.log.start
+        self.log.last_sample_time
     }
 
     pub fn enqueued(&mut self, queue_length: usize) {

@@ -1,11 +1,10 @@
 use core::fmt;
 use std::fmt::{Display, Formatter};
-
-use chrono::Local;
-use clap::Clap;
-
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+use chrono::Utc;
+use clap::Clap;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clap, Debug, Serialize, Deserialize)]
 pub enum Workload {
@@ -50,11 +49,11 @@ pub struct Config {
 
     /// Number of I/O threads used by the driver
     #[clap(short("t"), long, default_value = "1")]
-    pub threads: u32,
+    pub threads: usize,
 
     /// Number of connections per io_thread
     #[clap(short("c"), long, default_value = "1")]
-    pub connections: u32,
+    pub connections: usize,
 
     /// Max number of concurrent async requests
     #[clap(short("p"), long, default_value = "1024")]
@@ -62,16 +61,20 @@ pub struct Config {
 
     /// Throughput sampling period, in seconds
     #[clap(short("s"), long, default_value = "1.0")]
-    pub sampling_period: f64,
+    pub sampling_period: f32,
 
     /// Label that will be added to the report to help identifying the test
     #[clap(short, long)]
     pub label: Option<String>,
 
-    /// Path to the output file to store the report in JSON
+    /// Path to an output file where the JSON report should be written to
     #[clap(short("o"), long)]
     #[serde(skip)]
     pub output: Option<PathBuf>,
+
+    /// Path to a report from another run that should be compared to side-by-side
+    #[clap(short("x"), long)]
+    pub compare: Option<PathBuf>,
 
     /// Workload type
     #[clap(arg_enum, name = "workload", required = true)]
@@ -80,28 +83,17 @@ pub struct Config {
     /// List of Cassandra addresses to connect to
     #[clap(name = "addresses", required = true, default_value = "localhost")]
     pub addresses: Vec<String>,
+
+    /// Seconds since 1970-01-01T00:00:00Z
+    #[clap(hidden(true), long)]
+    pub timestamp: Option<i64>,
 }
 
 impl Config {
-    pub fn print(&self) {
-        println!("CONFIG ===================================================================================");
-        println!("               Time: {}", Local::now().to_rfc2822());
-        println!(
-            "              Label: {}",
-            self.label.as_ref().unwrap_or(&"".to_owned())
-        );
-        println!("           Workload: {}", self.workload.to_string());
-        println!("            Threads: {:9}", self.threads);
-        println!("  Total connections: {:9}", self.threads * self.connections);
-        match self.rate {
-            Some(rate) => println!("         Rate limit: {:9.1} req/s", rate),
-            None => println!("         Rate limit: {:>9} req/s", "-"),
+    pub fn set_timestamp_if_empty(mut self) -> Self {
+        if self.timestamp.is_none() {
+            self.timestamp = Some(Utc::now().timestamp())
         }
-        println!("  Concurrency limit: {:9} req", self.parallelism);
-        println!("  Warmup iterations: {:9} req", self.warmup_count);
-        println!("Measured iterations: {:9} req", self.count);
-        println!("           Sampling: {:9.1} s", self.sampling_period);
-
-        println!();
+        self
     }
 }

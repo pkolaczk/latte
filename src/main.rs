@@ -2,11 +2,9 @@ use std::cmp::max;
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
-use std::{fs, io};
 
 use cassandra_cpp::Session;
 use clap::Clap;
-use serde::{Deserialize, Serialize};
 use tokio::macros::support::Future;
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -16,8 +14,9 @@ use tokio::time::{Duration, Instant, Interval};
 use config::Config;
 
 use crate::progress::FastProgressBar;
+use crate::report::{load_report, save_report, BenchmarkCmp, ConfigCmp};
 use crate::session::*;
-use crate::stats::{ActionStats, BenchmarkStats, Recorder, Sample, PERCENTILES};
+use crate::stats::{ActionStats, BenchmarkStats, Recorder, Sample};
 use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
@@ -25,6 +24,7 @@ use crate::workload::{Workload, WorkloadStats};
 mod bootstrap;
 mod config;
 mod progress;
+mod report;
 mod session;
 mod stats;
 mod workload;
@@ -148,35 +148,29 @@ where
     stats.finish()
 }
 
-#[derive(Serialize, Deserialize)]
-struct Report {
-    conf: Config,
-    percentiles: Vec<f32>,
-    result: BenchmarkStats,
-}
-
-/// Saves benchmark results to a JSON file
-fn save_report(conf: Config, stats: BenchmarkStats, path: &PathBuf) -> io::Result<()> {
-    let percentile_legend: Vec<f32> = PERCENTILES.iter().map(|p| p.value() as f32).collect();
-    let report = Report {
-        conf,
-        percentiles: percentile_legend,
-        result: stats,
-    };
-    let f = fs::File::create(path)?;
-    serde_json::to_writer_pretty(f, &report)?;
-    Ok(())
-}
-
 async fn async_main() {
-    let conf: Config = Config::parse();
+    let conf: Config = Config::parse().set_timestamp_if_empty();
+    let compare = conf.compare.as_ref().map(|path| match load_report(path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to load report from {}: {}", path.display(), e);
+            exit(1)
+        }
+    });
+
     let mut cluster = cluster(&conf);
     let session = connect_or_abort(&mut cluster).await;
     setup_keyspace_or_abort(&conf, &session).await;
     let session = connect_keyspace_or_abort(&mut cluster, conf.keyspace.as_str()).await;
     let workload = workload(&conf, session).await;
 
-    conf.print();
+    println!(
+        "{}",
+        ConfigCmp {
+            v1: &conf,
+            v2: compare.as_ref().map(|c| &c.conf)
+        }
+    );
 
     par_execute(
         "Populating...",
@@ -206,14 +200,18 @@ async fn async_main() {
         conf.count,
         conf.parallelism,
         conf.rate,
-        Duration::from_secs_f64(conf.sampling_period),
+        Duration::from_secs_f32(conf.sampling_period),
         workload.clone(),
         |w, i| w.run(i),
     )
     .await;
 
+    let stats_cmp = BenchmarkCmp {
+        v1: &stats,
+        v2: compare.as_ref().map(|c| &c.result),
+    };
     println!();
-    stats.print();
+    println!("{}", &stats_cmp);
 
     let path = conf
         .output
