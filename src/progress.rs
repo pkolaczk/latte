@@ -2,7 +2,7 @@
 /// https://github.com/pkolaczk/fclones/
 /// MIT license.
 use atomic_counter::{AtomicCounter, RelaxedCounter};
-use console::style;
+use console::{style, Term};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::sync::Arc;
 use std::thread;
@@ -65,12 +65,22 @@ impl FastProgressBar {
         let (stdout_tx, stdout_rx) = channel();
         let (stderr_tx, stderr_rx) = channel();
         thread::spawn(move || {
+            let stdout = Term::stdout();
+            let stderr = Term::stderr();
             while Arc::strong_count(&counter2) > 1 && !pb2.is_finished() {
                 while let Ok(msg) = stdout_rx.try_recv() {
-                    pb2.println(msg);
+                    if stdout.is_term() && stderr.is_term() {
+                        pb2.println(msg);
+                    } else {
+                        println!("{}", msg)
+                    }
                 }
                 while let Ok(msg) = stderr_rx.try_recv() {
-                    pb2.println(msg);
+                    if stderr.is_term() && stderr.is_term() {
+                        pb2.println(msg);
+                    } else {
+                        eprintln!("{}", msg)
+                    }
                 }
                 pb2.set_position(counter2.get() as u64);
                 thread::sleep(Duration::from_millis(Self::REFRESH_PERIOD_MS));
