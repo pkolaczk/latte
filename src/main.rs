@@ -16,7 +16,7 @@ use config::Config;
 use crate::progress::FastProgressBar;
 use crate::report::{load_report, save_report, BenchmarkCmp, ConfigCmp};
 use crate::session::*;
-use crate::stats::{ActionStats, BenchmarkStats, Recorder, Sample};
+use crate::stats::{QueryStats, BenchmarkStats, Recorder};
 use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
@@ -94,7 +94,7 @@ where
     let mut interval = interval(rate_limit.unwrap_or(f32::MAX) as f64);
     let semaphore = Arc::new(Semaphore::new(parallelism_limit));
 
-    type Item = Result<ActionStats, ()>;
+    type Item = Result<QueryStats, ()>;
     let (tx, mut rx): (Sender<Item>, Receiver<Item>) =
         tokio::sync::mpsc::channel(parallelism_limit);
 
@@ -116,17 +116,17 @@ where
         }
 
         while let Ok(d) = rx.try_recv() {
-            stats.record(d)
+            stats.record(d);
+            progress.tick();
         }
         let mut tx = tx.clone();
         let context = context.clone();
-        let progress = progress.clone();
         tokio::spawn(async move {
             let start = Instant::now();
             match action(context, i).await {
                 Ok(result) => {
                     let end = Instant::now();
-                    let s = ActionStats {
+                    let s = QueryStats {
                         duration: max(Duration::from_micros(1), end - start),
                         row_count: result.row_count,
                         partition_count: result.partition_count,
@@ -135,14 +135,14 @@ where
                 }
                 Err(_) => tx.send(Err(())).await.unwrap(),
             }
-            progress.tick();
             drop(permit);
         });
     }
     drop(tx);
 
     while let Some(d) = rx.next().await {
-        stats.record(d)
+        stats.record(d);
+        progress.tick();
     }
     stats.finish()
 }
@@ -193,7 +193,7 @@ async fn async_main() {
     )
     .await;
 
-    Sample::print_log_header();
+    report::print_log_header();
     let stats = par_execute(
         "Running...",
         conf.count,
@@ -226,6 +226,7 @@ async fn async_main() {
 }
 
 fn main() {
+    console::set_colors_enabled(true);
     let mut runtime = tokio::runtime::Builder::new()
         .max_threads(1)
         .basic_scheduler()

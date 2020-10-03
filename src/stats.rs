@@ -7,7 +7,7 @@ use tokio::time::{Duration, Instant};
 const ERR_MARGIN: f64 = 3.29; // 0.999 confidence, 2-sided
 
 #[derive(Debug)]
-pub struct ActionStats {
+pub struct QueryStats {
     pub duration: Duration,
     pub row_count: u64,
     pub partition_count: u64,
@@ -102,34 +102,6 @@ pub struct Sample {
     pub resp_time_percentiles: [f32; PERCENTILES.len()],
 }
 
-impl Sample {
-    pub fn print_log_header() {
-        println!(
-            "LOG =================================================================================================");
-        println!(
-            "                         ----------------------- Response times [ms]-------------------------"
-        );
-        println!(
-            "Time [s]  Throughput          Min        25        50        75        90        99       Max"
-        )
-    }
-
-    pub fn to_string(&self) -> String {
-        format!(
-            "{:8.3} {:11.0}    {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
-            self.time_s,
-            self.throughput,
-            self.resp_time_percentiles[Percentile::Min as usize],
-            self.resp_time_percentiles[Percentile::P25 as usize],
-            self.resp_time_percentiles[Percentile::P50 as usize],
-            self.resp_time_percentiles[Percentile::P75 as usize],
-            self.resp_time_percentiles[Percentile::P90 as usize],
-            self.resp_time_percentiles[Percentile::P99 as usize],
-            self.resp_time_percentiles[Percentile::Max as usize]
-        )
-    }
-}
-
 struct Log {
     start: Instant,
     last_sample_time: Instant,
@@ -143,7 +115,7 @@ impl Log {
             start: start_time,
             last_sample_time: start_time,
             samples: Vec::new(),
-            curr_histogram: Histogram::new(4).unwrap(),
+            curr_histogram: Histogram::new(3).unwrap(),
         }
     }
 
@@ -161,7 +133,8 @@ impl Log {
         }
         let result = Sample {
             time_s: (time - self.start).as_secs_f32(),
-            throughput: 1000000.0 * histogram.len() as f32 / (time - self.last_sample_time).as_micros() as f32,
+            throughput: 1000000.0 * histogram.len() as f32
+                / (time - self.last_sample_time).as_micros() as f32,
             mean_resp_time: histogram.mean() as f32 / 1000.0,
             resp_time_percentiles: percentiles,
         };
@@ -282,7 +255,7 @@ impl Recorder {
         }
     }
 
-    pub fn record<E>(&mut self, item: Result<ActionStats, E>) {
+    pub fn record<E>(&mut self, item: Result<QueryStats, E>) {
         match item {
             Ok(s) => {
                 self.completed += 1;

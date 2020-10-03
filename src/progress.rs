@@ -7,6 +7,10 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::sync::mpsc::{Sender, channel};
+use std::io::{stdout, stderr};
+use std::io::Write;
+
 
 /// A wrapper over `indicatif::ProgressBar` that makes updating its progress lockless.
 /// Unfortunately `indicatif::ProgressBar` wraps state in a `Mutex`, so updates are slow
@@ -35,6 +39,8 @@ use std::time::Duration;
 pub struct FastProgressBar {
     counter: Arc<RelaxedCounter>,
     progress_bar: Arc<ProgressBar>,
+    stdout_tx: Sender<String>,
+    stderr_tx: Sender<String>,
 }
 
 #[allow(unused)]
@@ -46,7 +52,7 @@ impl FastProgressBar {
     /// Progress bar looks like this:
     const PROGRESS_CHARS: &'static str = "=> ";
     /// How much time to wait between refreshes, in milliseconds
-    const REFRESH_PERIOD_MS: u64 = 50;
+    const REFRESH_PERIOD_MS: u64 = 100;
 
     /// Wrap an existing `ProgressBar` and start the background updater-thread.
     /// The thread periodically copies the `FastProgressBar` position into the wrapped
@@ -56,8 +62,16 @@ impl FastProgressBar {
         let pb2 = pb.clone();
         let counter = Arc::new(RelaxedCounter::new(0));
         let counter2 = counter.clone();
+        let (stdout_tx, stdout_rx) = channel();
+        let (stderr_tx, stderr_rx) = channel();
         thread::spawn(move || {
             while Arc::strong_count(&counter2) > 1 && !pb2.is_finished() {
+                while let Ok(msg) = stdout_rx.try_recv() {
+                    pb2.println(msg);
+                }
+                while let Ok(msg) = stderr_rx.try_recv() {
+                    pb2.println(msg);
+                }
                 pb2.set_position(counter2.get() as u64);
                 thread::sleep(Duration::from_millis(Self::REFRESH_PERIOD_MS));
             }
@@ -65,6 +79,8 @@ impl FastProgressBar {
         FastProgressBar {
             counter,
             progress_bar: pb,
+            stdout_tx,
+            stderr_tx
         }
     }
 
@@ -104,7 +120,11 @@ impl FastProgressBar {
 
     /// Create a new preconfigured progress bar with given message.
     pub fn new_progress_bar(msg: &str, len: u64) -> FastProgressBar {
+        stdout().flush();
+        stderr().flush();
+
         let inner = ProgressBar::new(len);
+        inner.set_draw_target(ProgressDrawTarget::stderr());
         let template = "{msg:18}[{bar:WIDTH}] {pos:>10}/{len}"
             .to_string()
             .replace("WIDTH", Self::WIDTH.to_string().as_str());
@@ -159,7 +179,11 @@ impl FastProgressBar {
     }
 
     pub fn println<I: Into<String>>(&self, msg: I) {
-        self.progress_bar.println(msg);
+        self.stdout_tx.send(msg.into());
+    }
+
+    pub fn eprintln<I: Into<String>>(&self, msg: I) {
+        self.stderr_tx.send(msg.into());
     }
 
     pub fn tick(&self) {
