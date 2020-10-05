@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
 use chrono::Utc;
-use clap::{Clap, AppSettings};
+use clap::{AppSettings, Clap};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clap, Debug, Serialize, Deserialize)]
@@ -24,7 +24,10 @@ impl Display for Workload {
 
 /// Latency Tester for Apache Cassandra
 #[derive(Clap, Debug, Serialize, Deserialize)]
-#[clap(setting(AppSettings::ColoredHelp), setting(AppSettings::DeriveDisplayOrder))]
+#[clap(
+    setting(AppSettings::ColoredHelp),
+    setting(AppSettings::DeriveDisplayOrder)
+)]
 pub struct Config {
     /// Name of the keyspace
     #[clap(short('k'), long, default_value = "latte")]

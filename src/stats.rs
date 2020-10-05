@@ -1,5 +1,7 @@
+use crate::stats::Significance::{Medium, Strong, Weak};
 use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
+use rustats::hypothesis_testings::MannWhitneyU;
 use serde::{Deserialize, Serialize};
 use statrs::statistics::Statistics;
 use tokio::time::{Duration, Instant};
@@ -215,6 +217,70 @@ pub struct BenchmarkStats {
     pub parallelism: f32,
     pub parallelism_ratio: f32,
     pub samples: Vec<Sample>,
+}
+
+pub struct BenchmarkCmp<'a> {
+    pub v1: &'a BenchmarkStats,
+    pub v2: Option<&'a BenchmarkStats>,
+}
+
+/// Significance level denoting strength of hypothesis
+#[derive(Clone, Copy)]
+pub enum Significance {
+    None,   // P >= 0.05
+    Weak,   // P < 0.05
+    Medium, // P < 0.001
+    Strong, // P < 0.0001
+}
+
+impl Significance {
+    pub fn p_level(&self) -> f64 {
+        match self {
+            Significance::None => f64::MAX,
+            Significance::Weak => 0.01,
+            Significance::Medium => 0.001,
+            Significance::Strong => 0.0001,
+        }
+    }
+}
+
+impl BenchmarkCmp<'_> {
+    /// Compares samples collected in both runs for statistically significant difference.
+    /// `f` a function applied to each sample
+    fn cmp<F, T>(&self, f: F) -> Option<Significance>
+    where
+        F: Fn(&Sample) -> T + Copy,
+        T: PartialOrd,
+    {
+        self.v2.map(|v2| {
+            let t1 = self.v1.samples.iter().map(f);
+            let t2 = v2.samples.iter().map(f);
+            let mw = MannWhitneyU::new(t1, t2);
+            *[Strong, Medium, Weak]
+                .iter()
+                .find(|s| mw.test(s.p_level()))
+                .unwrap_or(&Significance::None)
+        })
+    }
+
+    /// Checks if throughput means of two benchmark runs are significantly different.
+    /// Returns None if the second benchmark is unset.
+    pub fn cmp_throughput(&self) -> Option<Significance> {
+        self.cmp(|s| s.throughput)
+    }
+
+    // Checks if mean response time of two benchmark runs are significantly different.
+    // Returns None if the second benchmark is unset.
+    pub fn cmp_mean_resp_time(&self) -> Option<Significance> {
+        self.cmp(|s| s.mean_resp_time)
+    }
+
+    // Checks corresponding response time percentiles of two benchmark runs
+    // are statistically different. Returns None if the second benchmark is unset.
+    pub fn cmp_resp_time_percentile(&self, p: Percentile) -> Option<Significance> {
+        self.cmp(|s| s.resp_time_percentiles[p as usize])
+    }
+
 }
 
 pub struct Recorder {

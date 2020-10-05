@@ -4,13 +4,12 @@
 use atomic_counter::{AtomicCounter, RelaxedCounter};
 use console::{style, Term};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use std::io::Write;
+use std::io::{stderr, stdout};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use std::sync::mpsc::{Sender, channel};
-use std::io::{stdout, stderr};
-use std::io::Write;
-
 
 /// A wrapper over `indicatif::ProgressBar` that makes updating its progress lockless.
 /// Unfortunately `indicatif::ProgressBar` wraps state in a `Mutex`, so updates are slow
@@ -90,7 +89,7 @@ impl FastProgressBar {
             counter,
             progress_bar: pb,
             stdout_tx,
-            stderr_tx
+            stderr_tx,
         }
     }
 

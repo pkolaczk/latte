@@ -5,7 +5,7 @@ use err_derive::*;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::stats::{BenchmarkStats, Percentile, Sample, PERCENTILES};
+use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance, PERCENTILES};
 use chrono::{Local, NaiveDateTime, TimeZone};
 use core::fmt;
 use std::fmt::{Display, Formatter};
@@ -49,16 +49,26 @@ pub fn load_report(path: &PathBuf) -> Result<Report, ReportLoadError> {
 
 /// This is similar as the builtin `Option`, but we need it, because the
 /// builtin `Option` doesn't implement
-/// `Display` and there is no way to do it in this crate
+/// `Display` and there is no way to do it in this crate.
+/// Maybe formats None as an empty string.
 pub enum Maybe<T> {
     None,
     Some(T),
 }
 
+impl<T> From<Option<T>> for Maybe<T> {
+    fn from(opt: Option<T>) -> Maybe<T> {
+        match opt {
+            Some(t) => Maybe::Some(t),
+            None => Maybe::None,
+        }
+    }
+}
+
 impl<T: Display> Display for Maybe<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self {
-            Maybe::Some(value) => write!(f, "{}", value),
+            Maybe::Some(value) => f.write_fmt(format_args!("{}", value)),
             Maybe::None => Ok(()),
         }
     }
@@ -167,6 +177,16 @@ impl Rational for String {
     }
 }
 
+impl Display for Significance {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Significance::None => f.write_fmt(format_args!("{}", "[   ]")),
+            Significance::Weak => f.write_fmt(format_args!("{}", "[*  ]")),
+            Significance::Medium => f.write_fmt(format_args!("{}", "[** ]")),
+            Significance::Strong => f.write_fmt(format_args!("{}", "[***]")),
+        }
+    }
+}
 /// A single line of text report
 struct Line<M, V, F>
 where
@@ -181,8 +201,8 @@ where
     pub v1: V,
     /// Second object to measure
     pub v2: Option<V>,
-    /// Statistical significance of difference between v1 and v2 (P-value)
-    pub p: Option<f32>,
+    /// Statistical significance level
+    pub significance: Option<Significance>,
     /// Measurement function
     pub f: F,
 }
@@ -199,9 +219,18 @@ where
             unit,
             v1,
             v2,
-            p: None,
+            significance: None,
             f,
         }
+    }
+
+    fn into_box(self) -> Box<Self> {
+        Box::new(self)
+    }
+
+    fn with_significance(mut self, s: Option<Significance>) -> Self {
+        self.significance = s;
+        self
     }
 
     /// Measures the object `v` by applying `f` to it and formats the measurement result.
@@ -249,12 +278,13 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{label:>16} {unit:>7}: {m1:26} {m2:26} {cmp:8}",
+            "{label:>16} {unit:>7}: {m1:26} {m2:26} {cmp:8} {signif:>9}",
             label = self.label,
             unit = self.fmt_unit(),
             m1 = self.fmt_measurement(Some(self.v1)),
             m2 = self.fmt_measurement(self.v2),
-            cmp = self.fmt_relative_diff()
+            cmp = self.fmt_relative_diff(),
+            signif = format!("{}", Maybe::from(self.significance))
         )
     }
 }
@@ -263,14 +293,13 @@ pub fn fmt_section_header(name: &str) -> String {
     format!("{} {}", name, "=".repeat(100 - name.len() - 1))
 }
 
-
 pub struct ConfigCmp<'a> {
     pub v1: &'a Config,
     pub v2: Option<&'a Config>,
 }
 
 impl ConfigCmp<'_> {
-    fn make_line<S, M, F>(&self, label: S, unit: &str, f: F) -> Box<Line<M, &Config, F>>
+    fn line<S, M, F>(&self, label: S, unit: &str, f: F) -> Box<Line<M, &Config, F>>
     where
         S: ToString,
         M: Display + Rational,
@@ -295,35 +324,30 @@ impl ConfigCmp<'_> {
     }
 }
 
-
 impl<'a> Display for ConfigCmp<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("CONFIG"))?;
         writeln!(f, "                          ---------- This ---------- ---------- Other ----------    Change   ")?;
 
         let lines: Vec<Box<dyn Display>> = vec![
-            self.make_line("Date", "", |conf| self.format_time(conf, "%a, %d %b %Y")),
-            self.make_line("Time", "", |conf| self.format_time(conf, "%H:%M:%S %z")),
-            self.make_line("Label", "", |conf| {
+            self.line("Date", "", |conf| self.format_time(conf, "%a, %d %b %Y")),
+            self.line("Time", "", |conf| self.format_time(conf, "%H:%M:%S %z")),
+            self.line("Label", "", |conf| {
                 conf.label.clone().unwrap_or_else(|| "".to_string())
             }),
-            self.make_line("Workload", "", |conf| conf.workload.to_string()),
-            self.make_line("Threads", "", |conf| Quantity::new(conf.threads, 0)),
-            self.make_line("Connections", "", |conf| Quantity::new(conf.connections, 0)),
-            self.make_line("Max parallelism", "req", |conf| {
+            self.line("Workload", "", |conf| conf.workload.to_string()),
+            self.line("Threads", "", |conf| Quantity::new(conf.threads, 0)),
+            self.line("Connections", "", |conf| Quantity::new(conf.connections, 0)),
+            self.line("Max parallelism", "req", |conf| {
                 Quantity::new(conf.parallelism, 0)
             }),
-            self.make_line("Max rate", "req/s", |conf| match conf.rate {
+            self.line("Max rate", "req/s", |conf| match conf.rate {
                 Some(r) => Quantity::new(Maybe::Some(r), 1),
                 None => Quantity::new(Maybe::None, 0),
             }),
-            self.make_line("Warmup", "req", |conf| {
-                Quantity::new(conf.warmup_count, 0)
-            }),
-            self.make_line("Iterations", "req", |conf| {
-                Quantity::new(conf.count, 0)
-            }),
-            self.make_line("Sampling", "s", |conf| {
+            self.line("Warmup", "req", |conf| Quantity::new(conf.warmup_count, 0)),
+            self.line("Iterations", "req", |conf| Quantity::new(conf.count, 0)),
+            self.line("Sampling", "s", |conf| {
                 Quantity::new(conf.sampling_period, 1)
             }),
         ];
@@ -341,7 +365,6 @@ pub fn print_log_header() {
       \x20   Time  Throughput    ----------------------- Response times [ms]---------------------------------\n\
       \x20    [s]     [req/s]       Min        25        50        75        90        95        99       Max");
 }
-
 
 impl Display for Sample {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -362,13 +385,8 @@ impl Display for Sample {
     }
 }
 
-pub struct BenchmarkCmp<'a> {
-    pub v1: &'a BenchmarkStats,
-    pub v2: Option<&'a BenchmarkStats>,
-}
-
 impl BenchmarkCmp<'_> {
-    fn make_line<S, M, F>(&self, label: S, unit: &str, f: F) -> Box<Line<M, &BenchmarkStats, F>>
+    fn line<S, M, F>(&self, label: S, unit: &str, f: F) -> Box<Line<M, &BenchmarkStats, F>>
     where
         S: ToString,
         M: Display + Rational,
@@ -388,32 +406,36 @@ impl BenchmarkCmp<'_> {
 impl<'a> Display for BenchmarkCmp<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("SUMMARY STATS"))?;
-        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change   ")?;
+        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change   Signif.")?;
 
         let summary: Vec<Box<dyn Display>> = vec![
-            self.make_line("Elapsed", "s", |s| Quantity::new(s.elapsed_time_s, 3)),
-            self.make_line("CPU time", "s", |s| {
+            self.line("Elapsed", "s", |s| Quantity::new(s.elapsed_time_s, 3)),
+            self.line("CPU time", "s", |s| {
                 Quantity::new(s.cpu_time_s, 3).with_ratio(s.cpu_util)
             }),
-            self.make_line("Completed", "req", |s| {
+            self.line("Completed", "req", |s| {
                 Quantity::new(s.completed_requests, 0).with_ratio(s.completed_ratio)
             }),
-            self.make_line("Errors", "req", |s| {
+            self.line("Errors", "req", |s| {
                 Quantity::new(s.errors, 0).with_ratio(s.errors_ratio)
             }),
-            self.make_line("Partitions", "", |s| Quantity::new(s.partitions, 0)),
-            self.make_line("Rows", "", |s| Quantity::new(s.rows, 0)),
-            self.make_line("Parallelism", "req", |s| {
+            self.line("Partitions", "", |s| Quantity::new(s.partitions, 0)),
+            self.line("Rows", "", |s| Quantity::new(s.rows, 0)),
+            self.line("Parallelism", "req", |s| {
                 Quantity::new(s.parallelism, 1).with_ratio(s.parallelism_ratio)
             }),
-            self.make_line("Throughput", "req/s", |s| {
+            self.line("Throughput", "req/s", |s| {
                 Quantity::new(s.throughput, 0)
                     .with_opt_ratio(s.throughput_ratio)
                     .with_error(s.throughput_err)
-            }),
-            self.make_line("Mean resp. time", "ms", |s| {
+            })
+            .with_significance(self.cmp_throughput())
+            .into_box(),
+            self.line("Mean resp. time", "ms", |s| {
                 Quantity::new(s.resp_time_ms, 2).with_error(s.resp_time_err)
-            }),
+            })
+            .with_significance(self.cmp_mean_resp_time())
+            .into_box(),
         ];
 
         for l in summary {
@@ -438,7 +460,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
             Percentile::Max,
         ];
         for p in throughput_percentiles.iter() {
-            let l = self.make_line(p.name(), "", |s| {
+            let l = self.line(p.name(), "", |s| {
                 Quantity::new(s.throughput_percentiles[*p as usize], 0)
             });
             writeln!(f, "{}", l)?;
@@ -460,13 +482,13 @@ impl<'a> Display for BenchmarkCmp<'a> {
 
         writeln!(f)?;
         writeln!(f, "{}", fmt_section_header("RESPONSE TIMES [ms]"))?;
-        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change   ")?;
+        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change   Signif.")?;
 
         for p in resp_time_percentiles.iter() {
-            let l = self.make_line(p.name(), "", |s| {
+            let l = self.line(p.name(), "", |s| {
                 Quantity::new(s.resp_time_percentiles[*p as usize], 2)
                     .with_error(s.resp_time_percentiles_err[*p as usize])
-            });
+            }).with_significance(self.cmp_resp_time_percentile(*p));
             writeln!(f, "{}", l)?;
         }
 

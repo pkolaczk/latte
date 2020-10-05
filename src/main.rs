@@ -14,9 +14,9 @@ use tokio::time::{Duration, Instant, Interval};
 use config::Config;
 
 use crate::progress::FastProgressBar;
-use crate::report::{load_report, save_report, BenchmarkCmp, ConfigCmp};
+use crate::report::{load_report, save_report, ConfigCmp};
 use crate::session::*;
-use crate::stats::{QueryStats, BenchmarkStats, Recorder};
+use crate::stats::{BenchmarkCmp, BenchmarkStats, QueryStats, Recorder};
 use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
@@ -69,7 +69,7 @@ fn round(duration: Duration, period: Duration) -> Duration {
 /// # Parameters
 ///   - `name`: text displayed next to the progress bar
 ///   - `count`: number of iterations
-///   - `concurrency`: maximum number of concurrent executions of `action`
+///   - `parallelism`: maximum number of concurrent executions of `action`
 ///   - `rate`: optional rate limit given as number of calls to `action` per second
 ///   - `context`: a shared object to be passed to all invocations of `action`,
 ///      used to share e.g. a Cassandra session or Workload
@@ -77,8 +77,8 @@ fn round(duration: Duration, period: Duration) -> Duration {
 async fn par_execute<F, C, R, RE>(
     name: &str,
     count: u64,
-    parallelism_limit: usize,
-    rate_limit: Option<f32>,
+    parallelism: usize,
+    rate: Option<f32>,
     sampling_period: Duration,
     context: Arc<C>,
     action: F,
@@ -90,20 +90,19 @@ where
     RE: Send,
 {
     let progress = Arc::new(FastProgressBar::new_progress_bar(name, count));
-    let mut stats = Recorder::start(rate_limit, parallelism_limit);
-    let mut interval = interval(rate_limit.unwrap_or(f32::MAX) as f64);
-    let semaphore = Arc::new(Semaphore::new(parallelism_limit));
+    let mut stats = Recorder::start(rate, parallelism);
+    let mut interval = interval(rate.unwrap_or(f32::MAX) as f64);
+    let semaphore = Arc::new(Semaphore::new(parallelism));
 
     type Item = Result<QueryStats, ()>;
-    let (tx, mut rx): (Sender<Item>, Receiver<Item>) =
-        tokio::sync::mpsc::channel(parallelism_limit);
+    let (tx, mut rx): (Sender<Item>, Receiver<Item>) = tokio::sync::mpsc::channel(parallelism);
 
     for i in 0..count {
-        if rate_limit.is_some() {
+        if rate.is_some() {
             interval.tick().await;
         }
         let permit = semaphore.clone().acquire_owned().await;
-        let concurrent_count = parallelism_limit - semaphore.available_permits();
+        let concurrent_count = parallelism - semaphore.available_permits();
         stats.enqueued(concurrent_count);
 
         let now = Instant::now();
