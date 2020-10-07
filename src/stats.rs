@@ -1,12 +1,74 @@
-use crate::stats::Significance::{Medium, Strong, Weak};
+use std::cmp::min;
+use std::f64::consts;
+
 use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use rustats::hypothesis_testings::MannWhitneyU;
 use serde::{Deserialize, Serialize};
-use statrs::statistics::Statistics;
 use tokio::time::{Duration, Instant};
 
-const ERR_MARGIN: f64 = 3.29; // 0.999 confidence, 2-sided
+use crate::stats::Significance::{Medium, Strong, Weak};
+
+/// A standard error is multiplied by this factor to get the error margin.
+/// For a normally distributed random variable,
+/// this should give us 0.999 confidence the expected value is within the (result +- error) range.
+const ERR_MARGIN: f64 = 3.29;
+
+/// Controls the maximum order of autocovariance taken into
+/// account when estimating the long run mean error. Higher values make the estimator
+/// capture more autocorrelation from the signal, but also make the results
+/// more random. Lower values increase the bias (underestimation) of error, but offer smoother
+/// results for small N and better performance for large N.
+/// The value has been established empirically.
+/// Probably anything between 0.2 and 0.8 is good enough.
+/// Valid range is 0.0 to 1.0, but you probably don't want to set it over 0.9.
+const BANDWIDTH_COEFF: f64 = 0.66;
+
+/// Estimates the expected standard error of the mean of a time-series.
+/// Takes into account the fact that the observations can be dependent on each other
+/// (i.e. there is a non-zero amount of auto-correlation in the signal).
+///
+/// Contrary to the classic standard error or standard deviation, the order of the
+/// data points does matter here. If the observations are totally independent from each other,
+/// the expected return value of this function is close to the expected standard error
+/// of the sample.
+pub fn long_run_mean_err(v: &[f32]) -> f64 {
+    if v.len() <= 1 {
+        return f64::NAN;
+    }
+
+    let len = v.len() as f64;
+    let mean = v.iter().map(|x| *x as f64).sum::<f64>() / len;
+
+    // Compute the variance:
+    let mut var = 0.0;
+    for x in v.iter() {
+        let diff = *x as f64 - mean;
+        var += diff * diff;
+    }
+
+    // Compute a sum of autocovariances of orders 1 to (cutoff - 1).
+    // Cutoff (bandwidth) and diminishing weights are needed to reduce random error
+    // introduced by higher order autocovariance estimates.
+    let bandwidth = len.powf(BANDWIDTH_COEFF);
+    let cutoff = min(v.len(), bandwidth.ceil() as usize);
+    let mut cov = 0.0;
+    for j in 1..cutoff {
+        let x = j as f64 / bandwidth;
+        let weight = 0.5 * (1.0 + (consts::PI * x).cos());
+        for i in 0..(v.len() - j) {
+            let diff_1 = v[i] as f64 - mean;
+            let diff_2 = v[i + j] as f64 - mean;
+            cov += 2.0 * diff_1 * diff_2 * weight;
+        }
+    }
+    // It is possible that we end up with a negative sum of autocovariances here.
+    // But we don't want that because we're trying to estimate
+    // the worst-case error and for small N this situation is likely a random coincidence.
+    // Additionally, `var + cov` must be at least 0.0.
+    cov = cov.max(0.0);
+    ((var + cov) / (len * (len - 1.0))).sqrt()
+}
 
 #[derive(Debug)]
 pub struct QueryStats {
@@ -147,8 +209,8 @@ impl Log {
     }
 
     fn throughput_err(&self) -> f64 {
-        let std_dev = self.samples.iter().map(|s| s.throughput as f64).std_dev();
-        std_dev / (self.samples.len() as f64).sqrt() * ERR_MARGIN
+        let t: Vec<f32> = self.samples.iter().map(|s| s.throughput).collect();
+        long_run_mean_err(t.as_slice()) as f64 * ERR_MARGIN
     }
 
     fn throughput_histogram(&self) -> Histogram<u64> {
@@ -169,21 +231,17 @@ impl Log {
     }
 
     fn mean_resp_time_err(&self) -> f64 {
-        let std_dev = self
-            .samples
-            .iter()
-            .map(|s| s.mean_resp_time as f64)
-            .std_dev();
-        std_dev / (self.samples.len() as f64).sqrt() * ERR_MARGIN
+        let t: Vec<f32> = self.samples.iter().map(|s| s.mean_resp_time).collect();
+        long_run_mean_err(t.as_slice()) as f64 * ERR_MARGIN
     }
 
     fn resp_time_percentile_err(&self, p: Percentile) -> f64 {
-        let std_dev = self
+        let t: Vec<f32> = self
             .samples
             .iter()
-            .map(|s| s.resp_time_percentiles[p as usize] as f64)
-            .std_dev();
-        std_dev / (self.samples.len() as f64).sqrt() * ERR_MARGIN
+            .map(|s| s.resp_time_percentiles[p as usize])
+            .collect();
+        long_run_mean_err(t.as_slice()) as f64 * ERR_MARGIN
     }
 }
 
@@ -280,7 +338,6 @@ impl BenchmarkCmp<'_> {
     pub fn cmp_resp_time_percentile(&self, p: Percentile) -> Option<Significance> {
         self.cmp(|s| s.resp_time_percentiles[p as usize])
     }
-
 }
 
 pub struct Recorder {
@@ -414,6 +471,61 @@ impl Recorder {
             parallelism,
             parallelism_ratio,
             samples: self.log.samples,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use rand::distributions::Distribution;
+    use rand::prelude::StdRng;
+    use rand::SeedableRng;
+    use statrs::distribution::Normal;
+    use statrs::statistics::Statistics;
+
+    fn random_vector(i: usize, count: usize, mean: f64, std_dev: f64) -> Vec<f32> {
+        let mut rng = StdRng::seed_from_u64(i as u64);
+        let distrib = Normal::new(mean, std_dev).unwrap();
+        let mut v = Vec::with_capacity(count);
+        for _ in 0..count {
+            v.push(distrib.sample(&mut rng) as f32)
+        }
+        v
+    }
+
+    fn make_autocorrelated(v: &mut Vec<f32>) {
+        for i in 1..v.len() {
+            v[i] = 0.01 * v[i] + 0.99 * v[i - 1];
+        }
+    }
+
+    fn reference_mean_err(v: &Vec<f32>) -> f64 {
+        v.iter().map(|x| *x as f64).std_dev() / (v.len() as f64).sqrt()
+    }
+
+    #[test]
+    fn mean_err_no_auto_correlation() {
+        let run_len = 100;
+        let std_dev = 1.0;
+        for i in 0..10 {
+            let v = random_vector(i, run_len, 1.0, std_dev);
+            let err = super::long_run_mean_err(&v);
+            let ref_err = reference_mean_err(&v);
+            assert!(err > 0.99 * ref_err);
+            assert!(err < 1.5 * ref_err);
+        }
+    }
+
+    #[test]
+    fn mean_err_with_auto_correlation() {
+        let run_len = 100;
+        let std_dev = 1.0;
+        for i in 0..10 {
+            let mut v = random_vector(i, run_len, 1.0, std_dev);
+            make_autocorrelated(&mut v);
+            let mean_err = super::long_run_mean_err(&v);
+            let ref_err = reference_mean_err(&v);
+            assert!(mean_err > 3.0 * ref_err);
         }
     }
 }

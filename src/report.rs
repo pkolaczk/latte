@@ -485,10 +485,12 @@ impl<'a> Display for BenchmarkCmp<'a> {
         writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change   Signif.")?;
 
         for p in resp_time_percentiles.iter() {
-            let l = self.line(p.name(), "", |s| {
-                Quantity::new(s.resp_time_percentiles[*p as usize], 2)
-                    .with_error(s.resp_time_percentiles_err[*p as usize])
-            }).with_significance(self.cmp_resp_time_percentile(*p));
+            let l = self
+                .line(p.name(), "", |s| {
+                    Quantity::new(s.resp_time_percentiles[*p as usize], 2)
+                        .with_error(s.resp_time_percentiles_err[*p as usize])
+                })
+                .with_significance(self.cmp_resp_time_percentile(*p));
             writeln!(f, "{}", l)?;
         }
 
