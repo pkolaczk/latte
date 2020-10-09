@@ -78,7 +78,7 @@ async fn par_execute<F, C, R, RE>(
     name: &str,
     count: u64,
     parallelism: usize,
-    rate: Option<f32>,
+    rate: Option<f64>,
     sampling_period: Duration,
     context: Arc<C>,
     action: F,
@@ -91,7 +91,7 @@ where
 {
     let progress = Arc::new(FastProgressBar::new_progress_bar(name, count));
     let mut stats = Recorder::start(rate, parallelism);
-    let mut interval = interval(rate.unwrap_or(f32::MAX) as f64);
+    let mut interval = interval(rate.unwrap_or(f64::MAX));
     let semaphore = Arc::new(Semaphore::new(parallelism));
 
     type Item = Result<QueryStats, ()>;
@@ -198,7 +198,7 @@ async fn async_main() {
         conf.count,
         conf.parallelism,
         conf.rate,
-        Duration::from_secs_f32(conf.sampling_period),
+        Duration::from_secs_f64(conf.sampling_period),
         workload.clone(),
         |w, i| w.run(i),
     )

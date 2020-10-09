@@ -1,14 +1,21 @@
-use std::path::PathBuf;
+use core::fmt;
 use std::{fs, io};
+use std::fmt::{Display, Formatter};
+use std::path::PathBuf;
 
+use chrono::{Local, NaiveDateTime, TimeZone};
 use err_derive::*;
 use serde::{Deserialize, Serialize};
+use strum::IntoEnumIterator;
 
 use crate::config::Config;
-use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance, PERCENTILES};
-use chrono::{Local, NaiveDateTime, TimeZone};
-use core::fmt;
-use std::fmt::{Display, Formatter};
+use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance};
+
+/// A standard error is multiplied by this factor to get the error margin.
+/// For a normally distributed random variable,
+/// this should give us 0.999 confidence the expected value is within the (result +- error) range.
+const ERR_MARGIN: f64 = 3.29;
+
 
 /// Keeps all data we want to save in a report:
 /// run metadata, configuration and results
@@ -29,7 +36,7 @@ pub enum ReportLoadError {
 
 /// Saves benchmark results to a JSON file
 pub fn save_report(conf: Config, stats: BenchmarkStats, path: &PathBuf) -> io::Result<()> {
-    let percentile_legend: Vec<f32> = PERCENTILES.iter().map(|p| p.value() as f32).collect();
+    let percentile_legend: Vec<f32> = Percentile::iter().map(|p| p.value() as f32).collect();
     let report = Report {
         conf,
         percentiles: percentile_legend,
@@ -78,7 +85,7 @@ pub struct Quantity<T: Display> {
     pub value: T,
     pub error: Option<T>,
     pub precision: usize,
-    pub ratio: Option<f32>,
+    pub ratio: Option<f64>,
 }
 
 impl<T: Display> Quantity<T> {
@@ -96,12 +103,12 @@ impl<T: Display> Quantity<T> {
         self
     }
 
-    pub fn with_ratio(mut self, ratio: f32) -> Self {
+    pub fn with_ratio(mut self, ratio: f64) -> Self {
         self.ratio = Some(ratio);
         self
     }
 
-    pub fn with_opt_ratio(mut self, ratio: Option<f32>) -> Self {
+    pub fn with_opt_ratio(mut self, ratio: Option<f64>) -> Self {
         self.ratio = ratio;
         self
     }
@@ -144,6 +151,12 @@ impl Rational for f32 {
     }
 }
 
+impl Rational for f64 {
+    fn ratio(a: Self, b: Self) -> Option<f32> {
+        Some((a / b) as f32)
+    }
+}
+
 impl Rational for u64 {
     fn ratio(a: Self, b: Self) -> Option<f32> {
         Some(a as f32 / b as f32)
@@ -179,12 +192,9 @@ impl Rational for String {
 
 impl Display for Significance {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Significance::None => f.write_fmt(format_args!("{}", "[   ]")),
-            Significance::Weak => f.write_fmt(format_args!("{}", "[*  ]")),
-            Significance::Medium => f.write_fmt(format_args!("{}", "[** ]")),
-            Significance::Strong => f.write_fmt(format_args!("{}", "[***]")),
-        }
+        let levels = [0.0001, 0.001, 0.01];
+        let stars = "*".repeat(levels.iter().filter(|&&l| l >= self.0).count());
+        write!(f, "{:6.4} {:3}", self.0, stars)
     }
 }
 /// A single line of text report
@@ -278,7 +288,7 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{label:>16} {unit:>7}: {m1:26} {m2:26} {cmp:8} {signif:>9}",
+            "{label:>16} {unit:>7}: {m1:26} {m2:26} {cmp:6} {signif:>11}",
             label = self.label,
             unit = self.fmt_unit(),
             m1 = self.fmt_measurement(Some(self.v1)),
@@ -290,7 +300,7 @@ where
 }
 
 pub fn fmt_section_header(name: &str) -> String {
-    format!("{} {}", name, "=".repeat(100 - name.len() - 1))
+    format!("{} {}", name, "=".repeat(102 - name.len() - 1))
 }
 
 pub struct ConfigCmp<'a> {
@@ -327,7 +337,7 @@ impl ConfigCmp<'_> {
 impl<'a> Display for ConfigCmp<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("CONFIG"))?;
-        writeln!(f, "                          ---------- This ---------- ---------- Other ----------    Change   ")?;
+        writeln!(f, "                          ---------- This ---------- ---------- Other ----------    Change     ")?;
 
         let lines: Vec<Box<dyn Display>> = vec![
             self.line("Date", "", |conf| self.format_time(conf, "%a, %d %b %Y")),
@@ -362,15 +372,15 @@ impl<'a> Display for ConfigCmp<'a> {
 pub fn print_log_header() {
     println!("{}", fmt_section_header("LOG"));
     println!("\
-      \x20   Time  Throughput    ----------------------- Response times [ms]---------------------------------\n\
-      \x20    [s]     [req/s]       Min        25        50        75        90        95        99       Max");
+      \x20   Time  Throughput      ----------------------- Response times [ms]---------------------------------\n\
+      \x20    [s]     [req/s]         Min        25        50        75        90        95        99       Max");
 }
 
 impl Display for Sample {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:8.3} {:11.0} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
+            "{:8.3} {:11.0}   {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
             self.time_s,
             self.throughput,
             self.resp_time_percentiles[Percentile::Min as usize],
@@ -406,7 +416,7 @@ impl BenchmarkCmp<'_> {
 impl<'a> Display for BenchmarkCmp<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("SUMMARY STATS"))?;
-        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change   Signif.")?;
+        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change      P< ")?;
 
         let summary: Vec<Box<dyn Display>> = vec![
             self.line("Elapsed", "s", |s| Quantity::new(s.elapsed_time_s, 3)),
@@ -425,14 +435,15 @@ impl<'a> Display for BenchmarkCmp<'a> {
                 Quantity::new(s.parallelism, 1).with_ratio(s.parallelism_ratio)
             }),
             self.line("Throughput", "req/s", |s| {
-                Quantity::new(s.throughput, 0)
+                Quantity::new(s.throughput.value, 0)
                     .with_opt_ratio(s.throughput_ratio)
-                    .with_error(s.throughput_err)
+                    .with_error(s.throughput.std_err * ERR_MARGIN)
             })
             .with_significance(self.cmp_throughput())
             .into_box(),
             self.line("Mean resp. time", "ms", |s| {
-                Quantity::new(s.resp_time_ms, 2).with_error(s.resp_time_err)
+                Quantity::new(s.resp_time_ms.value, 2)
+                    .with_error(s.resp_time_ms.std_err * ERR_MARGIN)
             })
             .with_significance(self.cmp_mean_resp_time())
             .into_box(),
@@ -482,13 +493,13 @@ impl<'a> Display for BenchmarkCmp<'a> {
 
         writeln!(f)?;
         writeln!(f, "{}", fmt_section_header("RESPONSE TIMES [ms]"))?;
-        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change   Signif.")?;
+        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change      P<")?;
 
         for p in resp_time_percentiles.iter() {
             let l = self
                 .line(p.name(), "", |s| {
-                    Quantity::new(s.resp_time_percentiles[*p as usize], 2)
-                        .with_error(s.resp_time_percentiles_err[*p as usize])
+                    Quantity::new(s.resp_time_percentiles[*p as usize].value, 2)
+                        .with_error(s.resp_time_percentiles[*p as usize].std_err * ERR_MARGIN)
                 })
                 .with_significance(self.cmp_resp_time_percentile(*p));
             writeln!(f, "{}", l)?;
@@ -496,7 +507,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
 
         writeln!(f)?;
         writeln!(f, "{}", fmt_section_header("RESPONSE TIME DISTRIBUTION"))?;
-        writeln!(f, "Percentile    Resp. time [ms]  ----------------------------- Count ---------------------------------")?;
+        writeln!(f, "Percentile    Resp. time [ms]  ------------------------------ Count ----------------------------------")?;
         for x in self.v1.resp_time_distribution.iter() {
             writeln!(
                 f,

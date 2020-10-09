@@ -36,7 +36,7 @@ pub struct Config {
     /// Number of requests per second to send.
     /// If not given the requests will be sent as fast as possible within the parallelism limit
     #[clap(short('r'), long)]
-    pub rate: Option<f32>,
+    pub rate: Option<f64>,
 
     /// Number of non-measured, warmup requests
     #[clap(short('w'), long("warmup"), default_value = "1")]
@@ -65,7 +65,7 @@ pub struct Config {
 
     /// Throughput sampling period, in seconds
     #[clap(short('s'), long, default_value = "1.0")]
-    pub sampling_period: f32,
+    pub sampling_period: f64,
 
     /// Label that will be added to the report to help identifying the test
     #[clap(short, long)]

@@ -45,7 +45,7 @@ pub struct FastProgressBar {
 #[allow(unused)]
 impl FastProgressBar {
     /// Width of the progress bar in characters
-    const WIDTH: usize = 81;
+    const WIDTH: usize = 82;
     /// Spinner animation looks like this (moves right and left):
     const SPACESHIP: &'static str = "<===>";
     /// Progress bar looks like this:

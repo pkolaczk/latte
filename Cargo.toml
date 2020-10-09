@@ -7,6 +7,9 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.test]
+opt-level = 2
+
 [dependencies]
 async-trait = "0.1.40"
 atomic-counter = "1.0.1"
@@ -20,9 +23,10 @@ hdrhistogram = "7.1.0"
 indicatif = "0.15.0"
 num_cpus = "1.13.0"
 rand = "0.7.3"
-rustats = { git = "https://github.com/pkolaczk/rustats.git"}
 serde = { version = "1.0.116", features = ["derive"] }
 serde_json = "1.0.57"
 statrs = "0.13.0"
+strum = { version = "0.19.5", features = ["derive"] }
+strum_macros = "0.19.4"
 time = "0.1.44"
 tokio = { version = "0.2", features = ["full"] }
