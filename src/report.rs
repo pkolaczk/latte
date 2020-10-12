@@ -1,7 +1,7 @@
 use core::fmt;
-use std::{fs, io};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
+use std::{fs, io};
 
 use chrono::{Local, NaiveDateTime, TimeZone};
 use err_derive::*;
@@ -15,7 +15,6 @@ use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significanc
 /// For a normally distributed random variable,
 /// this should give us 0.999 confidence the expected value is within the (result +- error) range.
 const ERR_MARGIN: f64 = 3.29;
-
 
 /// Keeps all data we want to save in a report:
 /// run metadata, configuration and results
@@ -510,11 +509,12 @@ impl<'a> Display for BenchmarkCmp<'a> {
         if self.v2.is_some() {
             writeln!(f, "{}", fmt_cmp_header(true))?;
         }
+
         for p in resp_time_percentiles.iter() {
             let l = self
                 .line(p.name(), "", |s| {
-                    Quantity::new(s.resp_time_percentiles[*p as usize].value, 2)
-                        .with_error(s.resp_time_percentiles[*p as usize].std_err * ERR_MARGIN)
+                    let rt = s.resp_time_percentiles[*p as usize];
+                    Quantity::new(rt.value, 2).with_error(rt.std_err * ERR_MARGIN + rt.bias)
                 })
                 .with_significance(self.cmp_resp_time_percentile(*p));
             writeln!(f, "{}", l)?;

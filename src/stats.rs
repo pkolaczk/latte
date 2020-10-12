@@ -5,6 +5,7 @@ use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{StudentsT, Univariate};
+use statrs::statistics::Statistics;
 use strum::EnumCount;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumCount as EnumCountM, EnumIter};
@@ -19,7 +20,6 @@ use tokio::time::{Duration, Instant};
 /// Probably anything between 0.2 and 0.8 is good enough.
 /// Valid range is 0.0 to 1.0.
 const BANDWIDTH_COEFF: f64 = 0.66;
-
 
 /// Arithmetic mean of values in the vector
 pub fn mean(v: &[f32]) -> f64 {
@@ -79,7 +79,6 @@ pub fn long_run_variance(v: &[f32]) -> f64 {
     bias_correction * (var + cov)
 }
 
-
 /// Estimates the error of the mean of a time-series.
 /// See `long_run_variance`.
 pub fn long_run_err(v: &[f32]) -> f64 {
@@ -94,6 +93,7 @@ pub struct Mean {
     pub n: u64,
     pub value: f64,
     pub std_err: f64,
+    pub bias: f64,
 }
 
 impl From<&[f32]> for Mean {
@@ -101,7 +101,8 @@ impl From<&[f32]> for Mean {
         Mean {
             n: v.len() as u64,
             value: mean(&v),
-            std_err: long_run_err(&v)
+            std_err: long_run_err(&v),
+            bias: 0.0
         }
     }
 }
@@ -116,8 +117,8 @@ impl From<&[f32]> for Mean {
 pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
     let n1 = mean1.n as f64;
     let n2 = mean2.n as f64;
-    let e1 = mean1.std_err;
-    let e2 = mean2.std_err;
+    let e1 = mean1.std_err + mean1.bias;
+    let e2 = mean2.std_err + mean2.bias;
     let m1 = mean1.value;
     let m2 = mean2.value;
     let e1_sq = e1 * e1;
@@ -354,7 +355,9 @@ impl BenchmarkCmp<'_> {
     // Checks corresponding response time percentiles of two benchmark runs
     // are statistically different. Returns None if the second benchmark is unset.
     pub fn cmp_resp_time_percentile(&self, p: Percentile) -> Option<Significance> {
-        // Currently we don't have a good test that works for the edge percentiles
+        // We're not comparing the edge percentiles because
+        // they are likely not normally distributed.
+        // TODO: Make a proper data normality test
         if p.value() >= 1.0 && p.value() <= 99.0 {
             self.cmp(|s| s.resp_time_percentiles[p as usize])
         } else {
@@ -440,6 +443,22 @@ impl Recorder {
         self.stats()
     }
 
+    /// Returns the absolute difference between:
+    /// - the value of the response time at `p` computed for all requests globally
+    /// - the mean of the response times at `p` computed for each sample in the log
+    fn resp_time_percentile_sampling_bias(&self, p: Percentile) -> f64 {
+        let global = self.resp_times.value_at_percentile(p.value()) as f64 / 1000.0;
+        let mean = self
+            .log
+            .samples
+            .iter()
+            .map(|s| s.resp_time_percentiles[p as usize] as f64)
+            .mean();
+
+        (mean - global).abs()
+    }
+
+
     /// Computes the final statistics based on collected data
     /// and turn them into report that can be serialized
     pub fn stats(self) -> BenchmarkStats {
@@ -461,7 +480,8 @@ impl Recorder {
             resp_time_percentiles.push(Mean {
                 n: self.completed,
                 value: self.resp_times.value_at_percentile(p.value()) as f64 / 1000.0,
-                std_err: self.log.resp_time_percentile_err(p)
+                std_err: self.log.resp_time_percentile_err(p),
+                bias: self.resp_time_percentile_sampling_bias(p),
             });
         }
 
@@ -487,7 +507,8 @@ impl Recorder {
             throughput: Mean {
                 n: self.log.samples.len() as u64,
                 value: throughput_mean,
-                std_err: throughput_err
+                std_err: throughput_err,
+                bias: 0.0
             },
             throughput_ratio: self.rate_limit.map(|r| 100.0 * throughput_mean / r),
             throughput_percentiles: Vec::from(self.log.throughput_percentiles()),
@@ -495,6 +516,8 @@ impl Recorder {
                 n: self.log.samples.len() as u64,
                 value: self.resp_time_sum / self.completed as f64,
                 std_err: self.log.mean_resp_time_err(),
+                bias: 0.0,
+
             },
             resp_time_percentiles,
             resp_time_distribution,
@@ -507,19 +530,29 @@ impl Recorder {
 
 #[cfg(test)]
 mod test {
+    use hdrhistogram::Histogram;
     use rand::distributions::Distribution;
     use rand::prelude::StdRng;
     use rand::SeedableRng;
-    use statrs::distribution::Normal;
+    use statrs::distribution::{Normal, Poisson};
+    use statrs::distribution::{Uniform, Univariate};
     use statrs::statistics::Statistics;
 
-    use crate::stats::{Mean, t_test};
+    use crate::stats::{t_test, Mean};
 
     /// Returns a random sample of size `len`.
-                /// All data points i.i.d with N(`mean`, `std_dev`).
+    /// All data points i.i.d with N(`mean`, `std_dev`).
     fn random_vector(seed: usize, len: usize, mean: f64, std_dev: f64) -> Vec<f32> {
         let mut rng = StdRng::seed_from_u64(seed as u64);
         let distrib = Normal::new(mean, std_dev).unwrap();
+        (0..len)
+            .into_iter()
+            .map(|_| distrib.sample(&mut rng) as f32)
+            .collect()
+    }
+
+    fn random_vector_distr(seed: usize, len: usize, distrib: &impl Distribution<f64>) -> Vec<f32> {
+        let mut rng = StdRng::seed_from_u64(seed as u64);
         (0..len)
             .into_iter()
             .map(|_| distrib.sample(&mut rng) as f32)
@@ -557,7 +590,7 @@ mod test {
         let run_len = 1000;
         let std_dev = 1.0;
         for i in 0..10 {
-            let mut v= random_vector(i, run_len, 1.0, std_dev);
+            let mut v = random_vector(i, run_len, 1.0, std_dev);
             make_autocorrelated(&mut v);
             let mean_err = super::long_run_err(&v);
             let ref_err = reference_err(&v);
@@ -567,22 +600,68 @@ mod test {
 
     #[test]
     fn t_test_same() {
-        let mean1 = Mean { n: 100, value: 1.0, std_err: 0.1 };
-        let mean2 = Mean { n: 100, value: 1.0, std_err: 0.2 };
+        let mean1 = Mean {
+            n: 100,
+            value: 1.0,
+            std_err: 0.1,
+        };
+        let mean2 = Mean {
+            n: 100,
+            value: 1.0,
+            std_err: 0.2,
+        };
         assert!(t_test(&mean1, &mean2) > 0.9999);
     }
 
     #[test]
     fn t_test_different() {
-        let mean1 = Mean { n: 100, value: 1.0, std_err: 0.1 };
-        let mean2 = Mean { n: 100, value: 1.3, std_err: 0.1 };
+        let mean1 = Mean {
+            n: 100,
+            value: 1.0,
+            std_err: 0.1,
+        };
+        let mean2 = Mean {
+            n: 100,
+            value: 1.3,
+            std_err: 0.1,
+        };
         assert!(t_test(&mean1, &mean2) < 0.05);
         assert!(t_test(&mean2, &mean1) < 0.05);
 
-        let mean1 = Mean { n: 10000, value: 1.0, std_err: 0.0 };
-        let mean2 = Mean { n: 10000, value: 1.329, std_err: 0.1 };
+        let mean1 = Mean {
+            n: 10000,
+            value: 1.0,
+            std_err: 0.0,
+        };
+        let mean2 = Mean {
+            n: 10000,
+            value: 1.329,
+            std_err: 0.1,
+        };
         assert!(t_test(&mean1, &mean2) < 0.0011);
         assert!(t_test(&mean2, &mean1) < 0.0011);
     }
 
+    fn std_dev_of_percentile(len: usize, percentile: f64) -> f64 {
+        let count = 1000;
+        let mut results = Vec::new();
+        //let distr = Uniform::new(0.0, 10000.0).unwrap();
+        let distr = Poisson::new(10.0).unwrap();
+        for i in 0..count {
+            let v = random_vector_distr(i, len, &distr);
+            let mut h = Histogram::<u64>::new(5).unwrap();
+            for x in v.iter() {
+                h.record(((x.abs() * 100000.0) as u64));
+            }
+            results.push(h.value_at_percentile(percentile) as f64);
+        }
+        println!("mean: {}", results.iter().mean());
+        results.std_dev()
+    }
+
+    #[test]
+    fn test_p99() {
+        println!("Std dev 1 of p99: {}", std_dev_of_percentile(100, 50.00));
+        println!("Std dev 2 of p99: {}", std_dev_of_percentile(10000, 50.00));
+    }
 }
