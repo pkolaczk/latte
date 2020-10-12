@@ -75,7 +75,7 @@ impl<T> From<Option<T>> for Maybe<T> {
 impl<T: Display> Display for Maybe<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self {
-            Maybe::Some(value) => f.write_fmt(format_args!("{}", value)),
+            Maybe::Some(value) => value.fmt(f),
             Maybe::None => Ok(()),
         }
     }
@@ -194,7 +194,7 @@ impl Display for Significance {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let levels = [0.0001, 0.001, 0.01];
         let stars = "*".repeat(levels.iter().filter(|&&l| l >= self.0).count());
-        write!(f, "{:6.4} {:3}", self.0, stars)
+        write!(f, "({:3}) {:6.4}", stars, self.0)
     }
 }
 /// A single line of text report
@@ -288,7 +288,7 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{label:>16} {unit:>7}: {m1:26} {m2:26} {cmp:6} {signif:>11}",
+            "{label:>16} {unit:>7}: {m1:26} {m2:26} {cmp:6}  {signif:>11}",
             label = self.label,
             unit = self.fmt_unit(),
             m1 = self.fmt_measurement(Some(self.v1)),
@@ -299,8 +299,17 @@ where
     }
 }
 
-pub fn fmt_section_header(name: &str) -> String {
-    format!("{} {}", name, "=".repeat(102 - name.len() - 1))
+fn fmt_section_header(name: &str) -> String {
+    format!("{} {}", name, "=".repeat(104 - name.len() - 1))
+}
+
+fn fmt_cmp_header(display_significance: bool) -> String {
+    let mut str = " ".repeat(26);
+    str += "---------- This ---------- ---------- Other ----------    Change       ";
+    if display_significance {
+        str += "P-value"
+    }
+    str
 }
 
 pub struct ConfigCmp<'a> {
@@ -337,7 +346,9 @@ impl ConfigCmp<'_> {
 impl<'a> Display for ConfigCmp<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("CONFIG"))?;
-        writeln!(f, "                          ---------- This ---------- ---------- Other ----------    Change     ")?;
+        if self.v2.is_some() {
+            writeln!(f, "{}", fmt_cmp_header(false))?;
+        }
 
         let lines: Vec<Box<dyn Display>> = vec![
             self.line("Date", "", |conf| self.format_time(conf, "%a, %d %b %Y")),
@@ -352,7 +363,7 @@ impl<'a> Display for ConfigCmp<'a> {
                 Quantity::new(conf.parallelism, 0)
             }),
             self.line("Max rate", "req/s", |conf| match conf.rate {
-                Some(r) => Quantity::new(Maybe::Some(r), 1),
+                Some(r) => Quantity::new(Maybe::Some(r), 0),
                 None => Quantity::new(Maybe::None, 0),
             }),
             self.line("Warmup", "req", |conf| Quantity::new(conf.warmup_count, 0)),
@@ -372,15 +383,15 @@ impl<'a> Display for ConfigCmp<'a> {
 pub fn print_log_header() {
     println!("{}", fmt_section_header("LOG"));
     println!("\
-      \x20   Time  Throughput      ----------------------- Response times [ms]---------------------------------\n\
-      \x20    [s]     [req/s]         Min        25        50        75        90        95        99       Max");
+      \x20   Time  Throughput        ----------------------- Response times [ms]---------------------------------\n\
+      \x20    [s]     [req/s]           Min        25        50        75        90        95        99       Max");
 }
 
 impl Display for Sample {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:8.3} {:11.0}   {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
+            "{:8.3} {:11.0}     {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
             self.time_s,
             self.throughput,
             self.resp_time_percentiles[Percentile::Min as usize],
@@ -416,7 +427,9 @@ impl BenchmarkCmp<'_> {
 impl<'a> Display for BenchmarkCmp<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("SUMMARY STATS"))?;
-        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change      P< ")?;
+        if self.v2.is_some() {
+            writeln!(f, "{}", fmt_cmp_header(true))?;
+        }
 
         let summary: Vec<Box<dyn Display>> = vec![
             self.line("Elapsed", "s", |s| Quantity::new(s.elapsed_time_s, 3)),
@@ -455,8 +468,9 @@ impl<'a> Display for BenchmarkCmp<'a> {
 
         writeln!(f)?;
         writeln!(f, "{}", fmt_section_header("THROUGHPUT [req/s]"))?;
-        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change   ")?;
-
+        if self.v2.is_some() {
+            writeln!(f, "{}", fmt_cmp_header(false))?;
+        }
         let throughput_percentiles = [
             Percentile::Min,
             Percentile::P1,
@@ -493,8 +507,9 @@ impl<'a> Display for BenchmarkCmp<'a> {
 
         writeln!(f)?;
         writeln!(f, "{}", fmt_section_header("RESPONSE TIMES [ms]"))?;
-        writeln!(f, "                          ---------- This ----------- ---------- Other ----------   Change      P<")?;
-
+        if self.v2.is_some() {
+            writeln!(f, "{}", fmt_cmp_header(true))?;
+        }
         for p in resp_time_percentiles.iter() {
             let l = self
                 .line(p.name(), "", |s| {
@@ -507,7 +522,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
 
         writeln!(f)?;
         writeln!(f, "{}", fmt_section_header("RESPONSE TIME DISTRIBUTION"))?;
-        writeln!(f, "Percentile    Resp. time [ms]  ------------------------------ Count ----------------------------------")?;
+        writeln!(f, "Percentile    Resp. time [ms]  ------------------------------- Count -----------------------------------")?;
         for x in self.v1.resp_time_distribution.iter() {
             writeln!(
                 f,
