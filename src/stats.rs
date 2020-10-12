@@ -5,7 +5,6 @@ use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{StudentsT, Univariate};
-use statrs::statistics::Statistics;
 use strum::EnumCount;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumCount as EnumCountM, EnumIter};
@@ -33,13 +32,11 @@ pub fn mean(v: &[f32]) -> f64 {
 /// Contrary to the classic variance estimator, the order of the
 /// data points does matter here. If the observations are totally independent from each other,
 /// the expected return value of this function is close to the expected sample variance.
-pub fn long_run_variance(v: &[f32]) -> f64 {
+pub fn long_run_variance(mean: f64, v: &[f32]) -> f64 {
     if v.len() <= 1 {
         return f64::NAN;
     }
-
     let len = v.len() as f64;
-    let mean = mean(&v);
 
     // Compute the variance:
     let mut var = 0.0;
@@ -81,8 +78,8 @@ pub fn long_run_variance(v: &[f32]) -> f64 {
 
 /// Estimates the error of the mean of a time-series.
 /// See `long_run_variance`.
-pub fn long_run_err(v: &[f32]) -> f64 {
-    (long_run_variance(&v) / v.len() as f64).sqrt()
+pub fn long_run_err(mean: f64, v: &[f32]) -> f64 {
+    (long_run_variance(mean, &v) / v.len() as f64).sqrt()
 }
 
 /// Holds a mean and its error together.
@@ -93,16 +90,15 @@ pub struct Mean {
     pub n: u64,
     pub value: f64,
     pub std_err: f64,
-    pub bias: f64,
 }
 
 impl From<&[f32]> for Mean {
     fn from(v: &[f32]) -> Self {
+        let m = mean(&v);
         Mean {
             n: v.len() as u64,
-            value: mean(&v),
-            std_err: long_run_err(&v),
-            bias: 0.0
+            value: m,
+            std_err: long_run_err(m, &v),
         }
     }
 }
@@ -117,8 +113,8 @@ impl From<&[f32]> for Mean {
 pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
     let n1 = mean1.n as f64;
     let n2 = mean2.n as f64;
-    let e1 = mean1.std_err + mean1.bias;
-    let e2 = mean2.std_err + mean2.bias;
+    let e1 = mean1.std_err;
+    let e2 = mean2.std_err;
     let m1 = mean1.value;
     let m2 = mean2.value;
     let e1_sq = e1 * e1;
@@ -203,6 +199,7 @@ impl Percentile {
 /// Records basic statistics for a sample of requests
 #[derive(Serialize, Deserialize)]
 pub struct Sample {
+    pub count: u64,
     pub time_s: f32,
     pub throughput: f32,
     pub mean_resp_time: f32,
@@ -239,6 +236,7 @@ impl Log {
             percentiles[i] = histogram.value_at_percentile(p.value()) as f32 / 1000.0;
         }
         let result = Sample {
+            count: histogram.len(),
             time_s: (time - self.start).as_secs_f32(),
             throughput: 1000000.0 * histogram.len() as f32
                 / (time - self.last_sample_time).as_micros() as f32,
@@ -251,9 +249,9 @@ impl Log {
         self.samples.last().unwrap()
     }
 
-    fn throughput_err(&self) -> f64 {
+    fn throughput(&self) -> Mean {
         let t: Vec<f32> = self.samples.iter().map(|s| s.throughput).collect();
-        long_run_err(t.as_slice()) as f64
+        Mean::from(t.as_slice())
     }
 
     fn throughput_histogram(&self) -> Histogram<u64> {
@@ -273,18 +271,18 @@ impl Log {
         result
     }
 
-    fn mean_resp_time_err(&self) -> f64 {
+    fn resp_time(&self) -> Mean {
         let t: Vec<f32> = self.samples.iter().map(|s| s.mean_resp_time).collect();
-        long_run_err(t.as_slice()) as f64
+        Mean::from(t.as_slice())
     }
 
-    fn resp_time_percentile_err(&self, p: Percentile) -> f64 {
+    fn resp_time_percentile(&self, p: Percentile) -> Mean {
         let t: Vec<f32> = self
             .samples
             .iter()
             .map(|s| s.resp_time_percentiles[p as usize])
             .collect();
-        long_run_err(t.as_slice()) as f64
+        Mean::from(t.as_slice())
     }
 }
 
@@ -355,14 +353,7 @@ impl BenchmarkCmp<'_> {
     // Checks corresponding response time percentiles of two benchmark runs
     // are statistically different. Returns None if the second benchmark is unset.
     pub fn cmp_resp_time_percentile(&self, p: Percentile) -> Option<Significance> {
-        // We're not comparing the edge percentiles because
-        // they are likely not normally distributed.
-        // TODO: Make a proper data normality test
-        if p.value() >= 1.0 && p.value() <= 99.0 {
-            self.cmp(|s| s.resp_time_percentiles[p as usize])
-        } else {
-            None
-        }
+        self.cmp(|s| s.resp_time_percentiles[p as usize])
     }
 }
 
@@ -443,22 +434,6 @@ impl Recorder {
         self.stats()
     }
 
-    /// Returns the absolute difference between:
-    /// - the value of the response time at `p` computed for all requests globally
-    /// - the mean of the response times at `p` computed for each sample in the log
-    fn resp_time_percentile_sampling_bias(&self, p: Percentile) -> f64 {
-        let global = self.resp_times.value_at_percentile(p.value()) as f64 / 1000.0;
-        let mean = self
-            .log
-            .samples
-            .iter()
-            .map(|s| s.resp_time_percentiles[p as usize] as f64)
-            .mean();
-
-        (mean - global).abs()
-    }
-
-
     /// Computes the final statistics based on collected data
     /// and turn them into report that can be serialized
     pub fn stats(self) -> BenchmarkStats {
@@ -470,20 +445,13 @@ impl Recorder {
         let cpu_util = 100.0 * cpu_time_s / elapsed_time_s / num_cpus::get() as f64;
         let count = self.completed + self.errors;
 
-        let throughput_mean = self.completed as f64 / elapsed_time_s as f64;
-        let throughput_err = self.log.throughput_err();
+        let throughput = self.log.throughput();
         let parallelism = self.queue_len_sum as f64 / count as f64;
         let parallelism_ratio = 100.0 * parallelism / self.parallelism_limit as f64;
 
-        let mut resp_time_percentiles = Vec::<Mean>::new();
-        for p in Percentile::iter() {
-            resp_time_percentiles.push(Mean {
-                n: self.completed,
-                value: self.resp_times.value_at_percentile(p.value()) as f64 / 1000.0,
-                std_err: self.log.resp_time_percentile_err(p),
-                bias: self.resp_time_percentile_sampling_bias(p),
-            });
-        }
+        let resp_time_percentiles: Vec<Mean> = Percentile::iter()
+            .map(|p| self.log.resp_time_percentile(p))
+            .collect();
 
         let mut resp_time_distribution = Vec::new();
         for x in self.resp_times.iter_log(self.resp_times.min(), 1.25) {
@@ -504,21 +472,10 @@ impl Recorder {
             errors_ratio: 100.0 * self.errors as f64 / count as f64,
             rows: self.rows,
             partitions: self.partitions,
-            throughput: Mean {
-                n: self.log.samples.len() as u64,
-                value: throughput_mean,
-                std_err: throughput_err,
-                bias: 0.0
-            },
-            throughput_ratio: self.rate_limit.map(|r| 100.0 * throughput_mean / r),
+            throughput,
+            throughput_ratio: self.rate_limit.map(|r| 100.0 * throughput.value / r),
             throughput_percentiles: Vec::from(self.log.throughput_percentiles()),
-            resp_time_ms: Mean {
-                n: self.log.samples.len() as u64,
-                value: self.resp_time_sum / self.completed as f64,
-                std_err: self.log.mean_resp_time_err(),
-                bias: 0.0,
-
-            },
+            resp_time_ms: self.log.resp_time(),
             resp_time_percentiles,
             resp_time_distribution,
             parallelism,
@@ -535,7 +492,6 @@ mod test {
     use rand::prelude::StdRng;
     use rand::SeedableRng;
     use statrs::distribution::{Normal, Poisson};
-    use statrs::distribution::{Uniform, Univariate};
     use statrs::statistics::Statistics;
 
     use crate::stats::{t_test, Mean};
@@ -575,10 +531,11 @@ mod test {
     #[test]
     fn mean_err_no_auto_correlation() {
         let run_len = 1000;
+        let mean = 1.0;
         let std_dev = 1.0;
         for i in 0..10 {
-            let v = random_vector(i, run_len, 1.0, std_dev);
-            let err = super::long_run_err(&v);
+            let v = random_vector(i, run_len, mean, std_dev);
+            let err = super::long_run_err(mean, &v);
             let ref_err = reference_err(&v);
             assert!(err > 0.99 * ref_err);
             assert!(err < 1.33 * ref_err);
@@ -588,11 +545,12 @@ mod test {
     #[test]
     fn mean_err_with_auto_correlation() {
         let run_len = 1000;
+        let mean = 1.0;
         let std_dev = 1.0;
         for i in 0..10 {
-            let mut v = random_vector(i, run_len, 1.0, std_dev);
+            let mut v = random_vector(i, run_len, mean, std_dev);
             make_autocorrelated(&mut v);
-            let mean_err = super::long_run_err(&v);
+            let mean_err = super::long_run_err(mean, &v);
             let ref_err = reference_err(&v);
             assert!(mean_err > 6.0 * ref_err);
         }
@@ -651,7 +609,7 @@ mod test {
             let v = random_vector_distr(i, len, &distr);
             let mut h = Histogram::<u64>::new(5).unwrap();
             for x in v.iter() {
-                h.record(((x.abs() * 100000.0) as u64));
+                h.record((x.abs() * 100000.0) as u64).unwrap();
             }
             results.push(h.value_at_percentile(percentile) as f64);
         }

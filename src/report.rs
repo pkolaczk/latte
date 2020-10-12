@@ -10,6 +10,7 @@ use strum::IntoEnumIterator;
 
 use crate::config::Config;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance};
+use statrs::statistics::Statistics;
 
 /// A standard error is multiplied by this factor to get the error margin.
 /// For a normally distributed random variable,
@@ -443,6 +444,10 @@ impl<'a> Display for BenchmarkCmp<'a> {
             }),
             self.line("Partitions", "", |s| Quantity::new(s.partitions, 0)),
             self.line("Rows", "", |s| Quantity::new(s.rows, 0)),
+            self.line("Samples", "", |s| Quantity::new(s.samples.len(), 0)),
+            self.line("Mean sample size", "req", |s| {
+                Quantity::new(s.samples.iter().map(|s| s.count as f64).mean(), 0)
+            }),
             self.line("Parallelism", "req", |s| {
                 Quantity::new(s.parallelism, 1).with_ratio(s.parallelism_ratio)
             }),
@@ -465,8 +470,14 @@ impl<'a> Display for BenchmarkCmp<'a> {
             writeln!(f, "{}", l)?;
         }
 
+
+
         writeln!(f)?;
-        writeln!(f, "{}", fmt_section_header("THROUGHPUT [req/s]"))?;
+        writeln!(
+            f,
+            "{}",
+            fmt_section_header("THROUGHPUT DISTRIBUTION [req/s]")
+        )?;
         if self.v2.is_some() {
             writeln!(f, "{}", fmt_cmp_header(false))?;
         }
@@ -505,7 +516,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
         ];
 
         writeln!(f)?;
-        writeln!(f, "{}", fmt_section_header("RESPONSE TIMES [ms]"))?;
+        writeln!(f, "{}", fmt_section_header("MEAN RESPONSE TIMES [ms]"))?;
         if self.v2.is_some() {
             writeln!(f, "{}", fmt_cmp_header(true))?;
         }
@@ -514,7 +525,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
             let l = self
                 .line(p.name(), "", |s| {
                     let rt = s.resp_time_percentiles[*p as usize];
-                    Quantity::new(rt.value, 2).with_error(rt.std_err * ERR_MARGIN + rt.bias)
+                    Quantity::new(rt.value, 2).with_error(rt.std_err * ERR_MARGIN)
                 })
                 .with_significance(self.cmp_resp_time_percentile(*p));
             writeln!(f, "{}", l)?;
