@@ -103,8 +103,9 @@ impl From<&[f32]> for Mean {
     }
 }
 
-/// Returns the probability that the difference between two means is due to a chance
-/// See https://en.wikipedia.org/wiki/Student%27s_t-test
+/// Returns the probability that the difference between two means is due to a chance.
+/// Uses Welch's t-test allowing samples to have different variances.
+/// See https://en.wikipedia.org/wiki/Welch%27s_t-test.
 ///
 /// Assumes data are i.i.d and distributed normally, but it can be used
 /// for autocorrelated data as well, if the errors are properly corrected for autocorrelation
@@ -196,7 +197,7 @@ impl Percentile {
     }
 }
 
-/// Records basic statistics for a sample of requests
+/// Records basic statistics for a sample (a group) of requests
 #[derive(Serialize, Deserialize)]
 pub struct Sample {
     pub count: u64,
@@ -206,6 +207,8 @@ pub struct Sample {
     pub resp_time_percentiles: [f32; Percentile::COUNT],
 }
 
+/// A builder for vector of samples.
+/// Keeps state of the current (unfinished) sample and all previously generated (finished) samples.
 struct Log {
     start: Instant,
     last_sample_time: Instant,
@@ -293,6 +296,7 @@ pub struct RespTimeCount {
     pub count: u64,
 }
 
+/// Stores the final statistics of the test run.
 #[derive(Serialize, Deserialize)]
 pub struct BenchmarkStats {
     pub elapsed_time_s: f64,
@@ -315,12 +319,16 @@ pub struct BenchmarkStats {
     pub samples: Vec<Sample>,
 }
 
+/// Stores the statistics of one or two test runs.
+/// If the second run is given, enables comparisons between the runs.
 pub struct BenchmarkCmp<'a> {
     pub v1: &'a BenchmarkStats,
     pub v2: Option<&'a BenchmarkStats>,
 }
 
-/// Significance level denoting strength of hypothesis
+/// Significance level denoting strength of hypothesis.
+/// The wrapped value denotes the probability of observing given outcome assuming
+/// null-hypothesis is true (see: https://en.wikipedia.org/wiki/P-value).
 #[derive(Clone, Copy)]
 pub struct Significance(pub f64);
 
@@ -357,6 +365,10 @@ impl BenchmarkCmp<'_> {
     }
 }
 
+/// Observes requests and computes their statistics such as mean throughput, mean response time,
+/// throughput and response time distributions. Computes confidence intervals.
+/// Can be also used to split the time-series into smaller sub-samples and to
+/// compute statistics for each sub-sample separately.
 pub struct Recorder {
     pub start_time: Instant,
     pub end_time: Instant,
@@ -375,6 +387,9 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    /// Creates a new recorder.
+    /// The `rate_limit` and `parallelism_limit` parameters are used only as the
+    /// reference levels for relative throughput and relative parallelism.
     pub fn start(rate_limit: Option<f64>, parallelism_limit: usize) -> Recorder {
         let start_time = Instant::now();
         Recorder {
@@ -395,6 +410,8 @@ impl Recorder {
         }
     }
 
+    /// Adds the statistics of the completed request to the already collected statistics.
+    /// Called on completion of each request.
     pub fn record<E>(&mut self, item: Result<QueryStats, E>) {
         match item {
             Ok(s) => {
@@ -413,18 +430,24 @@ impl Recorder {
         };
     }
 
+    /// Finishes the current sample, adds it to the log and starts a new one.
     pub fn sample(&mut self, time: Instant) -> &Sample {
         self.log.next(time)
     }
 
+    /// Returns the time when the last sample was recorded.
+    /// If no samples were collected in the log so far, recording start time is returned.
     pub fn last_sample_time(&self) -> Instant {
         self.log.last_sample_time
     }
 
+    /// Called when a request gets enqueued for execution.
+    /// This method is needed to track the average number of queries in-flight.
     pub fn enqueued(&mut self, queue_length: usize) {
         self.queue_len_sum += queue_length as u64;
     }
 
+    /// Stops the recording, computes the statistics and returns them as the new object.
     pub fn finish(mut self) -> BenchmarkStats {
         self.end_time = Instant::now();
         self.end_cpu_time = ProcessTime::now();
@@ -436,7 +459,7 @@ impl Recorder {
 
     /// Computes the final statistics based on collected data
     /// and turn them into report that can be serialized
-    pub fn stats(self) -> BenchmarkStats {
+    fn stats(self) -> BenchmarkStats {
         let elapsed_time_s = (self.end_time - self.start_time).as_secs_f64();
         let cpu_time_s = self
             .end_cpu_time
@@ -487,28 +510,19 @@ impl Recorder {
 
 #[cfg(test)]
 mod test {
-    use hdrhistogram::Histogram;
     use rand::distributions::Distribution;
     use rand::prelude::StdRng;
     use rand::SeedableRng;
-    use statrs::distribution::{Normal, Poisson};
+    use statrs::distribution::Normal;
     use statrs::statistics::Statistics;
 
-    use crate::stats::{t_test, Mean};
+    use crate::stats::{Mean, t_test};
 
     /// Returns a random sample of size `len`.
-    /// All data points i.i.d with N(`mean`, `std_dev`).
+        /// All data points i.i.d with N(`mean`, `std_dev`).
     fn random_vector(seed: usize, len: usize, mean: f64, std_dev: f64) -> Vec<f32> {
         let mut rng = StdRng::seed_from_u64(seed as u64);
         let distrib = Normal::new(mean, std_dev).unwrap();
-        (0..len)
-            .into_iter()
-            .map(|_| distrib.sample(&mut rng) as f32)
-            .collect()
-    }
-
-    fn random_vector_distr(seed: usize, len: usize, distrib: &impl Distribution<f64>) -> Vec<f32> {
-        let mut rng = StdRng::seed_from_u64(seed as u64);
         (0..len)
             .into_iter()
             .map(|_| distrib.sample(&mut rng) as f32)
@@ -598,28 +612,5 @@ mod test {
         };
         assert!(t_test(&mean1, &mean2) < 0.0011);
         assert!(t_test(&mean2, &mean1) < 0.0011);
-    }
-
-    fn std_dev_of_percentile(len: usize, percentile: f64) -> f64 {
-        let count = 1000;
-        let mut results = Vec::new();
-        //let distr = Uniform::new(0.0, 10000.0).unwrap();
-        let distr = Poisson::new(10.0).unwrap();
-        for i in 0..count {
-            let v = random_vector_distr(i, len, &distr);
-            let mut h = Histogram::<u64>::new(5).unwrap();
-            for x in v.iter() {
-                h.record((x.abs() * 100000.0) as u64).unwrap();
-            }
-            results.push(h.value_at_percentile(percentile) as f64);
-        }
-        println!("mean: {}", results.iter().mean());
-        results.std_dev()
-    }
-
-    #[test]
-    fn test_p99() {
-        println!("Std dev 1 of p99: {}", std_dev_of_percentile(100, 50.00));
-        println!("Std dev 2 of p99: {}", std_dev_of_percentile(10000, 50.00));
     }
 }
