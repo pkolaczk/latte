@@ -1,26 +1,19 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::{stmt, BindRustType, PreparedStatement, Session};
+use cassandra_cpp::{BindRustType, PreparedStatement, Session};
+use rand::{RngCore, thread_rng};
 
-use crate::workload::{Result, Workload, WorkloadError, WorkloadStats};
+use crate::workload::{Result, Workload, WorkloadConfig, WorkloadError, WorkloadStats};
 
-/// A workload that writes tiny rows to the table
-///
-/// Preparation:
-/// ```
-/// CREATE TABLE write(pk BIGINT PRIMARY KEY, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)
-/// ```
-///
-/// Benchmarked query:
-/// ```
-/// INSERT INTO write(pk, c1, c2, c3, c4, c5) VALUES (?, 1, 2, 3, 4, 5)
-/// ```
+/// A workload that writes rows to the table
 pub struct Write<S>
 where
     S: AsRef<Session> + Sync + Send,
 {
     session: S,
+    column_count: usize,
+    column_size: usize,
     row_count: u64,
     write_statement: PreparedStatement,
 }
@@ -29,28 +22,39 @@ impl<S> Write<S>
 where
     S: AsRef<Session> + Sync + Send,
 {
-    pub async fn new(session: S, row_count: u64) -> Result<Self> {
-        if row_count == 0 {
+    pub async fn new(session: S, conf: &WorkloadConfig) -> Result<Self> {
+        if conf.partitions == 0 {
             return Err(WorkloadError::Other(
-                "Number of rows cannot be 0 for a write workload".to_owned(),
+                "Number of partitions cannot be 0 for a write workload".to_owned(),
             ));
         }
 
+        let schema = super::Schema {
+            table_name: "write".to_owned() + "_" + &conf.schema_params_str(),
+            column_count: conf.columns,
+        };
         let s = session.as_ref();
-        let result = s.execute(&stmt!(
-            "CREATE TABLE IF NOT EXISTS write (pk BIGINT PRIMARY KEY, \
-            c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)"
-        ));
-        result.await?;
+        s.execute(&schema.create_table_stmt()).await?;
 
-        let write_statement = s
-            .prepare("INSERT INTO write(pk, c1, c2, c3, c4, c5) VALUES (?, 1, 2, 3, 4, 5)")?
-            .await?;
+        let insert_cql = schema.insert_cql();
+        let write_statement = s.prepare(insert_cql.as_str())?.await?;
         Ok(Write {
             session,
-            row_count,
+            column_count: conf.columns,
+            column_size: conf.column_size,
+            row_count: conf.partitions,
             write_statement,
         })
+    }
+
+    /// Generates random blob of data of size `column_size`
+    fn gen_random_blob(&self) -> Vec<u8> {
+        let mut rng = thread_rng();
+        let mut result = Vec::with_capacity(self.column_size);
+        for _ in 0..self.column_size {
+            result.push(rng.next_u32() as u8)
+        }
+        result
     }
 }
 
@@ -80,6 +84,9 @@ where
         let s = self.session.as_ref();
         let mut statement = self.write_statement.bind();
         statement.bind(0, (iteration % self.row_count) as i64)?;
+        for i in 0..self.column_count {
+            statement.bind(i + 1, self.gen_random_blob())?;
+        }
         let result = s.execute(&statement);
         result.await?;
         Ok(WorkloadStats {

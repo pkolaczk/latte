@@ -477,12 +477,14 @@ impl Recorder {
             .collect();
 
         let mut resp_time_distribution = Vec::new();
-        for x in self.resp_times.iter_log(self.resp_times.min(), 1.25) {
-            resp_time_distribution.push(RespTimeCount {
-                percentile: x.percentile(),
-                resp_time_ms: x.value_iterated_to() as f64 / 1000.0,
-                count: x.count_since_last_iteration(),
-            });
+        if !self.resp_times.is_empty() {
+            for x in self.resp_times.iter_log(self.resp_times.min(), 1.25) {
+                resp_time_distribution.push(RespTimeCount {
+                    percentile: x.percentile(),
+                    resp_time_ms: x.value_iterated_to() as f64 / 1000.0,
+                    count: x.count_since_last_iteration(),
+                });
+            }
         }
 
         BenchmarkStats {
@@ -516,10 +518,10 @@ mod test {
     use statrs::distribution::Normal;
     use statrs::statistics::Statistics;
 
-    use crate::stats::{Mean, t_test};
+    use crate::stats::{t_test, Mean};
 
     /// Returns a random sample of size `len`.
-        /// All data points i.i.d with N(`mean`, `std_dev`).
+    /// All data points i.i.d with N(`mean`, `std_dev`).
     fn random_vector(seed: usize, len: usize, mean: f64, std_dev: f64) -> Vec<f32> {
         let mut rng = StdRng::seed_from_u64(seed as u64);
         let distrib = Normal::new(mean, std_dev).unwrap();

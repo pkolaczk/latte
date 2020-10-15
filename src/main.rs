@@ -42,10 +42,10 @@ fn unwrap_workload<W: Workload>(w: workload::Result<W>) -> W {
 
 async fn workload(conf: &Config, session: Session) -> Arc<dyn Workload> {
     let session = Box::new(session);
-    let row_count = conf.rows.unwrap_or(conf.count);
+    let wc = conf.workload_config();
     match conf.workload {
-        config::Workload::Read => Arc::new(unwrap_workload(Read::new(session, row_count).await)),
-        config::Workload::Write => Arc::new(unwrap_workload(Write::new(session, row_count).await)),
+        config::Workload::Read => Arc::new(unwrap_workload(Read::new(session, &wc).await)),
+        config::Workload::Write => Arc::new(unwrap_workload(Write::new(session, &wc).await)),
     }
 }
 

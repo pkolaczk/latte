@@ -357,6 +357,9 @@ impl<'a> Display for ConfigCmp<'a> {
                 conf.label.clone().unwrap_or_else(|| "".to_string())
             }),
             self.line("Workload", "", |conf| conf.workload.to_string()),
+            self.line("Partitions", "", |conf| Quantity::new(conf.workload_config().partitions, 0)),
+            self.line("Columns", "", |conf| Quantity::new(conf.workload_config().columns, 0)),
+            self.line("Column size", "B", |conf| Quantity::new(conf.workload_config().column_size, 0)),
             self.line("Threads", "", |conf| Quantity::new(conf.threads, 0)),
             self.line("Connections", "", |conf| Quantity::new(conf.connections, 0)),
             self.line("Max parallelism", "req", |conf| {
@@ -469,8 +472,6 @@ impl<'a> Display for BenchmarkCmp<'a> {
         for l in summary {
             writeln!(f, "{}", l)?;
         }
-
-
 
         writeln!(f)?;
         writeln!(

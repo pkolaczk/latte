@@ -2,6 +2,7 @@ use core::fmt;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
+use crate::workload::WorkloadConfig;
 use chrono::Utc;
 use clap::{AppSettings, Clap};
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,7 @@ impl Display for Workload {
 #[derive(Clap, Debug, Serialize, Deserialize)]
 #[clap(
     setting(AppSettings::ColoredHelp),
+    setting(AppSettings::NextLineHelp),
     setting(AppSettings::DeriveDisplayOrder)
 )]
 pub struct Config {
@@ -45,11 +47,6 @@ pub struct Config {
     /// Number of measured requests
     #[clap(short('n'), long, default_value = "1000000")]
     pub count: u64,
-
-    /// Total number of distinct rows in the data-set.
-    /// Applies to read and write workloads. Defaults to count.
-    #[clap(short('d'), long)]
-    pub rows: Option<u64>,
 
     /// Number of I/O threads used by the driver
     #[clap(short('t'), long, default_value = "1")]
@@ -84,6 +81,19 @@ pub struct Config {
     #[clap(arg_enum, name = "workload", required = true)]
     pub workload: Workload,
 
+    /// Total number of partitions in the data-set.
+    /// Applies to read and write workloads. Defaults to count.
+    #[clap(short('P'), long)]
+    pub partitions: Option<u64>,
+
+    /// Number of data cells in a row
+    #[clap(short('C'), long, default_value("1"))]
+    pub columns: usize,
+
+    /// Size of a single cell's data in bytes
+    #[clap(short('S'), long, default_value("16"))]
+    pub column_size: usize,
+
     /// List of Cassandra addresses to connect to
     #[clap(name = "addresses", required = true, default_value = "localhost")]
     pub addresses: Vec<String>,
@@ -99,5 +109,13 @@ impl Config {
             self.timestamp = Some(Utc::now().timestamp())
         }
         self
+    }
+
+    pub fn workload_config(&self) -> WorkloadConfig {
+        WorkloadConfig {
+            partitions: self.partitions.unwrap_or(self.count),
+            columns: self.columns,
+            column_size: self.column_size,
+        }
     }
 }

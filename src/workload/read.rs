@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::{stmt, BindRustType, PreparedStatement, Session};
+use cassandra_cpp::{BindRustType, PreparedStatement, Session};
 
-use crate::workload::{Result, Workload, WorkloadStats};
+use crate::workload::{Result, Workload, WorkloadConfig, WorkloadStats};
 
 pub struct Read<S>
 where
@@ -19,21 +19,22 @@ impl<S> Read<S>
 where
     S: AsRef<Session> + Sync + Send,
 {
-    pub async fn new(session: S, row_count: u64) -> Result<Self> {
+    pub async fn new(session: S, conf: &WorkloadConfig) -> Result<Self> {
+        let schema = super::Schema {
+            table_name: "read".to_owned() + "_" + &conf.schema_params_str(),
+            column_count: conf.columns,
+        };
         let s = session.as_ref();
-        s.execute(&stmt!(
-            "CREATE TABLE IF NOT EXISTS read (pk BIGINT PRIMARY KEY, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT)"
-        ))
-        .await?;
-
-        let read = s.prepare("SELECT * FROM read WHERE pk = ?")?.await?;
+        s.execute(&schema.create_table_stmt()).await?;
+        let read_cql = format!("SELECT * FROM {} WHERE pk = ?", schema.table_name);
+        let read = s.prepare(read_cql.as_str())?.await?;
         let write = s
-            .prepare("INSERT INTO read (pk, c1, c2, c3, c4, c5) VALUES (?, 1, 2, 3, 4, 5)")?
+            .prepare(schema.insert_cql().as_str())?
             .await?;
 
         Ok(Read {
             session,
-            row_count,
+            row_count: conf.partitions,
             write_statement: write,
             read_statement: read,
         })
