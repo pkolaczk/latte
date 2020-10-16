@@ -11,15 +11,16 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Semaphore;
 use tokio::time::{Duration, Instant, Interval};
 
-use config::Config;
+use config::RunCommand;
 
+use crate::config::{AppConfig, Command, ShowCommand};
 use crate::progress::FastProgressBar;
-use crate::report::{load_report, save_report, ConfigCmp};
+use crate::report::{Report, RunConfigCmp};
 use crate::session::*;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, QueryStats, Recorder};
+use crate::workload::{Workload, WorkloadStats};
 use crate::workload::read::Read;
 use crate::workload::write::Write;
-use crate::workload::{Workload, WorkloadStats};
 
 mod config;
 mod progress;
@@ -40,7 +41,7 @@ fn unwrap_workload<W: Workload>(w: workload::Result<W>) -> W {
     }
 }
 
-async fn workload(conf: &Config, session: Session) -> Arc<dyn Workload> {
+async fn workload(conf: &RunCommand, session: Session) -> Arc<dyn Workload> {
     let session = Box::new(session);
     let wc = conf.workload_config();
     match conf.workload {
@@ -146,15 +147,19 @@ where
     stats.finish()
 }
 
-async fn async_main() {
-    let conf: Config = Config::parse().set_timestamp_if_empty();
-    let compare = conf.compare.as_ref().map(|path| match load_report(path) {
+fn load_report_or_abort(path: &PathBuf) -> Report {
+    match Report::load(path) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load report from {}: {}", path.display(), e);
             exit(1)
         }
-    });
+    }
+}
+
+async fn run(conf: RunCommand) {
+    let conf = conf.set_timestamp_if_empty();
+    let compare = conf.compare.as_ref().map(|p| load_report_or_abort(p));
 
     let mut cluster = cluster(&conf);
     let session = connect_or_abort(&mut cluster).await;
@@ -164,7 +169,7 @@ async fn async_main() {
 
     println!(
         "{}",
-        ConfigCmp {
+        RunConfigCmp {
             v1: &conf,
             v2: compare.as_ref().map(|c| &c.conf)
         }
@@ -179,7 +184,7 @@ async fn async_main() {
         workload.clone(),
         |w, i| w.populate(i),
     )
-    .await;
+        .await;
 
     par_execute(
         "Warming up...",
@@ -190,7 +195,7 @@ async fn async_main() {
         workload.clone(),
         |w, i| w.run(i),
     )
-    .await;
+        .await;
 
     report::print_log_header();
     let stats = par_execute(
@@ -202,7 +207,7 @@ async fn async_main() {
         workload.clone(),
         |w, i| w.run(i),
     )
-    .await;
+        .await;
 
     let stats_cmp = BenchmarkCmp {
         v1: &stats,
@@ -215,7 +220,9 @@ async fn async_main() {
         .output
         .clone()
         .unwrap_or_else(|| PathBuf::from(".latte-report.json"));
-    match save_report(conf, stats, &path) {
+
+    let report = Report::new(conf, stats);
+    match report.save(&path) {
         Ok(()) => {}
         Err(e) => {
             eprintln!("Failed to save report to {}: {}", path.display(), e);
@@ -223,6 +230,35 @@ async fn async_main() {
         }
     }
 }
+
+async fn show(conf: ShowCommand) {
+    let report1 = load_report_or_abort(&PathBuf::from(conf.report1));
+    let report2 = conf.report2.map(|p| {
+        load_report_or_abort(&PathBuf::from(p))
+    });
+
+    let config_cmp = RunConfigCmp {
+        v1: &report1.conf,
+        v2: report2.as_ref().map(|r| &r.conf)
+    };
+    println!("{}", config_cmp);
+
+    let results_cmp = BenchmarkCmp {
+        v1: &report1.result,
+        v2: report2.as_ref().map(|r| &r.result)
+    };
+    println!("{}", results_cmp);
+}
+
+
+async fn async_main() {
+    let command = AppConfig::parse().command;
+    match command {
+        Command::Run(config) => run(config).await,
+        Command::Show(config) => show(config).await,
+    }
+}
+
 
 fn main() {
     console::set_colors_enabled(true);

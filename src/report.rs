@@ -8,7 +8,7 @@ use err_derive::*;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
-use crate::config::Config;
+use crate::config::RunCommand;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance};
 use statrs::statistics::Statistics;
 
@@ -16,15 +16,6 @@ use statrs::statistics::Statistics;
 /// For a normally distributed random variable,
 /// this should give us 0.999 confidence the expected value is within the (result +- error) range.
 const ERR_MARGIN: f64 = 3.29;
-
-/// Keeps all data we want to save in a report:
-/// run metadata, configuration and results
-#[derive(Serialize, Deserialize)]
-pub struct Report {
-    pub conf: Config,
-    pub percentiles: Vec<f32>,
-    pub result: BenchmarkStats,
-}
 
 #[derive(Debug, Error)]
 pub enum ReportLoadError {
@@ -34,24 +25,38 @@ pub enum ReportLoadError {
     Deserialize(#[source] serde_json::Error),
 }
 
-/// Saves benchmark results to a JSON file
-pub fn save_report(conf: Config, stats: BenchmarkStats, path: &PathBuf) -> io::Result<()> {
-    let percentile_legend: Vec<f32> = Percentile::iter().map(|p| p.value() as f32).collect();
-    let report = Report {
-        conf,
-        percentiles: percentile_legend,
-        result: stats,
-    };
-    let f = fs::File::create(path)?;
-    serde_json::to_writer_pretty(f, &report)?;
-    Ok(())
+/// Keeps all data we want to save in a report:
+/// run metadata, configuration and results
+#[derive(Serialize, Deserialize)]
+pub struct Report {
+    pub conf: RunCommand,
+    pub percentiles: Vec<f32>,
+    pub result: BenchmarkStats,
 }
 
-/// Loads benchmark results from a JSON file
-pub fn load_report(path: &PathBuf) -> Result<Report, ReportLoadError> {
-    let file = fs::File::open(path)?;
-    let report = serde_json::from_reader(file)?;
-    Ok(report)
+impl Report {
+    /// Creates a new report from given configuration and results
+    pub fn new(conf: RunCommand, result: BenchmarkStats) -> Report {
+        let percentiles: Vec<f32> = Percentile::iter().map(|p| p.value() as f32).collect();
+        Report {
+            conf,
+            percentiles,
+            result,
+        }
+    }
+    /// Loads benchmark results from a JSON file
+    pub fn load(path: &PathBuf) -> Result<Report, ReportLoadError> {
+        let file = fs::File::open(path)?;
+        let report = serde_json::from_reader(file)?;
+        Ok(report)
+    }
+
+    /// Saves benchmark results to a JSON file
+    pub fn save(&self, path: &PathBuf) -> io::Result<()> {
+        let f = fs::File::create(path)?;
+        serde_json::to_writer_pretty(f, &self)?;
+        Ok(())
+    }
 }
 
 /// This is similar as the builtin `Option`, but we need it, because the
@@ -312,17 +317,17 @@ fn fmt_cmp_header(display_significance: bool) -> String {
     str
 }
 
-pub struct ConfigCmp<'a> {
-    pub v1: &'a Config,
-    pub v2: Option<&'a Config>,
+pub struct RunConfigCmp<'a> {
+    pub v1: &'a RunCommand,
+    pub v2: Option<&'a RunCommand>,
 }
 
-impl ConfigCmp<'_> {
-    fn line<S, M, F>(&self, label: S, unit: &str, f: F) -> Box<Line<M, &Config, F>>
+impl RunConfigCmp<'_> {
+    fn line<S, M, F>(&self, label: S, unit: &str, f: F) -> Box<Line<M, &RunCommand, F>>
     where
         S: ToString,
         M: Display + Rational,
-        F: Fn(&Config) -> M,
+        F: Fn(&RunCommand) -> M,
     {
         Box::new(Line::new(
             label.to_string(),
@@ -333,7 +338,7 @@ impl ConfigCmp<'_> {
         ))
     }
 
-    fn format_time(&self, conf: &Config, format: &str) -> String {
+    fn format_time(&self, conf: &RunCommand, format: &str) -> String {
         conf.timestamp
             .map(|ts| {
                 let utc = NaiveDateTime::from_timestamp(ts, 0);
@@ -343,7 +348,7 @@ impl ConfigCmp<'_> {
     }
 }
 
-impl<'a> Display for ConfigCmp<'a> {
+impl<'a> Display for RunConfigCmp<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("CONFIG"))?;
         if self.v2.is_some() {

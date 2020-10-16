@@ -1,9 +1,9 @@
-use crate::config::Config;
+use crate::config::RunCommand;
 use cassandra_cpp::{Cluster, Session};
 use std::process::exit;
 
 /// Configures connection to Cassandra.
-pub fn cluster(conf: &Config) -> Cluster {
+pub fn cluster(conf: &RunCommand) -> Cluster {
     let mut cluster = Cluster::default();
     for addr in conf.addresses.iter() {
         cluster.set_contact_points(addr).unwrap();
@@ -37,7 +37,7 @@ pub async fn connect_or_abort(cluster: &mut Cluster) -> Session {
 }
 
 /// Sets up the test keyspace
-pub async fn setup_keyspace(conf: &Config, session: &Session) -> cassandra_cpp::Result<()> {
+pub async fn setup_keyspace(conf: &RunCommand, session: &Session) -> cassandra_cpp::Result<()> {
     let statement = cassandra_cpp::Statement::new(
         format!(
             "CREATE KEYSPACE IF NOT EXISTS \"{}\" \
@@ -53,7 +53,7 @@ pub async fn setup_keyspace(conf: &Config, session: &Session) -> cassandra_cpp::
 
 /// Sets up the test keyspace.
 /// On failure, displays an error message and aborts the program.
-pub async fn setup_keyspace_or_abort(conf: &Config, session: &Session) {
+pub async fn setup_keyspace_or_abort(conf: &RunCommand, session: &Session) {
     if let Err(e) = setup_keyspace(&conf, &session).await {
         eprintln!("error: Failed to setup keyspace {}: {}", &conf.keyspace, e);
         exit(1)

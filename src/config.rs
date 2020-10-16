@@ -23,14 +23,13 @@ impl Display for Workload {
     }
 }
 
-/// Latency Tester for Apache Cassandra
 #[derive(Clap, Debug, Serialize, Deserialize)]
 #[clap(
     setting(AppSettings::ColoredHelp),
     setting(AppSettings::NextLineHelp),
     setting(AppSettings::DeriveDisplayOrder)
 )]
-pub struct Config {
+pub struct RunCommand {
     /// Name of the keyspace
     #[clap(short('k'), long, default_value = "latte")]
     pub keyspace: String,
@@ -103,7 +102,7 @@ pub struct Config {
     pub timestamp: Option<i64>,
 }
 
-impl Config {
+impl RunCommand {
     pub fn set_timestamp_if_empty(mut self) -> Self {
         if self.timestamp.is_none() {
             self.timestamp = Some(Utc::now().timestamp())
@@ -118,4 +117,33 @@ impl Config {
             column_size: self.column_size,
         }
     }
+}
+
+#[derive(Clap, Debug)]
+pub struct ShowCommand {
+    /// Path to the JSON report file
+    pub report1: String,
+    /// Optional path to another JSON report file
+    pub report2: Option<String>
+}
+
+
+#[derive(Clap, Debug)]
+pub enum Command {
+    /// Runs the benchmark
+    Run(RunCommand),
+    /// Displays the report(s) of previously executed benchmark(s)
+    Show(ShowCommand)
+}
+
+#[derive(Clap, Debug)]
+#[clap(
+    name = "Cassandra Latency and Throughput Tester",
+    author = "Piotr Kołaczkowski <pkolaczk@datastax.com>",
+    version = clap::crate_version!(),
+    setting(AppSettings::ColoredHelp),
+)]
+pub struct AppConfig {
+    #[clap(subcommand)]
+    pub command: Command
 }
