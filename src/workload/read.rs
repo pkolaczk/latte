@@ -28,9 +28,7 @@ where
         s.execute(&schema.create_table_stmt()).await?;
         let read_cql = format!("SELECT * FROM {} WHERE pk = ?", schema.table_name);
         let read = s.prepare(read_cql.as_str())?.await?;
-        let write = s
-            .prepare(schema.insert_cql().as_str())?
-            .await?;
+        let write = s.prepare(schema.insert_cql().as_str())?.await?;
 
         Ok(Read {
             session,

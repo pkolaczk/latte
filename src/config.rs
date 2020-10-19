@@ -124,16 +124,15 @@ pub struct ShowCommand {
     /// Path to the JSON report file
     pub report1: String,
     /// Optional path to another JSON report file
-    pub report2: Option<String>
+    pub report2: Option<String>,
 }
-
 
 #[derive(Clap, Debug)]
 pub enum Command {
     /// Runs the benchmark
     Run(RunCommand),
     /// Displays the report(s) of previously executed benchmark(s)
-    Show(ShowCommand)
+    Show(ShowCommand),
 }
 
 #[derive(Clap, Debug)]
@@ -145,5 +144,5 @@ pub enum Command {
 )]
 pub struct AppConfig {
     #[clap(subcommand)]
-    pub command: Command
+    pub command: Command,
 }

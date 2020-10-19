@@ -18,9 +18,9 @@ use crate::progress::FastProgressBar;
 use crate::report::{Report, RunConfigCmp};
 use crate::session::*;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, QueryStats, Recorder};
-use crate::workload::{Workload, WorkloadStats};
 use crate::workload::read::Read;
 use crate::workload::write::Write;
+use crate::workload::{Workload, WorkloadStats};
 
 mod config;
 mod progress;
@@ -184,7 +184,7 @@ async fn run(conf: RunCommand) {
         workload.clone(),
         |w, i| w.populate(i),
     )
-        .await;
+    .await;
 
     par_execute(
         "Warming up...",
@@ -195,7 +195,7 @@ async fn run(conf: RunCommand) {
         workload.clone(),
         |w, i| w.run(i),
     )
-        .await;
+    .await;
 
     report::print_log_header();
     let stats = par_execute(
@@ -207,7 +207,7 @@ async fn run(conf: RunCommand) {
         workload.clone(),
         |w, i| w.run(i),
     )
-        .await;
+    .await;
 
     let stats_cmp = BenchmarkCmp {
         v1: &stats,
@@ -233,23 +233,22 @@ async fn run(conf: RunCommand) {
 
 async fn show(conf: ShowCommand) {
     let report1 = load_report_or_abort(&PathBuf::from(conf.report1));
-    let report2 = conf.report2.map(|p| {
-        load_report_or_abort(&PathBuf::from(p))
-    });
+    let report2 = conf
+        .report2
+        .map(|p| load_report_or_abort(&PathBuf::from(p)));
 
     let config_cmp = RunConfigCmp {
         v1: &report1.conf,
-        v2: report2.as_ref().map(|r| &r.conf)
+        v2: report2.as_ref().map(|r| &r.conf),
     };
     println!("{}", config_cmp);
 
     let results_cmp = BenchmarkCmp {
         v1: &report1.result,
-        v2: report2.as_ref().map(|r| &r.result)
+        v2: report2.as_ref().map(|r| &r.result),
     };
     println!("{}", results_cmp);
 }
-
 
 async fn async_main() {
     let command = AppConfig::parse().command;
@@ -258,7 +257,6 @@ async fn async_main() {
         Command::Show(config) => show(config).await,
     }
 }
-
 
 fn main() {
     console::set_colors_enabled(true);

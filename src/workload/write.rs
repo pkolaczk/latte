@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cassandra_cpp::{BindRustType, PreparedStatement, Session};
-use rand::{RngCore, thread_rng};
+use rand::{thread_rng, RngCore};
 
 use crate::workload::{Result, Workload, WorkloadConfig, WorkloadError, WorkloadStats};
 
