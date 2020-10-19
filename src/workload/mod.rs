@@ -2,8 +2,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cassandra_cpp::Statement;
+use clap::Clap;
 use err_derive::*;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+use strum::*;
 
 pub mod read;
 pub mod write;
@@ -18,17 +21,30 @@ pub enum WorkloadError {
 
 pub type Result<T> = std::result::Result<T, WorkloadError>;
 
+#[derive(Serialize, Deserialize, Debug, AsStaticStr, Clap, Copy, Clone)]
+pub enum Compaction {
+    None,
+    LCS,
+    STCS,
+}
+
 /// Parameters of a workload.
 /// Applies to read and write and possibly other workloads.
 pub struct WorkloadConfig {
     pub partitions: u64,
     pub columns: usize,
     pub column_size: usize,
+    pub compaction: Compaction,
 }
 
 impl WorkloadConfig {
     pub fn schema_params_str(&self) -> String {
-        format!("{}_{}", self.columns, self.column_size)
+        format!(
+            "{}_{}_{}",
+            self.columns,
+            self.column_size,
+            self.compaction.as_static()
+        )
     }
 }
 
@@ -60,6 +76,7 @@ where
 /// Common schema for both read and write workloads
 struct Schema {
     table_name: String,
+    compaction: Compaction,
     column_count: usize,
 }
 
@@ -76,15 +93,32 @@ impl Schema {
         let mut columns = Vec::with_capacity(1 + self.column_count);
         columns.push("pk BIGINT PRIMARY KEY".to_owned());
         columns.extend(self.data_columns().into_iter().map(|c| c + " BLOB"));
+
+        let compaction_str = match self.compaction {
+            Compaction::None => "{'class':'SizeTieredCompactionStrategy', 'enabled':'false'}",
+            Compaction::STCS => "{'class':'SizeTieredCompactionStrategy'}",
+            Compaction::LCS => "{'class':'LeveledCompactionStrategy'}",
+        };
+
         format!(
-            "CREATE TABLE IF NOT EXISTS {} ({})",
+            "CREATE TABLE IF NOT EXISTS {} ({}) WITH compaction = {}",
             self.table_name,
-            columns.join(", ")
+            columns.join(", "),
+            compaction_str
         )
     }
 
     pub fn create_table_stmt(&self) -> Statement {
         Statement::new(self.create_table_cql().as_str(), 0)
+    }
+
+    /// Returns the statement that drops the table
+    pub fn drop_table_cql(&self) -> String {
+        format!("DROP TABLE IF EXISTS {}", self.table_name)
+    }
+
+    pub fn drop_table_stmt(&self) -> Statement {
+        Statement::new(self.drop_table_cql().as_str(), 0)
     }
 
     /// Returns the INSERT INTO statement common to the read and write workloads
@@ -112,10 +146,12 @@ mod test {
         let s = Schema {
             table_name: "foo".to_owned(),
             column_count: 2,
+            compaction: Compaction::STCS,
         };
         assert_eq!(
             s.create_table_cql(),
-            "CREATE TABLE IF NOT EXISTS foo (pk BIGINT PRIMARY KEY, data_0 BLOB, data_1 BLOB)"
+            "CREATE TABLE IF NOT EXISTS foo (pk BIGINT PRIMARY KEY, data_0 BLOB, data_1 BLOB) \
+             WITH compaction = {'class':'SizeTieredCompactionStrategy'}"
         )
     }
 
@@ -124,6 +160,7 @@ mod test {
         let s = Schema {
             table_name: "foo".to_owned(),
             column_count: 2,
+            compaction: Compaction::STCS,
         };
         assert_eq!(
             s.insert_cql(),

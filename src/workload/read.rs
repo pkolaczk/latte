@@ -23,6 +23,7 @@ where
         let schema = super::Schema {
             table_name: "read".to_owned() + "_" + &conf.schema_params_str(),
             column_count: conf.columns,
+            compaction: conf.compaction,
         };
         let s = session.as_ref();
         s.execute(&schema.create_table_stmt()).await?;

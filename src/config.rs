@@ -2,7 +2,7 @@ use core::fmt;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
-use crate::workload::WorkloadConfig;
+use crate::workload::{Compaction, WorkloadConfig};
 use chrono::Utc;
 use clap::{AppSettings, Clap};
 use serde::{Deserialize, Serialize};
@@ -64,8 +64,8 @@ pub struct RunCommand {
     pub sampling_period: f64,
 
     /// Label that will be added to the report to help identifying the test
-    #[clap(short, long)]
-    pub label: Option<String>,
+    #[clap(long)]
+    pub tag: Option<String>,
 
     /// Path to an output file where the JSON report should be written to
     #[clap(short('o'), long)]
@@ -93,6 +93,10 @@ pub struct RunCommand {
     #[clap(short('S'), long, default_value("16"))]
     pub column_size: usize,
 
+    /// Cassandra compaction strategy to use for the data table
+    #[clap(arg_enum, long, default_value("stcs"))]
+    pub compaction: Compaction,
+
     /// List of Cassandra addresses to connect to
     #[clap(name = "addresses", required = true, default_value = "localhost")]
     pub addresses: Vec<String>,
@@ -115,6 +119,7 @@ impl RunCommand {
             partitions: self.partitions.unwrap_or(self.count),
             columns: self.columns,
             column_size: self.column_size,
+            compaction: self.compaction,
         }
     }
 }

@@ -6,7 +6,7 @@ use std::{fs, io};
 use chrono::{Local, NaiveDateTime, TimeZone};
 use err_derive::*;
 use serde::{Deserialize, Serialize};
-use strum::IntoEnumIterator;
+use strum::{AsStaticRef, IntoEnumIterator};
 
 use crate::config::RunCommand;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance};
@@ -195,6 +195,13 @@ impl Rational for String {
     }
 }
 
+impl Rational for &str {
+    fn ratio(_a: Self, _b: Self) -> Option<f32> {
+        None
+    }
+}
+
+
 impl Display for Significance {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let levels = [0.0001, 0.001, 0.01];
@@ -358,10 +365,11 @@ impl<'a> Display for RunConfigCmp<'a> {
         let lines: Vec<Box<dyn Display>> = vec![
             self.line("Date", "", |conf| self.format_time(conf, "%a, %d %b %Y")),
             self.line("Time", "", |conf| self.format_time(conf, "%H:%M:%S %z")),
-            self.line("Label", "", |conf| {
-                conf.label.clone().unwrap_or_else(|| "".to_string())
+            self.line("Tag", "", |conf| {
+                conf.tag.clone().unwrap_or_else(|| "".to_string())
             }),
             self.line("Workload", "", |conf| conf.workload.to_string()),
+            self.line("Compaction", "", |conf| conf.compaction.as_static()),
             self.line("Partitions", "", |conf| {
                 Quantity::new(conf.workload_config().partitions, 0)
             }),

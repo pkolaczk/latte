@@ -32,8 +32,10 @@ where
         let schema = super::Schema {
             table_name: "write".to_owned() + "_" + &conf.schema_params_str(),
             column_count: conf.columns,
+            compaction: conf.compaction,
         };
         let s = session.as_ref();
+        s.execute(&schema.drop_table_stmt()).await?;
         s.execute(&schema.create_table_stmt()).await?;
 
         let insert_cql = schema.insert_cql();
