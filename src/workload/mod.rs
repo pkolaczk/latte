@@ -5,6 +5,7 @@ use cassandra_cpp::Statement;
 use clap::Clap;
 use err_derive::*;
 use itertools::Itertools;
+use rand::{RngCore, thread_rng};
 use serde::{Deserialize, Serialize};
 use strum::*;
 
@@ -136,6 +137,18 @@ impl Schema {
         )
     }
 }
+
+
+/// Generates random blob of data of size `column_size`
+pub fn gen_random_blob(len: usize) -> Vec<u8> {
+    let mut rng = thread_rng();
+    let mut result = Vec::with_capacity(len);
+    for _ in 0..len {
+        result.push(rng.next_u32() as u8)
+    }
+    result
+}
+
 
 #[cfg(test)]
 mod test {

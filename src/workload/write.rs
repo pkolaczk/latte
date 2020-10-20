@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cassandra_cpp::{BindRustType, PreparedStatement, Session};
-use rand::{thread_rng, RngCore};
 
-use crate::workload::{Result, Workload, WorkloadConfig, WorkloadError, WorkloadStats};
+use crate::workload::{Result, Workload, WorkloadConfig, WorkloadError, WorkloadStats, gen_random_blob};
 
 /// A workload that writes rows to the table
 pub struct Write<S>
@@ -49,15 +48,6 @@ where
         })
     }
 
-    /// Generates random blob of data of size `column_size`
-    fn gen_random_blob(&self) -> Vec<u8> {
-        let mut rng = thread_rng();
-        let mut result = Vec::with_capacity(self.column_size);
-        for _ in 0..self.column_size {
-            result.push(rng.next_u32() as u8)
-        }
-        result
-    }
 }
 
 #[async_trait]
@@ -87,7 +77,7 @@ where
         let mut statement = self.write_statement.bind();
         statement.bind(0, (iteration % self.row_count) as i64)?;
         for i in 0..self.column_count {
-            statement.bind(i + 1, self.gen_random_blob())?;
+            statement.bind(i + 1, gen_random_blob(self.column_size))?;
         }
         let result = s.execute(&statement);
         result.await?;

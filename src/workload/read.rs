@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cassandra_cpp::{BindRustType, PreparedStatement, Session};
 
-use crate::workload::{Result, Workload, WorkloadConfig, WorkloadStats};
+use crate::workload::{Result, Workload, WorkloadConfig, WorkloadStats, gen_random_blob};
 
 pub struct Read<S>
 where
@@ -11,6 +11,8 @@ where
 {
     session: S,
     row_count: u64,
+    column_count: usize,
+    column_size: usize,
     write_statement: PreparedStatement,
     read_statement: PreparedStatement,
 }
@@ -34,6 +36,8 @@ where
         Ok(Read {
             session,
             row_count: conf.partitions,
+            column_count: conf.columns,
+            column_size: conf.column_size,
             write_statement: write,
             read_statement: read,
         })
@@ -57,6 +61,9 @@ where
 
         let mut statement = self.write_statement.bind();
         statement.bind(0, (iteration % self.row_count) as i64)?;
+        for i in 0..self.column_count {
+            statement.bind(i + 1, gen_random_blob(self.column_size))?;
+        }
         let result = s.execute(&statement);
         result.await?;
 
