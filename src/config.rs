@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum Workload {
     Read,
     Write,
+    Null,
 }
 
 impl Display for Workload {
@@ -18,6 +19,7 @@ impl Display for Workload {
         match self {
             Workload::Read => write!(f, "read")?,
             Workload::Write => write!(f, "write")?,
+            Workload::Null => write!(f, "null")?,
         };
         Ok(())
     }

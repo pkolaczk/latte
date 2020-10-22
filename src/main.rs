@@ -2,14 +2,13 @@ use std::cmp::max;
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use cassandra_cpp::Session;
 use clap::Clap;
-use tokio::macros::support::Future;
-use tokio::stream::StreamExt;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Semaphore;
-use tokio::time::{Duration, Instant, Interval};
+use futures::{Future, SinkExt, Stream, StreamExt};
+use tokio::runtime::Builder;
+use tokio::time::Interval;
 
 use config::RunCommand;
 
@@ -17,7 +16,8 @@ use crate::config::{AppConfig, Command, ShowCommand};
 use crate::progress::FastProgressBar;
 use crate::report::{Report, RunConfigCmp};
 use crate::session::*;
-use crate::stats::{BenchmarkCmp, BenchmarkStats, QueryStats, Recorder};
+use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder, RequestStats, Sample};
+use crate::workload::null::Null;
 use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
@@ -47,6 +47,7 @@ async fn workload(conf: &RunCommand, session: Session) -> Arc<dyn Workload> {
     match conf.workload {
         config::Workload::Read => Arc::new(unwrap_workload(Read::new(session, &wc).await)),
         config::Workload::Write => Arc::new(unwrap_workload(Write::new(session, &wc).await)),
+        config::Workload::Null => Arc::new(Null {}),
     }
 }
 
@@ -61,6 +62,83 @@ fn round(duration: Duration, period: Duration) -> Duration {
     duration /= period.as_micros();
     duration *= period.as_micros();
     Duration::from_micros(duration as u64)
+}
+
+/// Runs a series of requests on a separate thread and
+/// produces a stream of QueryStats
+fn req_stream<F, C, R, E>(
+    count: u64,
+    parallelism: usize,
+    rate: Option<f64>,
+    sampling_period: Duration,
+    context: Arc<C>,
+    action: F,
+) -> impl Stream<Item = Sample>
+where
+    F: Fn(Arc<C>, u64) -> R + Send + Sync + 'static,
+    C: ?Sized + Send + Sync + 'static,
+    R: Future<Output = Result<WorkloadStats, E>> + Send,
+    E: Send + 'static,
+{
+    let (mut tx, rx) = futures::channel::mpsc::channel(1024);
+
+    tokio::spawn(async move {
+        let rate = rate.unwrap_or(f64::MAX);
+        let action = &action;
+        let mut req_stats = interval(rate)
+            .take(count as usize)
+            .enumerate()
+            .map(|(i, _)| {
+                let context = context.clone();
+                async move {
+                    let start = Instant::now();
+                    let result = action(context, i as u64).await;
+                    let end = Instant::now();
+                    RequestStats::from_result(result, end - start)
+                }
+            })
+            .buffer_unordered(parallelism);
+
+        let mut sample = Sample::new(Instant::now());
+        while let Some(req) = req_stats.next().await {
+            sample.record(req);
+            let now = Instant::now();
+            if now - sample.start_time > sampling_period {
+                let start_time = sample.start_time;
+                let elapsed_rounded = round(now - start_time, sampling_period);
+                let end_time = start_time + elapsed_rounded;
+                sample.finish(end_time);
+                tx.send(sample).await.unwrap();
+                sample = Sample::new(end_time);
+            }
+        }
+        if !sample.is_empty() {
+            sample.finish(Instant::now());
+            tx.send(sample).await.unwrap();
+        }
+    });
+
+    rx
+}
+
+/// Waits until one item arrives in each of the streams
+/// and collects them into a vector.
+/// If all streams are finished, returns None.
+async fn take_one_of_each<S, T>(v: &mut Vec<S>) -> Option<Vec<T>>
+where
+    S: Stream<Item = T> + std::marker::Unpin,
+{
+    let mut result = Vec::with_capacity(v.len());
+    for s in v {
+        if let Some(item) = s.next().await {
+            result.push(item)
+        }
+    }
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 /// Executes the given function many times in parallel.
@@ -78,6 +156,7 @@ fn round(duration: Duration, period: Duration) -> Duration {
 async fn par_execute<F, C, R, RE>(
     name: &str,
     count: u64,
+    threads: usize,
     parallelism: usize,
     rate: Option<f64>,
     sampling_period: Duration,
@@ -88,61 +167,37 @@ where
     F: Fn(Arc<C>, u64) -> R + Send + Sync + Copy + 'static,
     C: ?Sized + Send + Sync + 'static,
     R: Future<Output = Result<WorkloadStats, RE>> + Send,
-    RE: Send,
+    RE: Send + 'static,
 {
-    let progress = Arc::new(FastProgressBar::new_progress_bar(name, count));
+    let progress = FastProgressBar::new_progress_bar(name, count);
+    let progress_ref_1 = Arc::new(progress);
+    let progress_ref_2 = progress_ref_1.clone();
     let mut stats = Recorder::start(rate, parallelism);
-    let mut interval = interval(rate.unwrap_or(f64::MAX));
-    let semaphore = Arc::new(Semaphore::new(parallelism));
+    let action = move |c, i| {
+        let result = action(c, i);
+        progress_ref_1.tick();
+        result
+    };
 
-    type Item = Result<QueryStats, ()>;
-    let (tx, mut rx): (Sender<Item>, Receiver<Item>) = tokio::sync::mpsc::channel(parallelism);
-
-    for i in 0..count {
-        if rate.is_some() {
-            interval.tick().await;
-        }
-        let permit = semaphore.clone().acquire_owned().await;
-        let concurrent_count = parallelism - semaphore.available_permits();
-        stats.enqueued(concurrent_count);
-
-        let now = Instant::now();
-        if now - stats.last_sample_time() > sampling_period {
-            let start_time = stats.start_time;
-            let elapsed_rounded = round(now - start_time, sampling_period);
-            let sample_time = start_time + elapsed_rounded;
-            let log_line = stats.sample(sample_time).to_string();
-            progress.println(log_line);
-        }
-
-        while let Ok(d) = rx.try_recv() {
-            stats.record(d);
-            progress.tick();
-        }
-        let mut tx = tx.clone();
-        let context = context.clone();
-        tokio::spawn(async move {
-            let start = Instant::now();
-            match action(context, i).await {
-                Ok(result) => {
-                    let end = Instant::now();
-                    let s = QueryStats {
-                        duration: max(Duration::from_micros(1), end - start),
-                        row_count: result.row_count,
-                        partition_count: result.partition_count,
-                    };
-                    tx.send(Ok(s)).await.unwrap();
-                }
-                Err(_) => tx.send(Err(())).await.unwrap(),
-            }
-            drop(permit);
-        });
+    let mut streams = Vec::with_capacity(threads);
+    let count = max(1, count / threads as u64);
+    for _ in 0..threads {
+        let s = req_stream(
+            count,
+            parallelism,
+            rate,
+            sampling_period,
+            context.clone(),
+            action.clone(),
+        );
+        streams.push(s)
     }
-    drop(tx);
 
-    while let Some(d) = rx.next().await {
-        stats.record(d);
-        progress.tick();
+    while let Some(samples) = take_one_of_each(&mut streams).await {
+        let aggregate = stats.record(&samples);
+        if sampling_period.as_secs() < u64::MAX {
+            progress_ref_2.println(format!("{}", aggregate));
+        }
     }
     stats.finish()
 }
@@ -178,6 +233,7 @@ async fn run(conf: RunCommand) {
     par_execute(
         "Populating...",
         workload.populate_count(),
+        conf.threads,
         conf.parallelism,
         None, // make it as fast as possible
         Duration::from_secs(u64::MAX),
@@ -189,6 +245,7 @@ async fn run(conf: RunCommand) {
     par_execute(
         "Warming up...",
         conf.warmup_count,
+        conf.threads,
         conf.parallelism,
         None,
         Duration::from_secs(u64::MAX),
@@ -201,6 +258,7 @@ async fn run(conf: RunCommand) {
     let stats = par_execute(
         "Running...",
         conf.count,
+        conf.threads,
         conf.parallelism,
         conf.rate,
         Duration::from_secs_f64(conf.sampling_period),
@@ -260,12 +318,10 @@ async fn async_main() {
 
 fn main() {
     console::set_colors_enabled(true);
-    let mut runtime = tokio::runtime::Builder::new()
-        .max_threads(1)
-        .basic_scheduler()
+    Builder::new_multi_thread()
+        .thread_name("tokio")
         .enable_time()
         .build()
-        .unwrap();
-
-    runtime.block_on(async_main());
+        .unwrap()
+        .block_on(async_main());
 }

@@ -6,7 +6,6 @@ use console::{style, Term};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::Write;
 use std::io::{stderr, stdout};
-use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -38,8 +37,6 @@ use std::time::Duration;
 pub struct FastProgressBar {
     counter: Arc<RelaxedCounter>,
     progress_bar: Arc<ProgressBar>,
-    stdout_tx: Sender<String>,
-    stderr_tx: Sender<String>,
 }
 
 #[allow(unused)]
@@ -61,26 +58,8 @@ impl FastProgressBar {
         let pb2 = pb.clone();
         let counter = Arc::new(RelaxedCounter::new(0));
         let counter2 = counter.clone();
-        let (stdout_tx, stdout_rx) = channel();
-        let (stderr_tx, stderr_rx) = channel();
         thread::spawn(move || {
-            let stdout = Term::stdout();
-            let stderr = Term::stderr();
             while Arc::strong_count(&counter2) > 1 && !pb2.is_finished() {
-                while let Ok(msg) = stdout_rx.try_recv() {
-                    if stdout.is_term() && stderr.is_term() {
-                        pb2.println(msg);
-                    } else {
-                        println!("{}", msg)
-                    }
-                }
-                while let Ok(msg) = stderr_rx.try_recv() {
-                    if stderr.is_term() && stderr.is_term() {
-                        pb2.println(msg);
-                    } else {
-                        eprintln!("{}", msg)
-                    }
-                }
                 pb2.set_position(counter2.get() as u64);
                 thread::sleep(Duration::from_millis(Self::REFRESH_PERIOD_MS));
             }
@@ -88,8 +67,6 @@ impl FastProgressBar {
         FastProgressBar {
             counter,
             progress_bar: pb,
-            stdout_tx,
-            stderr_tx,
         }
     }
 
@@ -188,11 +165,19 @@ impl FastProgressBar {
     }
 
     pub fn println<I: Into<String>>(&self, msg: I) {
-        self.stdout_tx.send(msg.into());
+        if Term::stdout().is_term() {
+            self.progress_bar.println(msg);
+        } else {
+            println!("{}", msg.into());
+        }
     }
 
     pub fn eprintln<I: Into<String>>(&self, msg: I) {
-        self.stderr_tx.send(msg.into());
+        if Term::stderr().is_term() {
+            self.progress_bar.println(msg);
+        } else {
+            eprintln!("{}", msg.into());
+        }
     }
 
     pub fn tick(&self) {
