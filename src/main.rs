@@ -7,22 +7,25 @@ use std::time::{Duration, Instant};
 use cassandra_cpp::Session;
 use clap::Clap;
 use futures::{Future, SinkExt, Stream, StreamExt};
+use futures::future::ready;
 use tokio::runtime::Builder;
 use tokio::time::Interval;
 
 use config::RunCommand;
 
 use crate::config::{AppConfig, Command, ShowCommand};
+use crate::count_down::{CountDown, BatchedCountDown};
 use crate::progress::FastProgressBar;
 use crate::report::{Report, RunConfigCmp};
 use crate::session::*;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder, RequestStats, Sample};
+use crate::workload::{Workload, WorkloadStats};
 use crate::workload::null::Null;
 use crate::workload::read::Read;
 use crate::workload::write::Write;
-use crate::workload::{Workload, WorkloadStats};
 
 mod config;
+mod count_down;
 mod progress;
 mod report;
 mod session;
@@ -67,7 +70,7 @@ fn round(duration: Duration, period: Duration) -> Duration {
 /// Runs a series of requests on a separate thread and
 /// produces a stream of QueryStats
 fn req_stream<F, C, R, E>(
-    count: u64,
+    count: Arc<CountDown>,
     parallelism: usize,
     rate: Option<f64>,
     sampling_period: Duration,
@@ -80,13 +83,14 @@ where
     R: Future<Output = Result<WorkloadStats, E>> + Send,
     E: Send + 'static,
 {
-    let (mut tx, rx) = futures::channel::mpsc::channel(1024);
+    let (mut tx, rx) = futures::channel::mpsc::channel(16);
 
     tokio::spawn(async move {
         let rate = rate.unwrap_or(f64::MAX);
         let action = &action;
+        let mut counter = BatchedCountDown::new(count, 64);
         let mut req_stats = interval(rate)
-            .take(count as usize)
+            .take_while(|_| ready(counter.dec()))
             .enumerate()
             .map(|(i, _)| {
                 let context = context.clone();
@@ -123,17 +127,27 @@ where
 
 /// Waits until one item arrives in each of the streams
 /// and collects them into a vector.
-/// If all streams are finished, returns None.
-async fn take_one_of_each<S, T>(v: &mut Vec<S>) -> Option<Vec<T>>
+/// Finished streams are removed from `streams`.
+/// If all streams are finished, `None` is returned.
+async fn take_one_of_each<S, T>(streams: &mut Vec<S>) -> Option<Vec<T>>
 where
     S: Stream<Item = T> + std::marker::Unpin,
 {
-    let mut result = Vec::with_capacity(v.len());
-    for s in v {
-        if let Some(item) = s.next().await {
-            result.push(item)
+    let mut result = Vec::with_capacity(streams.len());
+    let mut keep: Vec<bool> = Vec::with_capacity(streams.len());
+    for s in streams.iter_mut() {
+        match s.next().await {
+            Some(item) => {
+                result.push(item);
+                keep.push(true);
+            },
+            None =>
+                keep.push(false)
         }
     }
+    let mut i = 0;
+    streams.retain(|_| (keep[i], i += 1).0);
+
     if result.is_empty() {
         None
     } else {
@@ -148,6 +162,7 @@ where
 /// # Parameters
 ///   - `name`: text displayed next to the progress bar
 ///   - `count`: number of iterations
+///   - `threads`: number of threads to run in parallel
 ///   - `parallelism`: maximum number of concurrent executions of `action`
 ///   - `rate`: optional rate limit given as number of calls to `action` per second
 ///   - `context`: a shared object to be passed to all invocations of `action`,
@@ -180,10 +195,10 @@ where
     };
 
     let mut streams = Vec::with_capacity(threads);
-    let count = max(1, count / threads as u64);
+    let count = Arc::new(CountDown::new(count));
     for _ in 0..threads {
         let s = req_stream(
-            count,
+            count.clone(),
             parallelism,
             rate,
             sampling_period,
