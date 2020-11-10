@@ -1,7 +1,7 @@
 [package]
 name = "latte"
 description = "Cassandra Latency and Throughput Tester. Runs CQL queries in parallel, measures performance and computes useful statistics."
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Piotr Kołaczkowski <pkolaczk@datastax.com>"]
 edition = "2018"
 
