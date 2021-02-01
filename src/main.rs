@@ -134,8 +134,8 @@ where
 /// and collects them into a vector.
 /// Finished streams are removed from `streams`.
 async fn take_one_of_each<S, T>(streams: &mut Vec<S>) -> Vec<T>
-    where
-        S: Stream<Item=T> + std::marker::Unpin,
+where
+    S: Stream<Item=T> + std::marker::Unpin,
 {
     let mut result = Vec::with_capacity(streams.len());
     for i in (0..streams.len()).rev() {
