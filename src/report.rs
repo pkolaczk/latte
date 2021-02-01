@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use strum::{AsStaticRef, IntoEnumIterator};
 
 use crate::config::RunCommand;
-use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance};
+use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, SampleStats, Significance};
 use statrs::statistics::Statistics;
 
 /// A standard error is multiplied by this factor to get the error margin.
@@ -200,7 +200,6 @@ impl Rational for &str {
         None
     }
 }
-
 
 impl Display for Significance {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -409,7 +408,7 @@ pub fn print_log_header() {
       \x20    [s]     [req/s]           Min        25        50        75        90        95        99       Max");
 }
 
-impl Display for Sample {
+impl Display for SampleStats {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -468,10 +467,10 @@ impl<'a> Display for BenchmarkCmp<'a> {
             self.line("Rows", "", |s| Quantity::new(s.rows, 0)),
             self.line("Samples", "", |s| Quantity::new(s.samples.len(), 0)),
             self.line("Mean sample size", "req", |s| {
-                Quantity::new(s.samples.iter().map(|s| s.count as f64).mean(), 0)
+                Quantity::new(s.samples.iter().map(|s| s.request_count as f64).mean(), 0)
             }),
             self.line("Parallelism", "req", |s| {
-                Quantity::new(s.parallelism, 1).with_ratio(s.parallelism_ratio)
+                Quantity::new(s.parallelism.value, 1).with_ratio(s.parallelism_ratio)
             }),
             self.line("Throughput", "req/s", |s| {
                 Quantity::new(s.throughput.value, 0)

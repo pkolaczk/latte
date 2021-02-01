@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum Workload {
     Read,
     Write,
+    Null,
 }
 
 impl Display for Workload {
@@ -18,6 +19,7 @@ impl Display for Workload {
         match self {
             Workload::Read => write!(f, "read")?,
             Workload::Write => write!(f, "write")?,
+            Workload::Null => write!(f, "null")?,
         };
         Ok(())
     }
@@ -51,12 +53,12 @@ pub struct RunCommand {
     #[clap(short('t'), long, default_value = "1")]
     pub threads: usize,
 
-    /// Number of connections per io_thread
+    /// Number of connections per IO thread
     #[clap(short('c'), long, default_value = "1")]
     pub connections: usize,
 
-    /// Max number of concurrent async requests
-    #[clap(short('p'), long, default_value = "1024")]
+    /// Max number of concurrent async requests per IO thread
+    #[clap(short('p'), long, default_value = "256")]
     pub parallelism: usize,
 
     /// Throughput sampling period, in seconds

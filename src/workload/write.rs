@@ -3,7 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cassandra_cpp::{BindRustType, PreparedStatement, Session};
 
-use crate::workload::{Result, Workload, WorkloadConfig, WorkloadError, WorkloadStats, gen_random_blob};
+use crate::workload::{
+    gen_random_blob, Result, Workload, WorkloadConfig, WorkloadError, WorkloadStats,
+};
 
 /// A workload that writes rows to the table
 pub struct Write<S>
@@ -47,7 +49,6 @@ where
             write_statement,
         })
     }
-
 }
 
 #[async_trait]

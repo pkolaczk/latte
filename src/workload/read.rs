@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cassandra_cpp::{BindRustType, PreparedStatement, Session};
 
-use crate::workload::{Result, Workload, WorkloadConfig, WorkloadStats, gen_random_blob};
+use crate::workload::{gen_random_blob, Result, Workload, WorkloadConfig, WorkloadStats};
 
 pub struct Read<S>
 where
