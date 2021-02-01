@@ -6,23 +6,24 @@ use std::time::{Duration, Instant};
 
 use cassandra_cpp::Session;
 use clap::Clap;
-use futures::{Future, SinkExt, Stream, StreamExt};
 use futures::future::ready;
+use futures::{Future, SinkExt, Stream, StreamExt};
 use tokio::runtime::Builder;
 use tokio::time::Interval;
 
 use config::RunCommand;
 
 use crate::config::{AppConfig, Command, ShowCommand};
-use crate::count_down::{CountDown, BatchedCountDown};
+use crate::count_down::{BatchedCountDown, CountDown};
 use crate::progress::FastProgressBar;
 use crate::report::{Report, RunConfigCmp};
 use crate::session::*;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder, RequestStats, Sample};
-use crate::workload::{Workload, WorkloadStats};
 use crate::workload::null::Null;
 use crate::workload::read::Read;
 use crate::workload::write::Write;
+use crate::workload::{Workload, WorkloadStats};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod config;
 mod count_down;
@@ -88,17 +89,21 @@ where
     tokio::spawn(async move {
         let rate = rate.unwrap_or(f64::MAX);
         let action = &action;
-        let mut counter = BatchedCountDown::new(count, 64);
+        let mut remaining_count = BatchedCountDown::new(count, 64);
+        let pending_count = AtomicUsize::new(0);
         let mut req_stats = interval(rate)
-            .take_while(|_| ready(counter.dec()))
+            .take_while(|_| ready(remaining_count.dec()))
             .enumerate()
             .map(|(i, _)| {
                 let context = context.clone();
+                let pending_count = &pending_count;
                 async move {
+                    let queue_len = pending_count.fetch_add(1, Ordering::Relaxed);
                     let start = Instant::now();
                     let result = action(context, i as u64).await;
                     let end = Instant::now();
-                    RequestStats::from_result(result, end - start)
+                    pending_count.fetch_sub(1, Ordering::Relaxed);
+                    RequestStats::from_result(result, end - start, queue_len)
                 }
             })
             .buffer_unordered(parallelism);
@@ -128,31 +133,32 @@ where
 /// Waits until one item arrives in each of the streams
 /// and collects them into a vector.
 /// Finished streams are removed from `streams`.
-/// If all streams are finished, `None` is returned.
-async fn take_one_of_each<S, T>(streams: &mut Vec<S>) -> Option<Vec<T>>
-where
-    S: Stream<Item = T> + std::marker::Unpin,
+async fn take_one_of_each<S, T>(streams: &mut Vec<S>) -> Vec<T>
+    where
+        S: Stream<Item=T> + std::marker::Unpin,
 {
     let mut result = Vec::with_capacity(streams.len());
-    let mut keep: Vec<bool> = Vec::with_capacity(streams.len());
-    for s in streams.iter_mut() {
-        match s.next().await {
+    for i in (0..streams.len()).rev() {
+        match streams[i].next().await {
             Some(item) => {
                 result.push(item);
-                keep.push(true);
-            },
-            None =>
-                keep.push(false)
+            }
+            None => {
+                streams.swap_remove(i);
+            }
         }
     }
-    let mut i = 0;
-    streams.retain(|_| (keep[i], i += 1).0);
+    result
+}
 
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
+/// Controls the intensity of requests sent to the server
+struct ExecutionOptions {
+    /// Maximum rate of requests in requests per second, None means no limit
+    rate: Option<f64>,
+    /// Number of parallel threads of execution
+    threads: usize,
+    /// Number of outstanding async requests per each thread
+    parallelism: usize,
 }
 
 /// Executes the given function many times in parallel.
@@ -171,9 +177,7 @@ where
 async fn par_execute<F, C, R, RE>(
     name: &str,
     count: u64,
-    threads: usize,
-    parallelism: usize,
-    rate: Option<f64>,
+    exec_options: &ExecutionOptions,
     sampling_period: Duration,
     context: Arc<C>,
     action: F,
@@ -184,6 +188,10 @@ where
     R: Future<Output = Result<WorkloadStats, RE>> + Send,
     RE: Send + 'static,
 {
+    let threads = exec_options.threads;
+    let parallelism = exec_options.parallelism;
+    let rate = exec_options.rate;
+
     let progress = FastProgressBar::new_progress_bar(name, count);
     let progress_ref_1 = Arc::new(progress);
     let progress_ref_2 = progress_ref_1.clone();
@@ -200,7 +208,7 @@ where
         let s = req_stream(
             count.clone(),
             parallelism,
-            rate,
+            rate.map(|r| r / (threads as f64)),
             sampling_period,
             context.clone(),
             action.clone(),
@@ -208,12 +216,16 @@ where
         streams.push(s)
     }
 
-    while let Some(samples) = take_one_of_each(&mut streams).await {
-        let aggregate = stats.record(&samples);
-        if sampling_period.as_secs() < u64::MAX {
-            progress_ref_2.println(format!("{}", aggregate));
+    while !streams.is_empty() {
+        let samples = take_one_of_each(&mut streams).await;
+        if !samples.is_empty() {
+            let aggregate = stats.record(&samples);
+            if sampling_period.as_secs() < u64::MAX {
+                progress_ref_2.println(format!("{}", aggregate));
+            }
         }
     }
+
     stats.finish()
 }
 
@@ -236,21 +248,24 @@ async fn run(conf: RunCommand) {
     setup_keyspace_or_abort(&conf, &session).await;
     let session = connect_keyspace_or_abort(&mut cluster, conf.keyspace.as_str()).await;
     let workload = workload(&conf, session).await;
+    let exec_options = ExecutionOptions {
+        parallelism: conf.parallelism,
+        rate: conf.rate,
+        threads: conf.threads,
+    };
 
     println!(
         "{}",
         RunConfigCmp {
             v1: &conf,
-            v2: compare.as_ref().map(|c| &c.conf)
+            v2: compare.as_ref().map(|c| &c.conf),
         }
     );
 
     par_execute(
         "Populating...",
         workload.populate_count(),
-        conf.threads,
-        conf.parallelism,
-        None, // make it as fast as possible
+        &exec_options,
         Duration::from_secs(u64::MAX),
         workload.clone(),
         |w, i| w.populate(i),
@@ -260,9 +275,7 @@ async fn run(conf: RunCommand) {
     par_execute(
         "Warming up...",
         conf.warmup_count,
-        conf.threads,
-        conf.parallelism,
-        None,
+        &exec_options,
         Duration::from_secs(u64::MAX),
         workload.clone(),
         |w, i| w.run(i),
@@ -273,9 +286,7 @@ async fn run(conf: RunCommand) {
     let stats = par_execute(
         "Running...",
         conf.count,
-        conf.threads,
-        conf.parallelism,
-        conf.rate,
+        &exec_options,
         Duration::from_secs_f64(conf.sampling_period),
         workload.clone(),
         |w, i| w.run(i),
@@ -339,4 +350,22 @@ fn main() {
         .build()
         .unwrap()
         .block_on(async_main());
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_take_one_of_each() {
+        let s1 = futures::stream::iter(1..=3);
+        let s2 = futures::stream::iter(1..=2);
+        let s3 = futures::stream::iter(1..=2);
+        let mut streams = vec![s1, s2, s3];
+        assert_eq!(take_one_of_each(&mut streams).await, vec![1, 1, 1]);
+        assert_eq!(take_one_of_each(&mut streams).await, vec![2, 2, 2]);
+        assert_eq!(take_one_of_each(&mut streams).await, vec![3]);
+        assert_eq!(take_one_of_each(&mut streams).await, Vec::<u32>::new());
+        assert!(streams.is_empty());
+    }
 }

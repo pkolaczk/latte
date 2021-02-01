@@ -1,8 +1,6 @@
 use std::cmp::{max, min};
-use std::f64::consts;
 use std::time::{Duration, Instant};
 
-use crate::workload::WorkloadStats;
 use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
@@ -10,6 +8,8 @@ use statrs::distribution::{StudentsT, Univariate};
 use strum::EnumCount;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumCount as EnumCountM, EnumIter};
+
+use crate::workload::WorkloadStats;
 
 /// Controls the maximum order of autocovariance taken into
 /// account when estimating the long run mean error. Higher values make the estimator
@@ -21,9 +21,15 @@ use strum_macros::{EnumCount as EnumCountM, EnumIter};
 /// Valid range is 0.0 to 1.0.
 const BANDWIDTH_COEFF: f64 = 0.66;
 
-/// Arithmetic mean of values in the vector
-pub fn mean(v: &[f32]) -> f64 {
-    v.iter().map(|x| *x as f64).sum::<f64>() / v.len() as f64
+/// Arithmetic weighted mean of values in the vector
+pub fn mean(values: &[f32], weights: &[f32]) -> f64 {
+    let sum_values = values
+        .iter()
+        .zip(weights)
+        .map(|(&v, &w)| (v as f64) * (w as f64))
+        .sum::<f64>();
+    let sum_weights = weights.iter().map(|&v| v as f64).sum::<f64>();
+    sum_values / sum_weights
 }
 
 /// Estimates the variance of the mean of a time-series.
@@ -33,33 +39,36 @@ pub fn mean(v: &[f32]) -> f64 {
 /// Contrary to the classic variance estimator, the order of the
 /// data points does matter here. If the observations are totally independent from each other,
 /// the expected return value of this function is close to the expected sample variance.
-pub fn long_run_variance(mean: f64, v: &[f32]) -> f64 {
-    if v.len() <= 1 {
+pub fn long_run_variance(mean: f64, values: &[f32], weights: &[f32]) -> f64 {
+    if values.len() <= 1 {
         return f64::NAN;
     }
-    let len = v.len() as f64;
+    let len = values.len() as f64;
 
     // Compute the variance:
+    let mut sum_weights = 0.0;
     let mut var = 0.0;
-    for x in v.iter() {
-        let diff = *x as f64 - mean;
-        var += diff * diff;
+    for (&v, &w) in values.iter().zip(weights) {
+        let diff = v as f64 - mean;
+        let w = w as f64;
+        var += diff * diff * w;
+        sum_weights += w;
     }
-    var /= len;
+    var /= sum_weights;
 
     // Compute a sum of autocovariances of orders 1 to (cutoff - 1).
     // Cutoff (bandwidth) and diminishing weights are needed to reduce random error
     // introduced by higher order autocovariance estimates.
+    // TODO: apply input weights
     let bandwidth = len.powf(BANDWIDTH_COEFF);
-    let max_lag = min(v.len(), bandwidth.ceil() as usize);
+    let max_lag = min(values.len(), bandwidth.ceil() as usize);
     let mut cov = 0.0;
     for lag in 1..max_lag {
         let rel_lag = lag as f64 / bandwidth;
-        let weight = 0.5 * (1.0 + (consts::PI * rel_lag).cos());
-        //let weight = 1.0 - rel_lag;
-        for i in lag..v.len() {
-            let diff_1 = v[i] as f64 - mean;
-            let diff_2 = v[i - lag] as f64 - mean;
+        let weight = 1.0 - rel_lag;
+        for i in lag..values.len() {
+            let diff_1 = values[i] as f64 - mean;
+            let diff_2 = values[i - lag] as f64 - mean;
             cov += 2.0 * diff_1 * diff_2 * weight;
         }
     }
@@ -79,8 +88,8 @@ pub fn long_run_variance(mean: f64, v: &[f32]) -> f64 {
 
 /// Estimates the error of the mean of a time-series.
 /// See `long_run_variance`.
-pub fn long_run_err(mean: f64, v: &[f32]) -> f64 {
-    (long_run_variance(mean, &v) / v.len() as f64).sqrt()
+pub fn long_run_err(mean: f64, values: &[f32], weights: &[f32]) -> f64 {
+    (long_run_variance(mean, &values, weights) / values.len() as f64).sqrt()
 }
 
 /// Holds a mean and its error together.
@@ -93,13 +102,13 @@ pub struct Mean {
     pub std_err: f64,
 }
 
-impl From<&[f32]> for Mean {
-    fn from(v: &[f32]) -> Self {
-        let m = mean(&v);
+impl Mean {
+    pub fn compute(v: &[f32], weights: &[f32]) -> Self {
+        let m = mean(&v, &weights);
         Mean {
             n: v.len() as u64,
             value: m,
-            std_err: long_run_err(m, &v),
+            std_err: long_run_err(m, &v, &weights),
         }
     }
 }
@@ -132,22 +141,29 @@ pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
 #[derive(Debug)]
 pub struct RequestStats {
     pub duration: Duration,
+    pub queue_len: usize,
     pub error_count: u64,
     pub row_count: u64,
     pub partition_count: u64,
 }
 
 impl RequestStats {
-    pub fn from_result<E>(s: Result<WorkloadStats, E>, duration: Duration) -> RequestStats {
+    pub fn from_result<E>(
+        s: Result<WorkloadStats, E>,
+        duration: Duration,
+        queue_len: usize,
+    ) -> RequestStats {
         match s {
             Ok(s) => RequestStats {
                 duration,
+                queue_len,
                 error_count: 0,
                 row_count: s.row_count,
                 partition_count: s.partition_count,
             },
             Err(_) => RequestStats {
                 duration,
+                queue_len,
                 error_count: 1,
                 row_count: 0,
                 partition_count: 0,
@@ -223,9 +239,11 @@ impl Percentile {
 pub struct Sample {
     pub start_time: Instant,
     pub end_time: Instant,
+    pub request_count: u64,
     pub partition_count: u64,
     pub row_count: u64,
     pub error_count: u64,
+    pub mean_parallelism: f32,
     pub histogram: Histogram<u64>,
 }
 
@@ -234,17 +252,22 @@ impl Sample {
         Sample {
             start_time,
             end_time: start_time,
+            request_count: 0,
             partition_count: 0,
             row_count: 0,
             error_count: 0,
+            mean_parallelism: 0.0,
             histogram: Histogram::new(3).unwrap(),
         }
     }
 
     pub fn record(&mut self, stats: RequestStats) {
+        self.request_count += 1;
         self.error_count += stats.error_count;
         self.partition_count += stats.partition_count;
         self.row_count += stats.row_count;
+        self.mean_parallelism +=
+            (stats.queue_len as f32 - self.mean_parallelism) / self.request_count as f32;
         self.histogram
             .record(max(1, stats.duration.as_micros() as u64))
             .unwrap();
@@ -268,6 +291,7 @@ pub struct SampleStats {
     pub partition_count: u64,
     pub row_count: u64,
     pub error_count: u64,
+    pub mean_parallelism: f32,
     pub throughput: f32,
     pub mean_resp_time_ms: f32,
     pub resp_time_percentiles: [f32; Percentile::COUNT],
@@ -280,14 +304,16 @@ impl SampleStats {
         let mut partition_count = 0;
         let mut row_count = 0;
         let mut error_count = 0;
+        let mut mean_parallelism = 0.0;
         let mut duration_s = 0.0;
         let mut histogram = Histogram::new(3).unwrap();
 
         for s in samples {
-            request_count += s.histogram.len() as u64;
+            request_count += s.request_count;
             partition_count += s.partition_count;
             row_count += s.row_count;
             error_count += s.error_count;
+            mean_parallelism += s.mean_parallelism / samples.len() as f32;
             duration_s += (s.end_time - s.start_time).as_secs_f32() / samples.len() as f32;
             histogram.add(&s.histogram).unwrap();
         }
@@ -304,6 +330,7 @@ impl SampleStats {
             partition_count,
             row_count,
             error_count,
+            mean_parallelism,
             throughput: request_count as f32 / duration_s,
             mean_resp_time_ms: histogram.mean() as f32 / 1000.0,
             resp_time_percentiles: percentiles,
@@ -328,9 +355,17 @@ impl Log {
         self.samples.last().unwrap()
     }
 
+    fn weights_by_request_count(&self) -> Vec<f32> {
+        self.samples
+            .iter()
+            .map(|s| s.request_count as f32)
+            .collect()
+    }
+
     fn throughput(&self) -> Mean {
         let t: Vec<f32> = self.samples.iter().map(|s| s.throughput).collect();
-        Mean::from(t.as_slice())
+        let w: Vec<f32> = self.samples.iter().map(|s| s.duration_s).collect();
+        Mean::compute(t.as_slice(), w.as_slice())
     }
 
     fn throughput_histogram(&self) -> Histogram<u64> {
@@ -352,7 +387,8 @@ impl Log {
 
     fn resp_time_ms(&self) -> Mean {
         let t: Vec<f32> = self.samples.iter().map(|s| s.mean_resp_time_ms).collect();
-        Mean::from(t.as_slice())
+        let w = self.weights_by_request_count();
+        Mean::compute(t.as_slice(), w.as_slice())
     }
 
     fn resp_time_percentile(&self, p: Percentile) -> Mean {
@@ -361,7 +397,14 @@ impl Log {
             .iter()
             .map(|s| s.resp_time_percentiles[p as usize])
             .collect();
-        Mean::from(t.as_slice())
+        let w = self.weights_by_request_count();
+        Mean::compute(t.as_slice(), w.as_slice())
+    }
+
+    fn mean_parallelism(&self) -> Mean {
+        let p: Vec<f32> = self.samples.iter().map(|s| s.mean_parallelism).collect();
+        let w = self.weights_by_request_count();
+        Mean::compute(p.as_slice(), w.as_slice())
     }
 }
 
@@ -390,7 +433,7 @@ pub struct BenchmarkStats {
     pub resp_time_ms: Mean,
     pub resp_time_percentiles: Vec<Mean>,
     pub resp_time_distribution: Vec<RespTimeCount>,
-    pub parallelism: f64,
+    pub parallelism: Mean,
     pub parallelism_ratio: f64,
     pub samples: Vec<SampleStats>,
 }
@@ -517,8 +560,8 @@ impl Recorder {
         let count = self.request_count + self.error_count;
 
         let throughput = self.log.throughput();
-        let parallelism = self.queue_len_sum as f64 / count as f64;
-        let parallelism_ratio = 100.0 * parallelism / self.parallelism_limit as f64;
+        let parallelism = self.log.mean_parallelism();
+        let parallelism_ratio = 100.0 * parallelism.value / self.parallelism_limit as f64;
 
         let resp_time_percentiles: Vec<Mean> = Percentile::iter()
             .map(|p| self.log.resp_time_percentile(p))
@@ -597,9 +640,10 @@ mod test {
         let run_len = 1000;
         let mean = 1.0;
         let std_dev = 1.0;
+        let weights = [1.0; 1000];
         for i in 0..10 {
             let v = random_vector(i, run_len, mean, std_dev);
-            let err = super::long_run_err(mean, &v);
+            let err = super::long_run_err(mean, &v, &weights);
             let ref_err = reference_err(&v);
             assert!(err > 0.99 * ref_err);
             assert!(err < 1.33 * ref_err);
@@ -611,10 +655,11 @@ mod test {
         let run_len = 1000;
         let mean = 1.0;
         let std_dev = 1.0;
+        let weights = [1.0; 1000];
         for i in 0..10 {
             let mut v = random_vector(i, run_len, mean, std_dev);
             make_autocorrelated(&mut v);
-            let mean_err = super::long_run_err(mean, &v);
+            let mean_err = super::long_run_err(mean, &v, &weights);
             let ref_err = reference_err(&v);
             assert!(mean_err > 6.0 * ref_err);
         }

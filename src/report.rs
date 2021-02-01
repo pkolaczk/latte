@@ -470,7 +470,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
                 Quantity::new(s.samples.iter().map(|s| s.request_count as f64).mean(), 0)
             }),
             self.line("Parallelism", "req", |s| {
-                Quantity::new(s.parallelism, 1).with_ratio(s.parallelism_ratio)
+                Quantity::new(s.parallelism.value, 1).with_ratio(s.parallelism_ratio)
             }),
             self.line("Throughput", "req/s", |s| {
                 Quantity::new(s.throughput.value, 0)

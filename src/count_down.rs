@@ -46,13 +46,16 @@ impl CountDown {
 pub struct BatchedCountDown {
     batch_size: u64,
     local: u64,
-    shared: Arc<CountDown>
+    shared: Arc<CountDown>,
 }
 
 impl BatchedCountDown {
-
     pub fn new(shared: Arc<CountDown>, batch_size: u64) -> Self {
-        BatchedCountDown { batch_size, local: 0, shared }
+        BatchedCountDown {
+            batch_size,
+            local: 0,
+            shared,
+        }
     }
 
     /// Decreases the counter by 1 until the counter drops to 0.
@@ -69,5 +72,4 @@ impl BatchedCountDown {
             true
         }
     }
-
 }
