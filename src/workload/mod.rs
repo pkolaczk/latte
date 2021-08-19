@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cassandra_cpp::Statement;
-use clap::Clap;
+use clap::{ArgEnum, Clap};
 use err_derive::*;
 use itertools::Itertools;
 use rand::{thread_rng, RngCore};
@@ -23,7 +23,7 @@ pub enum WorkloadError {
 
 pub type Result<T> = std::result::Result<T, WorkloadError>;
 
-#[derive(Serialize, Deserialize, Debug, AsStaticStr, Clap, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, AsStaticStr, ArgEnum, Clap, Copy, Clone)]
 pub enum Compaction {
     None,
     LCS,

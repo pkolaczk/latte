@@ -4,10 +4,10 @@ use std::path::PathBuf;
 
 use crate::workload::{Compaction, WorkloadConfig};
 use chrono::Utc;
-use clap::{AppSettings, Clap};
+use clap::{AppSettings, ArgEnum, Clap};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clap, Debug, Serialize, Deserialize)]
+#[derive(ArgEnum, Clap, Debug, Serialize, Deserialize)]
 pub enum Workload {
     Read,
     Write,
@@ -100,7 +100,7 @@ pub struct RunCommand {
     pub compaction: Compaction,
 
     /// List of Cassandra addresses to connect to
-    #[clap(name = "addresses", required = true, default_value = "localhost")]
+    #[clap(name = "addresses", default_value = "localhost")]
     pub addresses: Vec<String>,
 
     /// Seconds since 1970-01-01T00:00:00Z
