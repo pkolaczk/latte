@@ -1,16 +1,18 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::{BindRustType, PreparedStatement, Session};
 
 use crate::workload::{
     gen_random_blob, Result, Workload, WorkloadConfig, WorkloadError, WorkloadStats,
 };
+use scylla::frame::value::SerializedValues;
+use scylla::prepared_statement::PreparedStatement;
+use scylla::Session;
 
 /// A workload that writes rows to the table
 pub struct Write<S>
-where
-    S: AsRef<Session> + Sync + Send,
+    where
+        S: AsRef<Session> + Sync + Send,
 {
     session: S,
     column_count: usize,
@@ -36,11 +38,11 @@ where
             compaction: conf.compaction,
         };
         let s = session.as_ref();
-        s.execute(&schema.drop_table_stmt()).await?;
-        s.execute(&schema.create_table_stmt()).await?;
+        s.query(schema.drop_table_cql(), &[]).await?;
+        s.query(schema.create_table_cql(), &[]).await?;
 
         let insert_cql = schema.insert_cql();
-        let write_statement = s.prepare(insert_cql.as_str())?.await?;
+        let write_statement = s.prepare(insert_cql.as_str()).await?;
         Ok(Write {
             session,
             column_count: conf.columns,
@@ -75,12 +77,19 @@ where
         S: 'async_trait,
     {
         let s = self.session.as_ref();
-        let mut statement = self.write_statement.bind();
-        statement.bind(0, (iteration % self.row_count) as i64)?;
-        for i in 0..self.column_count {
-            statement.bind(i + 1, gen_random_blob(self.column_size))?;
+
+        let mut params = SerializedValues::new();
+
+        params
+            .add_value(&((iteration % self.row_count) as i64))
+            .unwrap();
+        for _ in 0..self.column_count {
+            params
+                .add_value(&gen_random_blob(self.column_size))
+                .unwrap();
         }
-        let result = s.execute(&statement);
+
+        let result = s.execute(&self.write_statement, params);
         result.await?;
         Ok(WorkloadStats {
             partition_count: 1,

@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::{BindRustType, PreparedStatement, Session};
+use scylla::prepared_statement::PreparedStatement;
+use scylla::Session;
 
 use crate::workload::{gen_random_blob, Result, Workload, WorkloadConfig, WorkloadStats};
+use scylla::frame::value::SerializedValues;
 
 pub struct Read<S>
-where
-    S: AsRef<Session> + Sync + Send,
+    where
+        S: AsRef<Session> + Sync + Send,
 {
     session: S,
     row_count: u64,
@@ -28,10 +30,10 @@ where
             compaction: conf.compaction,
         };
         let s = session.as_ref();
-        s.execute(&schema.create_table_stmt()).await?;
+        s.query(schema.create_table_cql(), &[]).await?;
         let read_cql = format!("SELECT * FROM {} WHERE pk = ?", schema.table_name);
-        let read = s.prepare(read_cql.as_str())?.await?;
-        let write = s.prepare(schema.insert_cql().as_str())?.await?;
+        let read = s.prepare(read_cql.as_str()).await?;
+        let write = s.prepare(schema.insert_cql().as_str()).await?;
 
         Ok(Read {
             session,
@@ -59,12 +61,14 @@ where
     {
         let s = self.session.as_ref();
 
-        let mut statement = self.write_statement.bind();
-        statement.bind(0, (iteration % self.row_count) as i64)?;
-        for i in 0..self.column_count {
-            statement.bind(i + 1, gen_random_blob(self.column_size))?;
+        let mut params = SerializedValues::new();
+        params.add_value(&(iteration as i64)).unwrap();
+        for _ in 0..self.column_count {
+            params
+                .add_value(&gen_random_blob(self.column_size))
+                .unwrap();
         }
-        let result = s.execute(&statement);
+        let result = s.execute(&self.write_statement, params);
         result.await?;
 
         Ok(WorkloadStats {
@@ -78,17 +82,15 @@ where
         S: 'async_trait,
     {
         let s = self.session.as_ref();
-        let mut statement = self.read_statement.bind();
         let key = if self.row_count == 0 {
             -1
         } else {
             (iteration % self.row_count) as i64
         };
 
-        statement.bind(0, key)?;
-        let result = s.execute(&statement);
+        let result = s.execute(&self.read_statement, vec![key]);
         let result = result.await?;
-        let row_count = result.row_count();
+        let row_count = result.rows.unwrap().len() as u64;
         Ok(WorkloadStats {
             partition_count: row_count,
             row_count,

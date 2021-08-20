@@ -1,13 +1,14 @@
 use std::cmp::max;
 use std::path::PathBuf;
 use std::process::exit;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cassandra_cpp::Session;
 use clap::Clap;
 use futures::future::ready;
 use futures::{Future, SinkExt, Stream, StreamExt};
+use scylla::Session;
 use tokio::runtime::Builder;
 use tokio::time::Interval;
 
@@ -23,7 +24,7 @@ use crate::workload::null::Null;
 use crate::workload::read::Read;
 use crate::workload::write::Write;
 use crate::workload::{Workload, WorkloadStats};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio_stream::wrappers::IntervalStream;
 
 mod config;
 mod count_down;
@@ -91,7 +92,7 @@ where
         let action = &action;
         let mut remaining_count = BatchedCountDown::new(count, 64);
         let pending_count = AtomicUsize::new(0);
-        let mut req_stats = interval(rate)
+        let mut req_stats = IntervalStream::new(interval(rate))
             .take_while(|_| ready(remaining_count.dec()))
             .enumerate()
             .map(|(i, _)| {
@@ -243,10 +244,9 @@ async fn run(conf: RunCommand) {
     let conf = conf.set_timestamp_if_empty();
     let compare = conf.compare.as_ref().map(|p| load_report_or_abort(p));
 
-    let mut cluster = cluster(&conf);
-    let session = connect_or_abort(&mut cluster).await;
+    let session = connect_or_abort(&conf).await;
     setup_keyspace_or_abort(&conf, &session).await;
-    let session = connect_keyspace_or_abort(&mut cluster, conf.keyspace.as_str()).await;
+    use_keyspace_or_abort(&session, conf.keyspace.as_str()).await;
     let workload = workload(&conf, session).await;
     let exec_options = ExecutionOptions {
         parallelism: conf.parallelism,
@@ -345,8 +345,9 @@ async fn async_main() {
 fn main() {
     console::set_colors_enabled(true);
     Builder::new_multi_thread()
+        .worker_threads(16)
         .thread_name("tokio")
-        .enable_time()
+        .enable_all()
         .build()
         .unwrap()
         .block_on(async_main());

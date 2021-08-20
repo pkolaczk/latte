@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cassandra_cpp::Statement;
 use clap::{ArgEnum, Clap};
 use err_derive::*;
 use itertools::Itertools;
 use rand::{thread_rng, RngCore};
+use scylla::transport::errors::QueryError;
 use serde::{Deserialize, Serialize};
 use strum::*;
 
@@ -16,7 +16,7 @@ pub mod write;
 #[derive(Debug, Error)]
 pub enum WorkloadError {
     #[error(display = "Cassandra error: {}", _0)]
-    Cassandra(#[source] cassandra_cpp::Error),
+    Cassandra(#[source] QueryError),
     #[error(display = "{}", _0)]
     Other(String),
 }
@@ -110,17 +110,9 @@ impl Schema {
         )
     }
 
-    pub fn create_table_stmt(&self) -> Statement {
-        Statement::new(self.create_table_cql().as_str(), 0)
-    }
-
     /// Returns the statement that drops the table
     pub fn drop_table_cql(&self) -> String {
         format!("DROP TABLE IF EXISTS {}", self.table_name)
-    }
-
-    pub fn drop_table_stmt(&self) -> Statement {
-        Statement::new(self.drop_table_cql().as_str(), 0)
     }
 
     /// Returns the INSERT INTO statement common to the read and write workloads
