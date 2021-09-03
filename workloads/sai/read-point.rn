@@ -1,0 +1,30 @@
+use common::{KEYSPACE, TABLE};
+use latte::*;
+
+mod common;
+
+const LOAD_COUNT = latte::param!("rows", 100000);
+
+const READ = "read";
+
+pub async fn schema(db) {
+    common::init_schema(db).await?;
+}
+
+pub async fn erase(db) {
+    common::erase(db).await?;
+}
+
+pub async fn prepare(db) {
+    common::prepare(db).await?;
+    db.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE time = ?`).await?;
+}
+
+pub async fn load(db, i) {
+    common::insert_row(db, i).await?;
+}
+
+pub async fn run(db, i) {
+    let point = hash_range(i, LOAD_COUNT) * 1000;
+    db.execute_prepared(READ, [point]).await?;
+}

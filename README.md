@@ -1,60 +1,185 @@
 # Latency Tester for Apache Cassandra
 
-A tiny native program that issues concurrent CQL queries to an Apache Cassandra
-cluster and measures throughput and response times. 
+Issues concurrent CQL queries to an Apache Cassandra cluster and measures throughput and response times.
 
 ## Why Yet Another Benchmarking Program?
 
-Contrary to `cassandra-stress` or `nosql-bench`, 
-`latte` has been written in Rust and uses DataStax C++ Driver for Cassandra. 
-This enables it to achieve superior performance and predictability: 
+Contrary to `cassandra-stress` and `nosqlbench`, Latte has been written in Rust and uses DataStax C++ Driver for
+Cassandra.  
+It has a fully asynchronous, thread-per-core workload execution engine. This enables it to achieve superior performance
+and predictability:
 
-* Over **50x lower memory footprint** (typically below 20 MB instead of 1+ GB)  
-* Over **6x better CPU efficiency**. This means you can test larger clusters or reduce the 
-  number of client machines.  
-* Can run on one of the nodes without significant performance impact on the server.
-  In this setup, throughput levels achieved by `latte` tests are typically over 2x higher than 
-  when using the other tools, because almost all the processing power is available to the server, instead of
-  half of it being consumed by the benchmarking tool.
-* No client code warmup needed. The client code works with maximum 
-  performance from the first iteration. If the server is already warmed-up,
-  this means much shorter tests and quicker iteration. This also allows for accurate 
-  measurement of warmup effects happening on the benchmarked server(s). 
-* No GC pauses nor HotSpot recompilation happening in the middle of the test. 
-  We want to measure hiccups of the server, not the benchmarking tool. 
+* Over 50x lower memory footprint (typically below 20 MB instead of 1+ GB)
+* Over 6x better CPU efficiency. This means you can test larger clusters or reduce the number of client machines.
+* Can run on one of the nodes without significant performance impact on the server. In this setup, throughput levels
+  achieved by `latte` tests are typically over 2x higher than when using the other tools, because almost all the
+  processing power is available to the server, instead of half of it being consumed by the benchmarking tool.
+* No client code warmup needed. The client code works with maximum performance from the first iteration. If the server
+  is already warmed-up, this means much shorter tests and quicker iteration. This also allows for accurate measurement
+  of warmup effects happening on the benchmarked server(s).
+* No GC pauses nor HotSpot recompilation happening in the middle of the test. We want to measure hiccups of the server,
+  not the benchmarking tool.
+
+Workloads for Latte are fully customizable with a modern embedded scripting language [Rune](https://rune-rs.github.io/)
+.  
+Rune offers syntax and features similar to Rust, albeit with dynamic typing and easier memory management.
 
 ## Features
-* Automatic creation of schema and data-set population
+
+* Custom workloads with a powerful scripting engine
+* Asynchronous CQL queries
+* Workload parameterization
 * Accurate measurement of throughput and response times with error margins
 * No coordinated omission
-* Optional warmup iterations
-* Configurable data-set size
 * Configurable number of connections and threads
 * Rate and parallelism limiters
+* Progress bars
 * Beautiful text reports
 * Can dump report in JSON
-* Side-by-side comparison of two runs 
-* Statistical significance analysis of differences based on Welch's t-test 
-  corrected for autocorrelation 
-    
-## Limitations 
-This is work-in-progress.
-* Workload selection is currently limited to hardcoded read and write workloads dealing with tiny rows
-* No verification of received data - this is a benchmarking tool, not a testing tool.
+* Side-by-side comparison of two runs
+* Statistical significance analysis of differences corrected for auto-correlation
+
+## Limitations
+
+* Binding some CQL data types is not yet supported, e.g. user defined types, maps or integer types smaller than 64-bit.
+* The set of data generating functions is tiny and will be extended soon.
 
 ## Installation
-1. [Install Datastax C++ Driver 2.15](https://docs.datastax.com/en/developer/cpp-driver/2.15/topics/installation/) 
+
+1. [Install Datastax C++ Driver 2.15](https://docs.datastax.com/en/developer/cpp-driver/2.15/topics/installation/)
    with development packages
 2. [Install Rust toolchain](https://rustup.rs/)
 3. Run `cargo install --git https://github.com/pkolaczk/latte`
 
 ## Usage
-1. Start a Cassandra cluster somewhere (can be a local node)
-2. Run `latte <workload> <node address>`, where `<workload>` can be `read` or `write`
+
+1. Start a Cassandra cluster somewhere (can be a local node).
+2. Run `latte <workload> [<node address>]`, where `<workload>` is the path to the workload script. You can find example
+   workloads in the `workloads` folder.
 
 Run `latte -h` to display help with the available options.
 
+## Workloads
+
+Workloads are defined as Rune scripts. A workload script defines a set of public functions that Latte calls
+automatically. A minimum viable workload script must define at least a single public async function `run` with two
+arguments:
+
+- `ctx` – session context that provides the access to Cassandra
+- `i` – current unique iteration number of a 64-bit integer type, starting at 0
+
+The following script would benchmark querying the `system.local` table:
+
+```rust
+pub async fn run(ctx, i) {
+  ctx.execute("SELECT cluster_name FROM system.local LIMIT 1").await
+}
+```
+
+Instance functions on `ctx` are asynchronous, so you should call `await` on them.
+
+### Schema creation
+
+You can create your own keyspaces and tables in the `schema` function:
+
+```rust
+pub async fn schema(ctx) {
+  ctx.execute("CREATE KEYSPACE IF NOT EXISTS test \
+                 WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }").await?;
+  ctx.execute("CREATE TABLE IF NOT EXISTS test.test(id bigint, data varchar").await?;
+}
+```
+
+### Prepared statements
+
+Calling `ctx.execute` is not optimal, because it doesn't use prepared statements. You can prepare statements and
+register them on the context object in the `prepare`
+function:
+
+```rust
+const INSERT = "my_insert";
+const SELECT = "my_select";
+
+pub async fn prepare(ctx) {
+  ctx.prepare(INSERT, "INSERT INTO test.test(id, data) VALUES (?, ?)").await?;
+  ctx.prepare(SELECT, "SELECT * FROM test.test WHERE id = ?").await?;
+}
+
+pub async fn run(ctx, i) {
+  ctx.execute_prepared(SELECT, [i]).await
+}
+```
+
+### Populating the database
+
+Read queries are more interesting when they return non-empty result sets. To load data into tables before each run of
+the benchmark, define the `load` function and the `LOAD_COUNT` constant that will tell Latte the number of times `load`
+must be called:
+
+```rust
+pub const LOAD_COUNT = 1000; // invoke load for i in 0..1000
+
+pub async fn load(ctx, i) {
+  ctx.execute_prepared(INSERT, [i, "Lorem ipsum dolor sit amet"]).await
+}
+```
+
+We also recommend defining the `erase` function to erase the data before loading so that each benchmark run starts from
+the same initial state:
+
+```rust
+pub async fn erase(ctx) {
+  ctx.execute("TRUNCATE TABLE test.test").await
+}
+```
+
+If needed, you can skip the loading phase by passing `--no-load` command line flag.
+
+### Generating data
+
+Latte comes with a library of data generating functions. They are accessible in the `latte` crate. Typically, those
+functions accept an integer `i` iteration number, so you can generate consistent numbers. The data generating functions
+are pure, i.e. invoking them multiple times with the same parameters yields always the same results.
+
+- `latte::uuid(i)` – generates a random (type 4) UUID
+- `latte::hash(i)` – generates a non-negative integer hash value
+- `latte::hash2(a, b)` – generates a non-negative integer hash value of two integers
+- `latte::hash_range(i, max)` – generates an integer value in range `0..max`
+- `latte::blob(i, len)` – generates a random binary blob of length `len`
+
+### Parameterizing workloads
+
+Workloads can be parameterized by parameters given from the command line invocation.
+Use `latte::param!(param_name, default_value)` macro to initialize script constants from command line parameters:
+
+```rust
+pub const LOAD_COUNT = latte::param!("row_count", 100);
+```
+
+Then you can set the parameter by using `-P`:
+
+```
+latte run <workload> -P row_count=200
+```
+
+Presently, only integer parameters are supported, but this limitation will be removed in the future.
+
+### Error handling
+
+Errors during execution of a workload script are divided into three classes:
+
+- compile errors – the errors detected at the load time of the script; e.g. syntax errors or referencing an undefined
+  variable. These are signalled immediately and terminate the benchmark even before connecting to the database.
+- runtime errors / panics – e.g. division by zero or array out of bounds access. They terminate the benchmark
+  immediately.
+- error return values – e.g. when the query execution returns an error result. Those take effect only when actually
+  returned from the function (use `?` for propagating them up the call chain). All errors except Cassandra overload
+  errors terminate  
+  the benchmark immediately. Overload errors (e.g. timeouts) that happen during the main run phase are counted and
+  reported in the benchmark report.
+
 ## Example Report
+
 ```
 ./target/release/latte -w 1000  -n 10000000 read  -d 1 -s 2 localhost -x baseline.json
 CONFIG =================================================================================================

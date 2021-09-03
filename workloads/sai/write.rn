@@ -1,0 +1,19 @@
+mod common;
+
+pub const LOAD_COUNT = 0;
+
+pub async fn schema(db) {
+    common::init_schema(db).await?;
+}
+
+pub async fn erase(db) {
+    common::erase(db).await?;
+}
+
+pub async fn prepare(db) {
+    common::prepare(db).await?;
+}
+
+pub async fn run(db, i) {
+    common::insert_row(db, i).await
+}

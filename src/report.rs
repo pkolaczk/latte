@@ -1,16 +1,16 @@
 use core::fmt;
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
+use std::path::Path;
 use std::{fs, io};
 
 use chrono::{Local, NaiveDateTime, TimeZone};
 use err_derive::*;
 use serde::{Deserialize, Serialize};
-use strum::{AsStaticRef, IntoEnumIterator};
+use statrs::statistics::Statistics;
+use strum::IntoEnumIterator;
 
 use crate::config::RunCommand;
-use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, SampleStats, Significance};
-use statrs::statistics::Statistics;
+use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance};
 
 /// A standard error is multiplied by this factor to get the error margin.
 /// For a normally distributed random variable,
@@ -45,14 +45,14 @@ impl Report {
         }
     }
     /// Loads benchmark results from a JSON file
-    pub fn load(path: &PathBuf) -> Result<Report, ReportLoadError> {
+    pub fn load(path: &Path) -> Result<Report, ReportLoadError> {
         let file = fs::File::open(path)?;
         let report = serde_json::from_reader(file)?;
         Ok(report)
     }
 
     /// Saves benchmark results to a JSON file
-    pub fn save(&self, path: &PathBuf) -> io::Result<()> {
+    pub fn save(&self, path: &Path) -> io::Result<()> {
         let f = fs::File::create(path)?;
         serde_json::to_writer_pretty(f, &self)?;
         Ok(())
@@ -269,7 +269,7 @@ where
             .and_then(|v2| {
                 let m1 = (self.f)(self.v1);
                 let m2 = (self.f)(v2);
-                let ratio = Rational::ratio(m1, m2);
+                let ratio = Rational::ratio(m2, m1);
                 ratio.map(|r| {
                     let diff = 100.0 * (r - 1.0);
                     if !diff.is_nan() {
@@ -299,7 +299,7 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{label:>16} {unit:>7}: {m1:26} {m2:26} {cmp:6}  {signif:>11}",
+            "{label:>16} {unit:>9}: {m1:30} {m2:30} {cmp:6}  {signif:>11}",
             label = self.label,
             unit = self.fmt_unit(),
             m1 = self.fmt_measurement(Some(self.v1)),
@@ -311,12 +311,12 @@ where
 }
 
 fn fmt_section_header(name: &str) -> String {
-    format!("{} {}", name, "=".repeat(104 - name.len() - 1))
+    format!("{} {}", name, "═".repeat(124 - name.len() - 1))
 }
 
 fn fmt_cmp_header(display_significance: bool) -> String {
-    let mut str = " ".repeat(26);
-    str += "---------- This ---------- ---------- Other ----------    Change       ";
+    let mut str = " ".repeat(28);
+    str += "───────────── A ─────────────  ────────────── B ────────────    Change       ";
     if display_significance {
         str += "P-value"
     }
@@ -367,28 +367,18 @@ impl<'a> Display for RunConfigCmp<'a> {
             self.line("Tag", "", |conf| {
                 conf.tag.clone().unwrap_or_else(|| "".to_string())
             }),
-            self.line("Workload", "", |conf| conf.workload.to_string()),
-            self.line("Compaction", "", |conf| conf.compaction.as_static()),
-            self.line("Partitions", "", |conf| {
-                Quantity::new(conf.workload_config().partitions, 0)
-            }),
-            self.line("Columns", "", |conf| {
-                Quantity::new(conf.workload_config().columns, 0)
-            }),
-            self.line("Column size", "B", |conf| {
-                Quantity::new(conf.workload_config().column_size, 0)
-            }),
+            self.line("Workload", "", |conf| conf.workload.display().to_string()),
             self.line("Threads", "", |conf| Quantity::new(conf.threads, 0)),
             self.line("Connections", "", |conf| Quantity::new(conf.connections, 0)),
-            self.line("Max parallelism", "req", |conf| {
+            self.line("Concurrency", "req", |conf| {
                 Quantity::new(conf.parallelism, 0)
             }),
-            self.line("Max rate", "req/s", |conf| match conf.rate {
+            self.line("Max rate", "op/s", |conf| match conf.rate {
                 Some(r) => Quantity::new(Maybe::Some(r), 0),
                 None => Quantity::new(Maybe::None, 0),
             }),
-            self.line("Warmup", "req", |conf| Quantity::new(conf.warmup_count, 0)),
-            self.line("Iterations", "req", |conf| Quantity::new(conf.count, 0)),
+            self.line("Warmup", "op", |conf| Quantity::new(conf.warmup_count, 0)),
+            self.line("Iterations", "op", |conf| Quantity::new(conf.count, 0)),
             self.line("Sampling", "s", |conf| {
                 Quantity::new(conf.sampling_period, 1)
             }),
@@ -404,17 +394,18 @@ impl<'a> Display for RunConfigCmp<'a> {
 pub fn print_log_header() {
     println!("{}", fmt_section_header("LOG"));
     println!("\
-      \x20   Time  Throughput        ----------------------- Response times [ms]---------------------------------\n\
-      \x20    [s]     [req/s]           Min        25        50        75        90        95        99       Max");
+      \x20   Time  ───── Throughput ─────  ────────────────────────────────── Response times [ms] ───────────────────────────────────\n\
+      \x20    [s]      [op/s]     [req/s]         Min        25        50        75        90        95        99      99.9       Max");
 }
 
-impl Display for SampleStats {
+impl Display for Sample {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:8.3} {:11.0}     {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2} {:9.2}",
+            "{:8.3} {:11.0} {:11.0}   {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3}",
             self.time_s,
-            self.throughput,
+            self.call_throughput,
+            self.req_throughput,
             self.resp_time_percentiles[Percentile::Min as usize],
             self.resp_time_percentiles[Percentile::P25 as usize],
             self.resp_time_percentiles[Percentile::P50 as usize],
@@ -422,6 +413,7 @@ impl Display for SampleStats {
             self.resp_time_percentiles[Percentile::P90 as usize],
             self.resp_time_percentiles[Percentile::P95 as usize],
             self.resp_time_percentiles[Percentile::P99 as usize],
+            self.resp_time_percentiles[Percentile::P99_9 as usize],
             self.resp_time_percentiles[Percentile::Max as usize]
         )
     }
@@ -453,115 +445,121 @@ impl<'a> Display for BenchmarkCmp<'a> {
         }
 
         let summary: Vec<Box<dyn Display>> = vec![
-            self.line("Elapsed", "s", |s| Quantity::new(s.elapsed_time_s, 3)),
+            self.line("Elapsed time", "s", |s| Quantity::new(s.elapsed_time_s, 3)),
             self.line("CPU time", "s", |s| {
                 Quantity::new(s.cpu_time_s, 3).with_ratio(s.cpu_util)
             }),
-            self.line("Completed", "req", |s| {
-                Quantity::new(s.completed_requests, 0).with_ratio(s.completed_ratio)
+            self.line("Calls", "op", |s| Quantity::new(s.call_count, 0)),
+            self.line("Errors", "op", |s| {
+                Quantity::new(s.error_count, 0).with_ratio(s.errors_ratio)
             }),
-            self.line("Errors", "req", |s| {
-                Quantity::new(s.errors, 0).with_ratio(s.errors_ratio)
+            self.line("Requests", "req", |s| Quantity::new(s.request_count, 0)),
+            self.line("└─", "req/op", |s| {
+                Quantity::new(s.requests_per_call, 1)
             }),
-            self.line("Partitions", "", |s| Quantity::new(s.partitions, 0)),
-            self.line("Rows", "", |s| Quantity::new(s.rows, 0)),
+            self.line("Rows", "row", |s| Quantity::new(s.row_count, 0)),
+            self.line("└─", "row/req", |s| {
+                Quantity::new(s.row_count_per_req, 1)
+            }),
             self.line("Samples", "", |s| Quantity::new(s.samples.len(), 0)),
-            self.line("Mean sample size", "req", |s| {
+            self.line("Mean sample size", "op", |s| {
+                Quantity::new(s.samples.iter().map(|s| s.call_count as f64).mean(), 0)
+            }),
+            self.line("└─", "req", |s| {
                 Quantity::new(s.samples.iter().map(|s| s.request_count as f64).mean(), 0)
             }),
-            self.line("Parallelism", "req", |s| {
-                Quantity::new(s.parallelism.value, 1).with_ratio(s.parallelism_ratio)
+            self.line("Concurrency", "req", |s| {
+                Quantity::new(s.concurrency.value, 1).with_ratio(s.concurrency_ratio)
             }),
-            self.line("Throughput", "req/s", |s| {
-                Quantity::new(s.throughput.value, 0)
-                    .with_opt_ratio(s.throughput_ratio)
-                    .with_error(s.throughput.std_err * ERR_MARGIN)
+            self.line("Throughput", "op/s", |s| {
+                Quantity::new(s.call_throughput.value, 0)
+                    .with_opt_ratio(s.call_throughput_ratio)
+                    .with_error(s.call_throughput.std_err * ERR_MARGIN)
             })
-            .with_significance(self.cmp_throughput())
-            .into_box(),
+                .with_significance(self.cmp_call_throughput())
+                .into_box(),
+            self.line("├─", "req/s", |s| {
+                Quantity::new(s.req_throughput.value, 0)
+                    .with_error(s.req_throughput.std_err * ERR_MARGIN)
+            })
+                .with_significance(self.cmp_req_throughput())
+                .into_box(),
+            self.line("└─", "row/s", |s| {
+                Quantity::new(s.row_throughput.value, 0)
+                    .with_error(s.row_throughput.std_err * ERR_MARGIN)
+            })
+                .with_significance(self.cmp_row_throughput())
+                .into_box(),
+            self.line("Mean call time", "ms", |s| {
+                Quantity::new(s.call_time_ms.mean.value, 3)
+                    .with_error(s.call_time_ms.mean.std_err * ERR_MARGIN)
+            })
+                .with_significance(self.cmp_mean_resp_time())
+                .into_box(),
             self.line("Mean resp. time", "ms", |s| {
-                Quantity::new(s.resp_time_ms.value, 2)
-                    .with_error(s.resp_time_ms.std_err * ERR_MARGIN)
+                Quantity::new(s.resp_time_ms.mean.value, 3)
+                    .with_error(s.resp_time_ms.mean.std_err * ERR_MARGIN)
             })
-            .with_significance(self.cmp_mean_resp_time())
-            .into_box(),
+                .with_significance(self.cmp_mean_resp_time())
+                .into_box(),
         ];
 
         for l in summary {
             writeln!(f, "{}", l)?;
         }
-
         writeln!(f)?;
-        writeln!(
-            f,
-            "{}",
-            fmt_section_header("THROUGHPUT DISTRIBUTION [req/s]")
-        )?;
-        if self.v2.is_some() {
-            writeln!(f, "{}", fmt_cmp_header(false))?;
-        }
-        let throughput_percentiles = [
-            Percentile::Min,
-            Percentile::P1,
-            Percentile::P2,
-            Percentile::P5,
-            Percentile::P10,
-            Percentile::P25,
-            Percentile::P50,
-            Percentile::P75,
-            Percentile::P90,
-            Percentile::P95,
-            Percentile::Max,
-        ];
-        for p in throughput_percentiles.iter() {
-            let l = self.line(p.name(), "", |s| {
-                Quantity::new(s.throughput_percentiles[*p as usize], 0)
-            });
-            writeln!(f, "{}", l)?;
-        }
 
-        let resp_time_percentiles = [
-            Percentile::Min,
-            Percentile::P25,
-            Percentile::P50,
-            Percentile::P75,
-            Percentile::P90,
-            Percentile::P95,
-            Percentile::P98,
-            Percentile::P99,
-            Percentile::P99_9,
-            Percentile::P99_99,
-            Percentile::Max,
-        ];
+        if self.v1.request_count > 0 {
+            let resp_time_percentiles = [
+                Percentile::Min,
+                Percentile::P25,
+                Percentile::P50,
+                Percentile::P75,
+                Percentile::P90,
+                Percentile::P95,
+                Percentile::P98,
+                Percentile::P99,
+                Percentile::P99_9,
+                Percentile::P99_99,
+                Percentile::Max,
+            ];
+            writeln!(f)?;
+            writeln!(f, "{}", fmt_section_header("RESPONSE TIMES [ms]"))?;
+            if self.v2.is_some() {
+                writeln!(f, "{}", fmt_cmp_header(true))?;
+            }
 
-        writeln!(f)?;
-        writeln!(f, "{}", fmt_section_header("MEAN RESPONSE TIMES [ms]"))?;
-        if self.v2.is_some() {
-            writeln!(f, "{}", fmt_cmp_header(true))?;
+            for p in resp_time_percentiles.iter() {
+                let l = self
+                    .line(p.name(), "", |s| {
+                        let rt = s.resp_time_ms.percentiles[*p as usize];
+                        Quantity::new(rt.value, 2).with_error(rt.std_err * ERR_MARGIN)
+                    })
+                    .with_significance(self.cmp_resp_time_percentile(*p));
+                writeln!(f, "{}", l)?;
+            }
+
+            writeln!(f)?;
+            writeln!(f, "{}", fmt_section_header("RESPONSE TIME DISTRIBUTION"))?;
+            writeln!(f, "Percentile    Resp. time [ms]  ─────────────────────────────────────────── Count ───────────────────────────────────────────")?;
+            for x in self.v1.resp_time_ms.distribution.iter() {
+                writeln!(
+                    f,
+                    " {:9.5}     {:9.3}       {:9}   {}",
+                    x.percentile,
+                    x.duration_ms,
+                    x.count,
+                    "▪".repeat((100 * x.count / self.v1.request_count) as usize)
+                )?;
+            }
         }
 
-        for p in resp_time_percentiles.iter() {
-            let l = self
-                .line(p.name(), "", |s| {
-                    let rt = s.resp_time_percentiles[*p as usize];
-                    Quantity::new(rt.value, 2).with_error(rt.std_err * ERR_MARGIN)
-                })
-                .with_significance(self.cmp_resp_time_percentile(*p));
-            writeln!(f, "{}", l)?;
-        }
-
-        writeln!(f)?;
-        writeln!(f, "{}", fmt_section_header("RESPONSE TIME DISTRIBUTION"))?;
-        writeln!(f, "Percentile    Resp. time [ms]  ------------------------------- Count -----------------------------------")?;
-        for x in self.v1.resp_time_distribution.iter() {
-            writeln!(
-                f,
-                " {:9.5}     {:9.2}       {:9}   {}",
-                x.percentile,
-                x.resp_time_ms,
-                x.count,
-                "*".repeat((100 * x.count / self.v1.completed_requests) as usize)
-            )?;
+        if self.v1.error_count > 0 {
+            writeln!(f)?;
+            writeln!(f, "{}", fmt_section_header("ERRORS"))?;
+            for e in self.v1.errors.iter() {
+                writeln!(f, "{}", e)?;
+            }
         }
         Ok(())
     }

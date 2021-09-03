@@ -1,63 +1,46 @@
-use std::cmp::max;
-use std::path::PathBuf;
+use std::cmp::{max, min};
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use cassandra_cpp::Session;
-use clap::Clap;
+use clap::Parser;
+use futures::channel::mpsc::Sender;
 use futures::future::ready;
-use futures::{Future, SinkExt, Stream, StreamExt};
+use futures::{SinkExt, Stream, StreamExt};
+use itertools::Itertools;
+use rune::Source;
 use tokio::runtime::Builder;
-use tokio::time::Interval;
+use tokio::task::LocalSet;
+use tokio::time::{Duration, Instant};
+use tokio_stream::wrappers::IntervalStream;
 
 use config::RunCommand;
 
 use crate::config::{AppConfig, Command, ShowCommand};
 use crate::count_down::{BatchedCountDown, CountDown};
+use crate::error::{LatteError, Result};
 use crate::progress::FastProgressBar;
 use crate::report::{Report, RunConfigCmp};
 use crate::session::*;
-use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder, RequestStats, Sample};
-use crate::workload::null::Null;
-use crate::workload::read::Read;
-use crate::workload::write::Write;
-use crate::workload::{Workload, WorkloadStats};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::session::{CassError, CassErrorKind, Session, SessionStats};
+use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
+use crate::workload::{FnRef, Workload, WorkloadStats, LOAD_FN, RUN_FN};
 
 mod config;
 mod count_down;
+mod error;
 mod progress;
 mod report;
 mod session;
 mod stats;
 mod workload;
 
-/// Reports an error and aborts the program if workload creation fails.
-/// Returns unwrapped workload.
-fn unwrap_workload<W: Workload>(w: workload::Result<W>) -> W {
-    match w {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("error: Failed to initialize workload: {}", e);
-            exit(1);
-        }
-    }
-}
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-async fn workload(conf: &RunCommand, session: Session) -> Arc<dyn Workload> {
-    let session = Box::new(session);
-    let wc = conf.workload_config();
-    match conf.workload {
-        config::Workload::Read => Arc::new(unwrap_workload(Read::new(session, &wc).await)),
-        config::Workload::Write => Arc::new(unwrap_workload(Write::new(session, &wc).await)),
-        config::Workload::Null => Arc::new(Null {}),
-    }
-}
-
-fn interval(rate: f64) -> Interval {
+fn interval_stream(rate: f64) -> IntervalStream {
     let interval = Duration::from_nanos(max(1, (1000000000.0 / rate) as u64));
-    tokio::time::interval(interval)
+    IntervalStream::new(tokio::time::interval(interval))
 }
 
 /// Rounds the duration down to the highest number of whole periods
@@ -68,63 +51,72 @@ fn round(duration: Duration, period: Duration) -> Duration {
     Duration::from_micros(duration as u64)
 }
 
+/// Fetches session statistics and sends them to the channel
+async fn send_stats(workload: &Workload, time: Instant, tx: &mut Sender<Result<WorkloadStats>>) {
+    let stats = workload.take_stats(time);
+    tx.send(Ok(stats)).await.unwrap();
+}
+
 /// Runs a series of requests on a separate thread and
 /// produces a stream of QueryStats
-fn req_stream<F, C, R, E>(
+fn req_stream(
     count: Arc<CountDown>,
     parallelism: usize,
     rate: Option<f64>,
     sampling_period: Duration,
-    context: Arc<C>,
-    action: F,
-) -> impl Stream<Item = Sample>
-where
-    F: Fn(Arc<C>, u64) -> R + Send + Sync + 'static,
-    C: ?Sized + Send + Sync + 'static,
-    R: Future<Output = Result<WorkloadStats, E>> + Send,
-    E: Send + 'static,
-{
+    workload: Workload,
+    progress: Arc<FastProgressBar>,
+) -> impl Stream<Item=Result<WorkloadStats>> {
     let (mut tx, rx) = futures::channel::mpsc::channel(16);
 
-    tokio::spawn(async move {
-        let rate = rate.unwrap_or(f64::MAX);
-        let action = &action;
-        let mut remaining_count = BatchedCountDown::new(count, 64);
-        let pending_count = AtomicUsize::new(0);
-        let mut req_stats = interval(rate)
-            .take_while(|_| ready(remaining_count.dec()))
-            .enumerate()
-            .map(|(i, _)| {
-                let context = context.clone();
-                let pending_count = &pending_count;
-                async move {
-                    let queue_len = pending_count.fetch_add(1, Ordering::Relaxed);
-                    let start = Instant::now();
-                    let result = action(context, i as u64).await;
-                    let end = Instant::now();
-                    pending_count.fetch_sub(1, Ordering::Relaxed);
-                    RequestStats::from_result(result, end - start, queue_len)
-                }
-            })
-            .buffer_unordered(parallelism);
+    std::thread::spawn(move || {
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        let local = LocalSet::new();
+        local.spawn_local(async move {
+            // prevent further moves, make it shared for all iterations in this thread
+            let workload = &workload;
 
-        let mut sample = Sample::new(Instant::now());
-        while let Some(req) = req_stats.next().await {
-            sample.record(req);
-            let now = Instant::now();
-            if now - sample.start_time > sampling_period {
-                let start_time = sample.start_time;
-                let elapsed_rounded = round(now - start_time, sampling_period);
-                let end_time = start_time + elapsed_rounded;
-                sample.finish(end_time);
-                tx.send(sample).await.unwrap();
-                sample = Sample::new(end_time);
+            let rate = rate.unwrap_or(f64::MAX);
+            let mut remaining_count = BatchedCountDown::new(count, 64);
+
+            // A stream of Result<RequestStats> objects, each object generated by an invocation
+            // of the action.
+            let mut req_stats = {
+                interval_stream(rate)
+                    .take_while(|_| ready(remaining_count.dec()))
+                    .enumerate()
+                    .map(|(i, _)| workload.run(i as i64))
+                    .buffer_unordered(parallelism)
+                    .inspect(|_| progress.inc(1))
+            };
+
+            // The following loop takes the stats generated by the stream and aggregates them
+            // into chunks of `sampling_period` length. When a chunk is ready, it is sent out.
+            let mut start_time = Instant::now();
+            workload.reset(start_time);
+            while let Some(req) = req_stats.next().await {
+                match req {
+                    Ok(_) | Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_)))) => {
+                        let now = Instant::now();
+                        if now - start_time > sampling_period {
+                            start_time += round(now - start_time, sampling_period);
+                            send_stats(workload, start_time, &mut tx).await;
+                        }
+                    }
+
+                    // This can happen if an error happened during generation of data or some other
+                    // problem on the client-side. In this case there is no point in
+                    // continuing.
+                    Err(e) => {
+                        tx.send(Err(e)).await.unwrap();
+                        return;
+                    }
+                }
             }
-        }
-        if !sample.is_empty() {
-            sample.finish(Instant::now());
-            tx.send(sample).await.unwrap();
-        }
+            // Send the statistics of remaining requests
+            send_stats(workload, Instant::now(), &mut tx).await;
+        });
+        rt.block_on(local);
     });
 
     rx
@@ -134,8 +126,8 @@ where
 /// and collects them into a vector.
 /// Finished streams are removed from `streams`.
 async fn take_one_of_each<S, T>(streams: &mut Vec<S>) -> Vec<T>
-where
-    S: Stream<Item=T> + std::marker::Unpin,
+    where
+        S: Stream<Item=T> + std::marker::Unpin,
 {
     let mut result = Vec::with_capacity(streams.len());
     for i in (0..streams.len()).rev() {
@@ -168,134 +160,190 @@ struct ExecutionOptions {
 /// # Parameters
 ///   - `name`: text displayed next to the progress bar
 ///   - `count`: number of iterations
-///   - `threads`: number of threads to run in parallel
-///   - `parallelism`: maximum number of concurrent executions of `action`
-///   - `rate`: optional rate limit given as number of calls to `action` per second
-///   - `context`: a shared object to be passed to all invocations of `action`,
-///      used to share e.g. a Cassandra session or Workload
-///   - `action`: an async function to call; this function may fail and return an `Err`
-async fn par_execute<F, C, R, RE>(
+///   - `exec_options`: controls execution options such as parallelism level and rate
+///   - `workload`: encapsulates a set of queries to execute
+async fn par_execute(
     name: &str,
     count: u64,
     exec_options: &ExecutionOptions,
     sampling_period: Duration,
-    context: Arc<C>,
-    action: F,
-) -> BenchmarkStats
-where
-    F: Fn(Arc<C>, u64) -> R + Send + Sync + Copy + 'static,
-    C: ?Sized + Send + Sync + 'static,
-    R: Future<Output = Result<WorkloadStats, RE>> + Send,
-    RE: Send + 'static,
-{
+    workload: Workload,
+) -> Result<BenchmarkStats> {
     let threads = exec_options.threads;
     let parallelism = exec_options.parallelism;
     let rate = exec_options.rate;
 
     let progress = FastProgressBar::new_progress_bar(name, count);
-    let progress_ref_1 = Arc::new(progress);
-    let progress_ref_2 = progress_ref_1.clone();
+    let progress = Arc::new(progress);
     let mut stats = Recorder::start(rate, parallelism);
-    let action = move |c, i| {
-        let result = action(c, i);
-        progress_ref_1.tick();
-        result
-    };
 
     let mut streams = Vec::with_capacity(threads);
     let count = Arc::new(CountDown::new(count));
-    for _ in 0..threads {
+    let sub_workloads = workload.split(threads);
+
+    for w in sub_workloads {
         let s = req_stream(
             count.clone(),
             parallelism,
             rate.map(|r| r / (threads as f64)),
             sampling_period,
-            context.clone(),
-            action.clone(),
+            w,
+            progress.clone(),
         );
         streams.push(s)
     }
 
     while !streams.is_empty() {
         let samples = take_one_of_each(&mut streams).await;
+        let samples: Vec<WorkloadStats> = samples.into_iter().try_collect()?;
         if !samples.is_empty() {
             let aggregate = stats.record(&samples);
             if sampling_period.as_secs() < u64::MAX {
-                progress_ref_2.println(format!("{}", aggregate));
+                progress.println(format!("{}", aggregate));
             }
         }
     }
 
-    stats.finish()
+    Ok(stats.finish())
 }
 
-fn load_report_or_abort(path: &PathBuf) -> Report {
+fn load_report_or_abort(path: &Path) -> Report {
     match Report::load(path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Failed to load report from {}: {}", path.display(), e);
+            eprintln!(
+                "error: Failed to read report from {}: {}",
+                path.display(),
+                e
+            );
             exit(1)
         }
     }
 }
 
-async fn run(conf: RunCommand) {
+async fn run(conf: RunCommand) -> Result<()> {
     let conf = conf.set_timestamp_if_empty();
     let compare = conf.compare.as_ref().map(|p| load_report_or_abort(p));
+    eprintln!(
+        "info: Loading workload script {}...",
+        conf.workload.display()
+    );
+    let script = Source::from_path(&conf.workload)
+        .map_err(|e| LatteError::ScriptRead(conf.workload.clone(), e))?;
 
+    let mut program = workload::Program::new(script, conf.params.iter().cloned().collect())?;
+
+    if !program.has_run() {
+        eprintln!("Function `run` not found in the workload script.")
+    }
+
+    eprintln!("info: Connecting to {:?}... ", conf.addresses);
     let mut cluster = cluster(&conf);
     let session = connect_or_abort(&mut cluster).await;
-    setup_keyspace_or_abort(&conf, &session).await;
-    let session = connect_keyspace_or_abort(&mut cluster, conf.keyspace.as_str()).await;
-    let workload = workload(&conf, session).await;
+
+    let mut session = Session::new(session);
+
+    if program.has_schema() {
+        eprintln!("info: Creating schema...");
+        if let Err(e) = program.schema(&mut session).await {
+            eprintln!("error: Failed to create schema: {}", e);
+            exit(255);
+        }
+    }
+
+    if program.has_erase() && !conf.no_load {
+        eprintln!("info: Erasing data...");
+        if let Err(e) = program.erase(&mut session).await {
+            eprintln!("error: Failed to erase: {}", e);
+            exit(255);
+        }
+    }
+
+    if program.has_prepare() {
+        eprintln!("info: Preparing...");
+        if let Err(e) = program.prepare(&mut session).await {
+            eprintln!("error: Failed to prepare: {}", e);
+            exit(255);
+        }
+    }
+
+    let program = Arc::new(program);
+    let loader = Workload::new(session.clone(), program.clone(), FnRef::new(LOAD_FN));
+    let runner = Workload::new(session.clone(), program.clone(), FnRef::new(RUN_FN));
+
+    let load_options = ExecutionOptions {
+        rate: None,
+        threads: conf.threads,
+        parallelism: min(128, conf.parallelism),
+    };
+
+    if !conf.no_load {
+        let load_count = program.load_count();
+        if load_count > 0 && program.has_load() {
+            eprintln!("info: Loading data...");
+            par_execute(
+                "Loading...",
+                load_count,
+                &load_options,
+                Duration::from_secs(u64::MAX),
+                loader,
+            )
+                .await?;
+        }
+    }
+
+    if conf.warmup_count > 0 {
+        eprintln!("info: Warming up...");
+        par_execute(
+            "Warming up...",
+            conf.warmup_count,
+            &load_options,
+            Duration::from_secs(u64::MAX),
+            runner.clone(),
+        )
+            .await?;
+    }
+
+    eprintln!("info: Running benchmark...");
+
+    println!(
+        "{}",
+        match compare {
+            Some(ref c) => RunConfigCmp {
+                v1: &c.conf,
+                v2: Some(&conf),
+            },
+            None => RunConfigCmp {
+                v1: &conf,
+                v2: None,
+            },
+        }
+    );
+
     let exec_options = ExecutionOptions {
         parallelism: conf.parallelism,
         rate: conf.rate,
         threads: conf.threads,
     };
-
-    println!(
-        "{}",
-        RunConfigCmp {
-            v1: &conf,
-            v2: compare.as_ref().map(|c| &c.conf),
-        }
-    );
-
-    par_execute(
-        "Populating...",
-        workload.populate_count(),
-        &exec_options,
-        Duration::from_secs(u64::MAX),
-        workload.clone(),
-        |w, i| w.populate(i),
-    )
-    .await;
-
-    par_execute(
-        "Warming up...",
-        conf.warmup_count,
-        &exec_options,
-        Duration::from_secs(u64::MAX),
-        workload.clone(),
-        |w, i| w.run(i),
-    )
-    .await;
-
     report::print_log_header();
     let stats = par_execute(
         "Running...",
         conf.count,
         &exec_options,
         Duration::from_secs_f64(conf.sampling_period),
-        workload.clone(),
-        |w, i| w.run(i),
+        runner,
     )
-    .await;
+        .await?;
 
-    let stats_cmp = BenchmarkCmp {
-        v1: &stats,
-        v2: compare.as_ref().map(|c| &c.result),
+    let stats_cmp = match compare {
+        Some(ref c) => BenchmarkCmp {
+            v1: &c.result,
+            v2: Some(&stats),
+        },
+        None => BenchmarkCmp {
+            v1: &stats,
+            v2: None,
+        },
     };
     println!();
     println!("{}", &stats_cmp);
@@ -309,13 +357,15 @@ async fn run(conf: RunCommand) {
     match report.save(&path) {
         Ok(()) => {}
         Err(e) => {
-            eprintln!("Failed to save report to {}: {}", path.display(), e);
+            eprintln!("error: Failed to save report to {}: {}", path.display(), e);
             exit(1)
         }
     }
+
+    Ok(())
 }
 
-async fn show(conf: ShowCommand) {
+async fn show(conf: ShowCommand) -> Result<()> {
     let report1 = load_report_or_abort(&PathBuf::from(conf.report1));
     let report2 = conf
         .report2
@@ -332,24 +382,25 @@ async fn show(conf: ShowCommand) {
         v2: report2.as_ref().map(|r| &r.result),
     };
     println!("{}", results_cmp);
+    Ok(())
 }
 
-async fn async_main() {
-    let command = AppConfig::parse().command;
+async fn async_main(command: Command) -> Result<()> {
     match command {
-        Command::Run(config) => run(config).await,
-        Command::Show(config) => show(config).await,
+        Command::Run(config) => run(config).await?,
+        Command::Show(config) => show(config).await?,
     }
+    Ok(())
 }
 
 fn main() {
     console::set_colors_enabled(true);
-    Builder::new_multi_thread()
-        .thread_name("tokio")
-        .enable_time()
-        .build()
-        .unwrap()
-        .block_on(async_main());
+    let command = AppConfig::parse().command;
+    let runtime = Builder::new_current_thread().enable_time().build();
+    if let Err(e) = runtime.unwrap().block_on(async_main(command)) {
+        eprintln!("error: {}", e);
+        exit(128);
+    }
 }
 
 #[cfg(test)]

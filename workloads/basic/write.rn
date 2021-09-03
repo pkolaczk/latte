@@ -1,0 +1,29 @@
+//! Partition write stress test - writes very tiny single-row partitions.
+
+pub const LOAD_COUNT = 0;
+
+const INSERT = "insert";
+
+const KEYSPACE = "latte";
+const TABLE = "basic";
+
+pub async fn schema(db) {
+    db.execute(`CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE} \
+                    WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }`).await?;
+    db.execute(`CREATE TABLE IF NOT EXISTS ${KEYSPACE}.${TABLE}(id bigint PRIMARY KEY)`).await?;
+}
+
+pub async fn erase(db) {
+    db.execute(`TRUNCATE TABLE ${KEYSPACE}.${TABLE}`).await
+}
+
+pub async fn prepare(db) {
+    db.prepare(INSERT, `INSERT INTO ${KEYSPACE}.${TABLE}(id) VALUES (:id)`).await?;
+}
+
+pub async fn load(db, i) {
+}
+
+pub async fn run(db, i) {
+    db.execute_prepared(INSERT, [i]).await?
+}

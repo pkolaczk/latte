@@ -1,0 +1,33 @@
+mod common;
+
+use common::{KEYSPACE, TABLE, LC_CARD};
+use latte::*;
+
+const LOAD_COUNT = latte::param!("rows", 100000);
+const READ_SIZE = latte::param!("read_size", 10) * 1000;
+
+const READ = "read";
+
+pub async fn schema(db) {
+    common::init_schema(db).await?;
+}
+
+pub async fn erase(db) {
+    common::erase(db).await?;
+}
+
+pub async fn prepare(db) {
+    common::prepare(db).await?;
+    db.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE}
+        WHERE time >= ? AND time < ? AND lc = ? LIMIT ${READ_SIZE}`).await?;
+}
+
+pub async fn load(db, i) {
+    common::insert_row(db, i).await?;
+}
+
+pub async fn run(db, i) {
+    let point = hash_range(i, LOAD_COUNT);
+    let lc = hash_range(i, LC_CARD);
+    db.execute_prepared(READ, [point, point + READ_SIZE * LC_CARD, lc]).await?;
+}
