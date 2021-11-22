@@ -533,7 +533,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
                 let l = self
                     .line(p.name(), "", |s| {
                         let rt = s.resp_time_ms.percentiles[*p as usize];
-                        Quantity::new(rt.value, 2).with_error(rt.std_err * ERR_MARGIN)
+                        Quantity::new(rt.value, 3).with_error(rt.std_err * ERR_MARGIN)
                     })
                     .with_significance(self.cmp_resp_time_percentile(*p));
                 writeln!(f, "{}", l)?;
