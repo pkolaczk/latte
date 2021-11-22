@@ -1,0 +1,52 @@
+use latte::*;
+
+pub const KEYSPACE = "latte";
+pub const TABLE = "sai_main";
+
+pub const PAR_COUNT = latte::param!("par_count", 100000);
+pub const LC_CARD = latte::param!("lc_card", 10);
+
+const WRITE = "write";
+
+pub async fn init_schema(db) {
+    db.execute(`
+        CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE}
+            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1 }`).await?;
+    db.execute(`
+        CREATE TABLE IF NOT EXISTS ${KEYSPACE}.${TABLE} (
+            par_id bigint,
+            row_id uuid,
+            time timestamp,
+            value bigint,
+            lc bigint,
+            tag text,
+            PRIMARY KEY (par_id, row_id)
+        )`).await?;
+
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(value) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(lc) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(tag) USING 'StorageAttachedIndex'`).await?;
+    Ok(())
+}
+
+pub async fn erase(db) {
+    db.execute(`TRUNCATE TABLE ${KEYSPACE}.${TABLE}`).await?;
+    Ok(())
+}
+
+pub async fn prepare(db) {
+    db.prepare(WRITE, `INSERT INTO ${KEYSPACE}.${TABLE}(par_id, row_id, time, value, lc, tag) VALUES (?, ?, ?, ?, ?, ?)`).await?;
+    Ok(())
+}
+
+pub async fn insert_row(db, i) {
+    let par_id = hash_range(i, PAR_COUNT);
+    let row_id = uuid(i);
+    let time = i * 1000;
+    let value = i;
+    let lc = hash_range(i, LC_CARD);
+    let text = "text text text";
+    db.execute_prepared(WRITE, [par_id, row_id, time, value, lc, text]).await?;
+    Ok(())
+}
