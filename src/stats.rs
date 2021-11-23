@@ -148,11 +148,11 @@ pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
     2.0 * (1.0 - distrib.cdf(t.abs()))
 }
 
-fn distribution(hist: &Histogram<u64>) -> Vec<DurationAndCount> {
+fn distribution(hist: &Histogram<u64>) -> Vec<Bucket> {
     let mut result = Vec::new();
     if !hist.is_empty() {
         for x in hist.iter_log(100, 2.15443469) {
-            result.push(DurationAndCount {
+            result.push(Bucket {
                 percentile: x.percentile(),
                 duration_ms: x.value_iterated_to() as f64 / 1000.0,
                 count: x.count_since_last_iteration(),
@@ -385,7 +385,7 @@ impl Log {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct DurationAndCount {
+pub struct Bucket {
     pub percentile: f64,
     pub duration_ms: f64,
     pub count: u64,
@@ -395,7 +395,7 @@ pub struct DurationAndCount {
 pub struct TimeDistribution {
     pub mean: Mean,
     pub percentiles: Vec<Mean>,
-    pub distribution: Vec<DurationAndCount>,
+    pub distribution: Vec<Bucket>,
 }
 
 /// Stores the final statistics of the test run.

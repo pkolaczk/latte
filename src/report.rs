@@ -5,12 +5,13 @@ use std::{fs, io};
 
 use chrono::{Local, NaiveDateTime, TimeZone};
 use err_derive::*;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use statrs::statistics::Statistics;
 use strum::IntoEnumIterator;
 
 use crate::config::RunCommand;
-use crate::stats::{BenchmarkCmp, BenchmarkStats, Percentile, Sample, Significance};
+use crate::stats::{BenchmarkCmp, BenchmarkStats, Bucket, Percentile, Sample, Significance};
 
 /// A standard error is multiplied by this factor to get the error margin.
 /// For a normally distributed random variable,
@@ -278,7 +279,7 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{label:>16} {unit:>9}: {m1:30} {m2:30} {cmp:6}  {signif:>11}",
+            "{label:>16} {unit:>9}  {m1:30} {m2:30} {cmp:6}  {signif:>11}",
             label = self.label,
             unit = self.fmt_unit(),
             m1 = self.fmt_measurement(Some(self.v1)),
@@ -518,15 +519,24 @@ impl<'a> Display for BenchmarkCmp<'a> {
 
             writeln!(f)?;
             writeln!(f, "{}", fmt_section_header("RESPONSE TIME DISTRIBUTION"))?;
-            writeln!(f, "Percentile    Resp. time [ms]  ─────────────────────────────────────────── Count ───────────────────────────────────────────")?;
-            for x in self.v1.resp_time_ms.distribution.iter() {
+            writeln!(f, "── Resp. time [ms] ──  ────────────────────────────────────────────── Count ────────────────────────────────────────────────")?;
+            let zero = Bucket {
+                percentile: 0.0,
+                duration_ms: 0.0,
+                count: 0,
+            };
+            let dist = &self.v1.resp_time_ms.distribution;
+
+            let max_count = dist.iter().map(|b| b.count).max().unwrap_or(1);
+            for (low, high) in ([zero].iter().chain(dist)).tuple_windows() {
                 writeln!(
                     f,
-                    " {:9.5}     {:9.3}       {:9}   {}",
-                    x.percentile,
-                    x.duration_ms,
-                    x.count,
-                    "▪".repeat((100 * x.count / self.v1.request_count) as usize)
+                    "{:8.1} ... {:8.1}  {:9} {:6.2}%  {}",
+                    low.duration_ms,
+                    high.duration_ms,
+                    high.count,
+                    high.percentile - low.percentile,
+                    "▪".repeat((82 * high.count / max_count) as usize)
                 )?;
             }
         }
