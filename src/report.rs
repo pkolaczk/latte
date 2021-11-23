@@ -90,7 +90,6 @@ pub struct Quantity<T: Display> {
     pub value: T,
     pub error: Option<T>,
     pub precision: usize,
-    pub ratio: Option<f64>,
 }
 
 impl<T: Display> Quantity<T> {
@@ -99,22 +98,11 @@ impl<T: Display> Quantity<T> {
             value,
             error: None,
             precision,
-            ratio: None,
         }
     }
 
     pub fn with_error(mut self, e: T) -> Self {
         self.error = Some(e);
-        self
-    }
-
-    pub fn with_ratio(mut self, ratio: f64) -> Self {
-        self.ratio = Some(ratio);
-        self
-    }
-
-    pub fn with_opt_ratio(mut self, ratio: Option<f64>) -> Self {
-        self.ratio = ratio;
         self
     }
 
@@ -124,24 +112,16 @@ impl<T: Display> Quantity<T> {
             Some(e) => format!("± {:<6.prec$}", e, prec = self.precision),
         }
     }
-
-    fn format_ratio(&self) -> String {
-        match &self.ratio {
-            None => "".to_owned(),
-            Some(r) => format!("({:5.1}%)", r),
-        }
-    }
 }
 
 impl<T: Display> Display for Quantity<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{value:9.prec$} {error:8} {ratio:8}",
+            "{value:9.prec$} {error:8}",
             value = self.value,
             prec = self.precision,
             error = self.format_error(),
-            ratio = self.format_ratio()
         )
     }
 }
@@ -271,12 +251,11 @@ where
                 let m2 = (self.f)(v2);
                 let ratio = Rational::ratio(m2, m1);
                 ratio.map(|r| {
-                    let diff = 100.0 * (r - 1.0);
-                    if !diff.is_nan() {
-                        format!("{:+7.1}%", diff)
-                    } else {
-                        "".to_string()
+                    let mut diff = 100.0 * (r - 1.0);
+                    if diff.is_nan() {
+                        diff = 0.0;
                     }
+                    format!("{:+7.1}%", diff)
                 })
             })
             .unwrap_or_else(|| "".to_string())
@@ -446,13 +425,11 @@ impl<'a> Display for BenchmarkCmp<'a> {
 
         let summary: Vec<Box<dyn Display>> = vec![
             self.line("Elapsed time", "s", |s| Quantity::new(s.elapsed_time_s, 3)),
-            self.line("CPU time", "s", |s| {
-                Quantity::new(s.cpu_time_s, 3).with_ratio(s.cpu_util)
-            }),
+            self.line("CPU time", "s", |s| Quantity::new(s.cpu_time_s, 3)),
+            self.line("CPU utilisation", "%", |s| Quantity::new(s.cpu_util, 1)),
             self.line("Calls", "op", |s| Quantity::new(s.call_count, 0)),
-            self.line("Errors", "op", |s| {
-                Quantity::new(s.error_count, 0).with_ratio(s.errors_ratio)
-            }),
+            self.line("Errors", "op", |s| Quantity::new(s.error_count, 0)),
+            self.line("└─", "%", |s| Quantity::new(s.errors_ratio, 1)),
             self.line("Requests", "req", |s| Quantity::new(s.request_count, 0)),
             self.line("└─", "req/op", |s| {
                 Quantity::new(s.requests_per_call, 1)
@@ -469,11 +446,11 @@ impl<'a> Display for BenchmarkCmp<'a> {
                 Quantity::new(s.samples.iter().map(|s| s.request_count as f64).mean(), 0)
             }),
             self.line("Concurrency", "req", |s| {
-                Quantity::new(s.concurrency.value, 1).with_ratio(s.concurrency_ratio)
+                Quantity::new(s.concurrency.value, 1)
             }),
+            self.line("└─", "%", |s| Quantity::new(s.concurrency_ratio, 1)),
             self.line("Throughput", "op/s", |s| {
                 Quantity::new(s.call_throughput.value, 0)
-                    .with_opt_ratio(s.call_throughput_ratio)
                     .with_error(s.call_throughput.std_err * ERR_MARGIN)
             })
                 .with_significance(self.cmp_call_throughput())
