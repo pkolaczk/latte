@@ -19,7 +19,7 @@ use tokio::time::Instant;
 /// The value has been established empirically.
 /// Probably anything between 0.2 and 0.8 is good enough.
 /// Valid range is 0.0 to 1.0.
-const BANDWIDTH_COEFF: f64 = 0.66;
+const BANDWIDTH_COEFF: f64 = 0.5;
 
 /// Arithmetic weighted mean of values in the vector
 pub fn mean(values: &[f32], weights: &[f32]) -> f64 {
@@ -59,31 +59,33 @@ pub fn long_run_variance(mean: f64, values: &[f32], weights: &[f32]) -> f64 {
     // Compute a sum of autocovariances of orders 1 to (cutoff - 1).
     // Cutoff (bandwidth) and diminishing weights are needed to reduce random error
     // introduced by higher order autocovariance estimates.
-    // TODO: apply input weights
     let bandwidth = len.powf(BANDWIDTH_COEFF);
     let max_lag = min(values.len(), bandwidth.ceil() as usize);
-    let mut cov = 0.0;
+    let mut cov_sum = 0.0;
     for lag in 1..max_lag {
-        let rel_lag = lag as f64 / bandwidth;
-        let weight = 1.0 - rel_lag;
+        let weight = 1.0 - lag as f64 / values.len() as f64;
+        let mut cov = 0.0;
+        let mut sum_weights = 0.0;
         for i in lag..values.len() {
             let diff_1 = values[i] as f64 - mean;
             let diff_2 = values[i - lag] as f64 - mean;
-            cov += 2.0 * diff_1 * diff_2 * weight;
+            let w = weights[i] as f64 * weights[i - lag] as f64;
+            sum_weights += w;
+            cov += 2.0 * diff_1 * diff_2 * weight * w;
         }
+        cov_sum += cov / sum_weights;
     }
-    cov /= len;
 
     // It is possible that we end up with a negative sum of autocovariances here.
     // But we don't want that because we're trying to estimate
     // the worst-case error and for small N this situation is likely a random coincidence.
     // Additionally, `var + cov` must be at least 0.0.
-    cov = cov.max(0.0);
+    cov_sum = cov_sum.max(0.0);
 
     // Correct bias for small n:
-    let inflation = 1.0 + cov / (var + f64::MIN_POSITIVE);
+    let inflation = 1.0 + cov_sum / (var + f64::MIN_POSITIVE);
     let bias_correction = (inflation / len).exp();
-    bias_correction * (var + cov)
+    bias_correction * (var + cov_sum)
 }
 
 /// Estimates the error of the mean of a time-series.
