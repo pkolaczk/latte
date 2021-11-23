@@ -4,6 +4,7 @@ use std::path::Path;
 use std::{fs, io};
 
 use chrono::{Local, NaiveDateTime, TimeZone};
+use console::{pad_str, style, Alignment};
 use err_derive::*;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -120,9 +121,9 @@ impl<T: Display> Display for Quantity<T> {
         write!(
             f,
             "{value:9.prec$} {error:8}",
-            value = self.value,
+            value = style(&self.value).bright().for_stdout(),
             prec = self.precision,
-            error = self.format_error(),
+            error = style(self.format_error()).dim().for_stdout(),
         )
     }
 }
@@ -184,9 +185,14 @@ impl Rational for &str {
 
 impl Display for Significance {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let levels = [0.0001, 0.001, 0.01];
-        let stars = "*".repeat(levels.iter().filter(|&&l| l >= self.0).count());
-        write!(f, "({:3}) {:6.4}", stars, self.0)
+        let levels = [0.000001, 0.00001, 0.0001, 0.001, 0.01];
+        let stars = "*".repeat(levels.iter().filter(|&&l| l > self.0).count());
+        let s = format!("{:7.5}  {:5}", self.0, stars);
+        if self.0 <= 0.01 {
+            write!(f, "{}", style(s).cyan().bright())
+        } else {
+            write!(f, "{}", style(s).dim())
+        }
     }
 }
 /// A single line of text report
@@ -199,6 +205,8 @@ where
     pub label: String,
     /// Unit of measurement
     pub unit: String,
+    /// 1 means the more of the quantity the better, -1 means the more of it the worse, 0 is neutral
+    pub goodness: i8,
     /// First object to measure
     pub v1: V,
     /// Second object to measure
@@ -215,10 +223,11 @@ where
     V: Copy,
     F: Fn(V) -> M,
 {
-    fn new(label: String, unit: String, v1: V, v2: Option<V>, f: F) -> Self {
+    fn new(label: String, unit: String, goodness: i8, v1: V, v2: Option<V>, f: F) -> Self {
         Line {
             label,
             unit,
+            goodness,
             v1,
             v2,
             significance: None,
@@ -228,6 +237,11 @@ where
 
     fn into_box(self) -> Box<Self> {
         Box::new(self)
+    }
+
+    fn with_goodness(mut self, goodness: i8) -> Self {
+        self.goodness = goodness;
+        self
     }
 
     fn with_significance(mut self, s: Option<Significance>) -> Self {
@@ -245,7 +259,7 @@ where
     /// Computes the relative difference between v2 and v1 as: 100.0 * f(v2) / f(v1) - 100.0.
     /// Then formats the difference as percentage.
     /// If any of the values are missing, returns an empty String
-    fn fmt_relative_diff(&self) -> String {
+    fn fmt_relative_change(&self, direction: i8, significant: bool) -> String {
         self.v2
             .and_then(|v2| {
                 let m1 = (self.f)(self.v1);
@@ -256,7 +270,16 @@ where
                     if diff.is_nan() {
                         diff = 0.0;
                     }
-                    format!("{:+7.1}%", diff)
+                    let good = diff * direction as f32;
+                    let diff = format!("{:+7.1}%", diff);
+                    let styled = if good == 0.0 || !significant {
+                        style(diff).dim()
+                    } else if good > 0.0 {
+                        style(diff).bright().green()
+                    } else {
+                        style(diff).bright().red()
+                    };
+                    format!("{}", styled)
                 })
             })
             .unwrap_or_else(|| "".to_string())
@@ -277,31 +300,50 @@ where
     V: Copy,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // if v2 defined, put v2 on left
+        let m1 = self.fmt_measurement(self.v2.or(Some(self.v1)));
+        let m2 = self.fmt_measurement(self.v2.map(|_| self.v1));
+        let is_significant = match self.significance {
+            None => false,
+            Some(s) => s.0 <= 0.01,
+        };
         write!(
             f,
-            "{label:>16} {unit:>9}  {m1:30} {m2:30} {cmp:6}  {signif:>11}",
-            label = self.label,
-            unit = self.fmt_unit(),
-            // if v2 defined, put v2 on left
-            m1 = self.fmt_measurement(self.v2.or(Some(self.v1))),
-            m2 = self.fmt_measurement(self.v2.map(|_| self.v1)),
-            cmp = self.fmt_relative_diff(),
+            "{label:>16} {unit:>9}  {m1} {m2}  {cmp:6}     {signif}",
+            label = style(&self.label).yellow().bold().for_stdout(),
+            unit = style(self.fmt_unit()).yellow(),
+            m1 = pad_str(m1.as_str(), 30, Alignment::Left, None),
+            m2 = pad_str(m2.as_str(), 30, Alignment::Left, None),
+            cmp = self.fmt_relative_change(self.goodness, is_significant),
             signif = format!("{}", Maybe::from(self.significance))
         )
     }
 }
 
 fn fmt_section_header(name: &str) -> String {
-    format!("{} {}", name, "═".repeat(124 - name.len() - 1))
+    format!(
+        "{} {}",
+        style(name).yellow().bold().bright().for_stdout(),
+        style("═".repeat(124 - name.len() - 1))
+            .yellow()
+            .bold()
+            .bright()
+            .for_stdout()
+    )
 }
 
 fn fmt_cmp_header(display_significance: bool) -> String {
-    let mut str = " ".repeat(28);
-    str += "───────────── A ─────────────  ────────────── B ────────────    Change       ";
-    if display_significance {
-        str += "P-value"
-    }
-    str
+    let header = format!(
+        "{} {} {}",
+        " ".repeat(27),
+        "───────────── A ─────────────  ────────────── B ────────────     Change    ",
+        if display_significance {
+            "P-value  Signif."
+        } else {
+            ""
+        }
+    );
+    format!("{}", style(header).yellow().bold().for_stdout())
 }
 
 pub struct RunConfigCmp<'a> {
@@ -319,6 +361,7 @@ impl RunConfigCmp<'_> {
         Box::new(Line::new(
             label.to_string(),
             unit.to_string(),
+            0,
             self.v1,
             self.v2,
             f,
@@ -348,7 +391,12 @@ impl<'a> Display for RunConfigCmp<'a> {
             self.line("Tag", "", |conf| {
                 conf.tag.clone().unwrap_or_else(|| "".to_string())
             }),
-            self.line("Workload", "", |conf| conf.workload.display().to_string()),
+            self.line("Workload", "", |conf| {
+                conf.workload
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or("".to_string())
+            }),
             self.line("Threads", "", |conf| Quantity::new(conf.threads, 0)),
             self.line("Connections", "", |conf| Quantity::new(conf.connections, 0)),
             self.line("Concurrency", "req", |conf| {
@@ -374,9 +422,8 @@ impl<'a> Display for RunConfigCmp<'a> {
 
 pub fn print_log_header() {
     println!("{}", fmt_section_header("LOG"));
-    println!("\
-      \x20   Time  ───── Throughput ─────  ────────────────────────────────── Response times [ms] ───────────────────────────────────\n\
-      \x20    [s]      [op/s]     [req/s]         Min        25        50        75        90        95        99      99.9       Max");
+    println!("{}", style("    Time  ───── Throughput ─────  ────────────────────────────────── Response times [ms] ───────────────────────────────────").yellow().bold().for_stdout());
+    println!("{}", style("     [s]      [op/s]     [req/s]         Min        25        50        75        90        95        99      99.9       Max").yellow().for_stdout());
 }
 
 impl Display for Sample {
@@ -410,6 +457,7 @@ impl BenchmarkCmp<'_> {
         Box::new(Line::new(
             label.to_string(),
             unit.to_string(),
+            0,
             self.v1,
             self.v2,
             f,
@@ -456,30 +504,35 @@ impl<'a> Display for BenchmarkCmp<'a> {
                     .with_error(s.call_throughput.std_err * ERR_MARGIN)
             })
                 .with_significance(self.cmp_call_throughput())
+                .with_goodness(1)
                 .into_box(),
             self.line("├─", "req/s", |s| {
                 Quantity::new(s.req_throughput.value, 0)
                     .with_error(s.req_throughput.std_err * ERR_MARGIN)
             })
                 .with_significance(self.cmp_req_throughput())
+                .with_goodness(1)
                 .into_box(),
             self.line("└─", "row/s", |s| {
                 Quantity::new(s.row_throughput.value, 0)
                     .with_error(s.row_throughput.std_err * ERR_MARGIN)
             })
                 .with_significance(self.cmp_row_throughput())
+                .with_goodness(1)
                 .into_box(),
             self.line("Mean call time", "ms", |s| {
                 Quantity::new(s.call_time_ms.mean.value, 3)
                     .with_error(s.call_time_ms.mean.std_err * ERR_MARGIN)
             })
                 .with_significance(self.cmp_mean_resp_time())
+                .with_goodness(-1)
                 .into_box(),
             self.line("Mean resp. time", "ms", |s| {
                 Quantity::new(s.resp_time_ms.mean.value, 3)
                     .with_error(s.resp_time_ms.mean.std_err * ERR_MARGIN)
             })
                 .with_significance(self.cmp_mean_resp_time())
+                .with_goodness(-1)
                 .into_box(),
         ];
 
@@ -514,13 +567,14 @@ impl<'a> Display for BenchmarkCmp<'a> {
                         let rt = s.resp_time_ms.percentiles[*p as usize];
                         Quantity::new(rt.value, 3).with_error(rt.std_err * ERR_MARGIN)
                     })
+                    .with_goodness(-1)
                     .with_significance(self.cmp_resp_time_percentile(*p));
                 writeln!(f, "{}", l)?;
             }
 
             writeln!(f)?;
             writeln!(f, "{}", fmt_section_header("RESPONSE TIME DISTRIBUTION"))?;
-            writeln!(f, "── Resp. time [ms] ──  ────────────────────────────────────────────── Count ────────────────────────────────────────────────")?;
+            writeln!(f, "{}", style("── Resp. time [ms] ──  ────────────────────────────────────────────── Count ────────────────────────────────────────────────").yellow().bold().for_stdout())?;
             let zero = Bucket {
                 percentile: 0.0,
                 duration_ms: 0.0,
@@ -532,12 +586,15 @@ impl<'a> Display for BenchmarkCmp<'a> {
             for (low, high) in ([zero].iter().chain(dist)).tuple_windows() {
                 writeln!(
                     f,
-                    "{:8.1} ... {:8.1}  {:9} {:6.2}%  {}",
-                    low.duration_ms,
-                    high.duration_ms,
+                    "{:8.1} {} {:8.1}  {:9} {:6.2}%  {}",
+                    style(low.duration_ms).yellow().for_stdout(),
+                    style("...").yellow().for_stdout(),
+                    style(high.duration_ms).yellow().for_stdout(),
                     high.count,
                     high.percentile - low.percentile,
-                    "▪".repeat((82 * high.count / max_count) as usize)
+                    style("▪".repeat((82 * high.count / max_count) as usize))
+                        .dim()
+                        .for_stdout()
                 )?;
                 if high.cumulative_count == self.v1.request_count {
                     break;

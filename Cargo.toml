@@ -1,7 +1,7 @@
 [package]
 name = "latte"
 description = "Cassandra Latency and Throughput Tester. Runs CQL queries in parallel, measures performance and computes useful statistics."
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Piotr Kołaczkowski <pkolaczk@datastax.com>"]
 edition = "2021"
 
@@ -13,7 +13,7 @@ cassandra-cpp = "0.17.0"
 cassandra-cpp-sys = "0.12"
 chrono = "0.4.18"
 clap = "3.0.0-beta.5"
-console = "0.11.2"
+console = "0.15.0"
 cpu-time = "1.0.0"
 err-derive = "0.3"
 futures = "0.3"
