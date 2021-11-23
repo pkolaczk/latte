@@ -156,6 +156,7 @@ fn distribution(hist: &Histogram<u64>) -> Vec<Bucket> {
                 percentile: x.percentile(),
                 duration_ms: x.value_iterated_to() as f64 / 1000.0,
                 count: x.count_since_last_iteration(),
+                cumulative_count: x.count_at_value(),
             });
         }
     }
@@ -389,6 +390,7 @@ pub struct Bucket {
     pub percentile: f64,
     pub duration_ms: f64,
     pub count: u64,
+    pub cumulative_count: u64,
 }
 
 #[derive(Serialize, Deserialize)]

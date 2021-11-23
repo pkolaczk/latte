@@ -308,15 +308,9 @@ async fn run(conf: RunCommand) -> Result<()> {
 
     println!(
         "{}",
-        match compare {
-            Some(ref c) => RunConfigCmp {
-                v1: &c.conf,
-                v2: Some(&conf),
-            },
-            None => RunConfigCmp {
-                v1: &conf,
-                v2: None,
-            },
+        RunConfigCmp {
+            v1: &conf,
+            v2: compare.as_ref().map(|c| &c.conf),
         }
     );
 
@@ -335,15 +329,9 @@ async fn run(conf: RunCommand) -> Result<()> {
     )
         .await?;
 
-    let stats_cmp = match compare {
-        Some(ref c) => BenchmarkCmp {
-            v1: &c.result,
-            v2: Some(&stats),
-        },
-        None => BenchmarkCmp {
-            v1: &stats,
-            v2: None,
-        },
+    let stats_cmp = BenchmarkCmp {
+        v1: &stats,
+        v2: compare.as_ref().map(|c| &c.result),
     };
     println!();
     println!("{}", &stats_cmp);

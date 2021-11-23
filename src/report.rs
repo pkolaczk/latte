@@ -250,7 +250,7 @@ where
             .and_then(|v2| {
                 let m1 = (self.f)(self.v1);
                 let m2 = (self.f)(v2);
-                let ratio = Rational::ratio(m2, m1);
+                let ratio = Rational::ratio(m1, m2);
                 ratio.map(|r| {
                     let mut diff = 100.0 * (r - 1.0);
                     if diff.is_nan() {
@@ -282,8 +282,9 @@ where
             "{label:>16} {unit:>9}  {m1:30} {m2:30} {cmp:6}  {signif:>11}",
             label = self.label,
             unit = self.fmt_unit(),
-            m1 = self.fmt_measurement(Some(self.v1)),
-            m2 = self.fmt_measurement(self.v2),
+            // if v2 defined, put v2 on left
+            m1 = self.fmt_measurement(self.v2.or(Some(self.v1))),
+            m2 = self.fmt_measurement(self.v2.map(|_| self.v1)),
             cmp = self.fmt_relative_diff(),
             signif = format!("{}", Maybe::from(self.significance))
         )
@@ -524,9 +525,9 @@ impl<'a> Display for BenchmarkCmp<'a> {
                 percentile: 0.0,
                 duration_ms: 0.0,
                 count: 0,
+                cumulative_count: 0,
             };
             let dist = &self.v1.resp_time_ms.distribution;
-
             let max_count = dist.iter().map(|b| b.count).max().unwrap_or(1);
             for (low, high) in ([zero].iter().chain(dist)).tuple_windows() {
                 writeln!(
@@ -538,6 +539,9 @@ impl<'a> Display for BenchmarkCmp<'a> {
                     high.percentile - low.percentile,
                     "▪".repeat((82 * high.count / max_count) as usize)
                 )?;
+                if high.cumulative_count == self.v1.request_count {
+                    break;
+                }
             }
         }
 
