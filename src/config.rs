@@ -1,31 +1,12 @@
-use core::fmt;
-use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
 use anyhow::anyhow;
 use chrono::Utc;
-use clap::{AppSettings, ArgEnum, Parser};
+use clap::{AppSettings, Parser};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 
-#[derive(ArgEnum, Clone, Parser, Debug, Serialize, Deserialize)]
-pub enum Workload {
-    Read,
-    Write,
-    Null,
-}
-
-impl Display for Workload {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Workload::Read => write!(f, "read")?,
-            Workload::Write => write!(f, "write")?,
-            Workload::Null => write!(f, "null")?,
-        };
-        Ok(())
-    }
-}
 
 /// Parse a single key-value pair
 fn parse_key_val<T, U>(s: &str) -> Result<(T, U), anyhow::Error>
@@ -52,11 +33,11 @@ pub struct RunCommand {
     #[clap(short('r'), long)]
     pub rate: Option<f64>,
 
-    /// Number of non-measured, warmup requests
+    /// Number of non-measured, warmup calls
     #[clap(short('w'), long("warmup"), default_value = "1")]
     pub warmup_count: u64,
 
-    /// Number of measured requests
+    /// Number of measured calls
     #[clap(short('n'), long, default_value = "1000000")]
     pub count: u64,
 
