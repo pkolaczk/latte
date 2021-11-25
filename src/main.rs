@@ -1,3 +1,4 @@
+use cassandra_cpp::stmt;
 use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -231,8 +232,34 @@ fn load_report_or_abort(path: &Path) -> Report {
     }
 }
 
+/// Constructs the output report file name from the parameters in the command.
+/// Separates parameters with underscores.
+fn get_default_output_name(conf: &RunCommand) -> PathBuf {
+    let name = conf
+        .workload
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    let mut components = vec![name];
+    components.extend(conf.cluster_name.iter().map(|x| x.replace(" ", "_")));
+    components.extend(conf.cass_version.iter().cloned());
+    components.extend(conf.tags.iter().cloned());
+    if let Some(r) = conf.rate {
+        components.push(format!("r{}", r))
+    };
+    components.push(format!("p{}", conf.concurrency));
+    components.push(format!("t{}", conf.threads));
+    components.push(format!("c{}", conf.connections));
+    let params = conf.params.iter().map(|(k, v)| format!("{}{}", k, v));
+    components.extend(params);
+    components.push(chrono::Local::now().format("%Y%m%d.%H%M%S").to_string());
+    PathBuf::from(format!("{}.json", components.join(".")))
+}
+
 async fn run(conf: RunCommand) -> Result<()> {
-    let conf = conf.set_timestamp_if_empty();
+    let mut conf = conf.set_timestamp_if_empty();
     let compare = conf.baseline.as_ref().map(|p| load_report_or_abort(p));
     eprintln!(
         "info: Loading workload script {}...",
@@ -244,12 +271,41 @@ async fn run(conf: RunCommand) -> Result<()> {
     let mut program = workload::Program::new(script, conf.params.iter().cloned().collect())?;
 
     if !program.has_run() {
-        eprintln!("Function `run` not found in the workload script.")
+        eprintln!("error: Function `run` not found in the workload script.");
+        exit(255);
     }
 
     eprintln!("info: Connecting to {:?}... ", conf.addresses);
     let mut cluster = cluster(&conf);
     let session = connect_or_abort(&mut cluster).await;
+    match session
+        .execute(&stmt!(
+            "SELECT cluster_name, release_version FROM system.local"
+        ))
+        .await
+    {
+        Ok(rs) => {
+            if let Some(row) = rs.first_row() {
+                conf.cluster_name = Some(row.get_column(0).unwrap().to_string());
+                conf.cass_version = Some(row.get_column(1).unwrap().to_string());
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "warn: Failed to fetch cluster name and release version from the server: {}",
+                e
+            );
+        }
+    }
+    eprintln!(
+        "info: Connected to {} running Cassandra version {}",
+        conf.cluster_name
+            .as_deref()
+            .unwrap_or("unknown"),
+        conf.cass_version
+            .as_deref()
+            .unwrap_or("unknown")
+    );
 
     let mut session = Session::new(session);
 
@@ -366,7 +422,7 @@ async fn run(conf: RunCommand) -> Result<()> {
     let path = conf
         .output
         .clone()
-        .unwrap_or_else(|| PathBuf::from(".latte-report.json"));
+        .unwrap_or_else(|| get_default_output_name(&conf));
 
     let report = Report::new(conf, stats);
     match report.save(&path) {

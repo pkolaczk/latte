@@ -57,22 +57,25 @@ impl Display for Progress {
         let pos = self.pos.load(Ordering::Relaxed);
         let text = match self.bound {
             ProgressBound::Count(count) => {
-                let fill = (WIDTH as u64 * pos / count) as usize;
+                let pos = min(count, pos);
+                let ratio = pos as f32 / count as f32;
+                let fill = (WIDTH as f32 * ratio) as usize;
                 format!(
                     "{} {:>5.1}%      {:>28}",
                     Self::bar(fill, WIDTH),
-                    100.0 * pos as f32 / count as f32,
+                    100.0 * ratio,
                     format!("{}/{}", pos, count)
                 )
             }
             ProgressBound::Duration(duration) => {
                 let elapsed_secs = (Instant::now() - self.start_time).as_secs_f32();
                 let duration_secs = duration.as_secs_f32();
-                let fill = (WIDTH as f32 * elapsed_secs / duration_secs) as usize;
+                let ratio = 1.0_f32.min(elapsed_secs / duration_secs);
+                let fill = (WIDTH as f32 * ratio) as usize;
                 format!(
                     "{} {:>5.1}% {:>20} {:>12}",
                     Self::bar(fill, WIDTH),
-                    100.0 * elapsed_secs / duration_secs,
+                    100.0 * ratio,
                     format!("{:.1}/{:.0}s", elapsed_secs, duration_secs),
                     pos
                 )

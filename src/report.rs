@@ -411,9 +411,11 @@ impl<'a> Display for RunConfigCmp<'a> {
         let lines: Vec<Box<dyn Display>> = vec![
             self.line("Date", "", |conf| self.format_time(conf, "%a, %d %b %Y")),
             self.line("Time", "", |conf| self.format_time(conf, "%H:%M:%S %z")),
-            self.line("Tag", "", |conf| {
-                conf.tag.clone().unwrap_or_else(|| "".to_string())
+            self.line("Cluster", "", |conf| Maybe::from(conf.cluster_name.clone())),
+            self.line("C* version", "", |conf| {
+                Maybe::from(conf.cass_version.clone())
             }),
+            self.line("Tags", "", |conf| conf.tags.iter().join(", ")),
             self.line("Workload", "", |conf| {
                 conf.workload
                     .file_name()

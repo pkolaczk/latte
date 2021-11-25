@@ -123,8 +123,8 @@ pub struct RunCommand {
     pub sampling_period: f64,
 
     /// Label that will be added to the report to help identifying the test
-    #[clap(long)]
-    pub tag: Option<String>,
+    #[clap(long("tag"), number_of_values = 1, multiple_occurrences = true)]
+    pub tags: Vec<String>,
 
     /// Path to an output file where the JSON report should be written to
     #[clap(short('o'), long)]
@@ -154,6 +154,12 @@ pub struct RunCommand {
     /// Seconds since 1970-01-01T00:00:00Z
     #[clap(hidden(true), long)]
     pub timestamp: Option<i64>,
+
+    #[clap(skip)]
+    pub cluster_name: Option<String>,
+
+    #[clap(skip)]
+    pub cass_version: Option<String>,
 }
 
 impl RunCommand {

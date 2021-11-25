@@ -28,5 +28,5 @@ pub async fn load(db, i) {
 }
 
 pub async fn run(db, i) {
-    db.execute_prepared(READ, [i % LOAD_COUNT]).await?
+    db.execute_prepared(READ, [latte::hash(i) % LOAD_COUNT]).await?
 }
