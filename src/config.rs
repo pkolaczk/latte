@@ -84,11 +84,21 @@ pub struct RunCommand {
     pub rate: Option<f64>,
 
     /// Number of iterations or time duration of the warmup phase
-    #[clap(short('w'), long("warmup"), default_value = "1", value_name = "TIME | COUNT")]
+    #[clap(
+    short('w'),
+    long("warmup"),
+    default_value = "1",
+    value_name = "TIME | COUNT"
+    )]
     pub warmup_duration: Duration,
 
     /// Number of iterations or time duration of the main benchmark phase
-    #[clap(short('d'), long("duration"), default_value = "60s", value_name = "TIME | COUNT")]
+    #[clap(
+    short('d'),
+    long("duration"),
+    default_value = "60s",
+    value_name = "TIME | COUNT"
+    )]
     pub run_duration: Duration,
 
     /// Number of I/O threads used by the driver
@@ -104,7 +114,12 @@ pub struct RunCommand {
     pub concurrency: usize,
 
     /// Throughput sampling period, in seconds
-    #[clap(short('s'), long("sampling"), default_value = "1s", value_name = "TIME | COUNT")]
+    #[clap(
+    short('s'),
+    long("sampling"),
+    default_value = "1",
+    value_name = "TIME | COUNT"
+    )]
     pub sampling_period: f64,
 
     /// Label that will be added to the report to help identifying the test
@@ -147,6 +162,15 @@ impl RunCommand {
             self.timestamp = Some(Utc::now().timestamp())
         }
         self
+    }
+
+    /// Returns the value of parameter under given key.
+    /// If key doesn't exist, or parameter is not an integer, returns `None`.
+    pub fn get_param(&self, key: &String) -> Option<i64> {
+        self.params
+            .iter()
+            .find(|(k, _)| k == key)
+            .and_then(|v| v.1.parse().ok())
     }
 }
 
