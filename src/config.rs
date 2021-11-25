@@ -1,12 +1,12 @@
+use std::collections::HashMap;
+use std::error::Error;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::anyhow;
 use chrono::Utc;
 use clap::{AppSettings, Parser};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::error::Error;
-
 
 /// Parse a single key-value pair
 fn parse_key_val<T, U>(s: &str) -> Result<(T, U), anyhow::Error>
@@ -22,6 +22,56 @@ where
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
 
+/// Controls how long the benchmark should run.
+/// We can specify either a time-based duration or a number of calls to perform.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum Duration {
+    Count(u64),
+    Time(tokio::time::Duration),
+}
+
+impl Duration {
+    pub fn is_not_zero(&self) -> bool {
+        match self {
+            Duration::Count(cnt) => *cnt > 0,
+            Duration::Time(d) => !d.is_zero(),
+        }
+    }
+
+    pub fn calls(&self) -> Option<u64> {
+        if let Duration::Count(c) = self {
+            Some(*c)
+        } else {
+            None
+        }
+    }
+
+    pub fn seconds(&self) -> Option<f32> {
+        if let Duration::Time(d) = self {
+            Some(d.as_secs_f32())
+        } else {
+            None
+        }
+    }
+}
+
+/// If the string is a valid integer, it is assumed to be the number of iterations.
+/// If the string additionally contains a time unit, e.g. "s" or "secs", it is parsed
+/// as time duration.
+impl FromStr for Duration {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(i) = s.parse() {
+            Ok(Duration::Count(i))
+        } else if let Ok(d) = parse_duration::parse(s) {
+            Ok(Duration::Time(d))
+        } else {
+            Err("Required integer number of iterations or time duration".to_string())
+        }
+    }
+}
+
 #[derive(Parser, Debug, Serialize, Deserialize)]
 #[clap(
 setting(AppSettings::NextLineHelp),
@@ -30,31 +80,31 @@ setting(AppSettings::DeriveDisplayOrder)
 pub struct RunCommand {
     /// Number of requests per second to send.
     /// If not given the requests will be sent as fast as possible within the parallelism limit
-    #[clap(short('r'), long)]
+    #[clap(short('r'), long, value_name = "COUNT")]
     pub rate: Option<f64>,
 
-    /// Number of non-measured, warmup calls
-    #[clap(short('w'), long("warmup"), default_value = "1")]
-    pub warmup_count: u64,
+    /// Number of iterations or time duration of the warmup phase
+    #[clap(short('w'), long("warmup"), default_value = "1", value_name = "TIME | COUNT")]
+    pub warmup_duration: Duration,
 
-    /// Number of measured calls
-    #[clap(short('n'), long, default_value = "1000000")]
-    pub count: u64,
+    /// Number of iterations or time duration of the main benchmark phase
+    #[clap(short('d'), long("duration"), default_value = "60s", value_name = "TIME | COUNT")]
+    pub run_duration: Duration,
 
     /// Number of I/O threads used by the driver
-    #[clap(short('t'), long, default_value = "1")]
+    #[clap(short('t'), long, default_value = "1", value_name = "COUNT")]
     pub threads: usize,
 
     /// Number of connections per IO thread
-    #[clap(short('c'), long, default_value = "1")]
+    #[clap(short('c'), long, default_value = "1", value_name = "COUNT")]
     pub connections: usize,
 
     /// Max number of concurrent async requests per IO thread
-    #[clap(short('p'), long, default_value = "384")]
-    pub parallelism: usize,
+    #[clap(short('p'), long, default_value = "384", value_name = "COUNT")]
+    pub concurrency: usize,
 
     /// Throughput sampling period, in seconds
-    #[clap(short('s'), long, default_value = "1.0")]
+    #[clap(short('s'), long("sampling"), default_value = "1s", value_name = "TIME | COUNT")]
     pub sampling_period: f64,
 
     /// Label that will be added to the report to help identifying the test

@@ -395,19 +395,29 @@ impl<'a> Display for RunConfigCmp<'a> {
                 conf.workload
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or("".to_string())
+                    .unwrap_or_else(|| "".to_string())
             }),
             self.line("Threads", "", |conf| Quantity::new(conf.threads, 0)),
             self.line("Connections", "", |conf| Quantity::new(conf.connections, 0)),
             self.line("Concurrency", "req", |conf| {
-                Quantity::new(conf.parallelism, 0)
+                Quantity::new(conf.concurrency, 0)
             }),
             self.line("Max rate", "op/s", |conf| match conf.rate {
                 Some(r) => Quantity::new(Maybe::Some(r), 0),
                 None => Quantity::new(Maybe::None, 0),
             }),
-            self.line("Warmup", "op", |conf| Quantity::new(conf.warmup_count, 0)),
-            self.line("Iterations", "op", |conf| Quantity::new(conf.count, 0)),
+            self.line("Warmup", "s", |conf| {
+                Quantity::new(Maybe::from(conf.warmup_duration.seconds()), 0)
+            }),
+            self.line("└─", "op", |conf| {
+                Quantity::new(Maybe::from(conf.warmup_duration.calls()), 0)
+            }),
+            self.line("Run time", "s", |conf| {
+                Quantity::new(Maybe::from(conf.run_duration.seconds()), 1)
+            }),
+            self.line("└─", "op", |conf| {
+                Quantity::new(Maybe::from(conf.run_duration.calls()), 0)
+            }),
             self.line("Sampling", "s", |conf| {
                 Quantity::new(conf.sampling_period, 1)
             }),

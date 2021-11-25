@@ -66,13 +66,14 @@ impl Display for Progress {
                 )
             }
             ProgressBound::Duration(duration) => {
-                let elapsed = (Instant::now() - self.start_time).as_secs_f32();
-                let duration_s = duration.as_secs_f32();
-                let fill = (WIDTH as f32 * elapsed / duration_s) as usize;
+                let elapsed_secs = (Instant::now() - self.start_time).as_secs_f32();
+                let duration_secs = duration.as_secs_f32();
+                let fill = (WIDTH as f32 * elapsed_secs / duration_secs) as usize;
                 format!(
-                    "{} {:>20} {:>16}",
+                    "{} {:>5.1}% {:>20} {:>12}",
                     Self::bar(fill, WIDTH),
-                    format!("{:.1}/{:.0}s", elapsed, duration_s),
+                    100.0 * elapsed_secs / duration_secs,
+                    format!("{:.1}/{:.0}s", elapsed_secs, duration_secs),
                     pos
                 )
             }
