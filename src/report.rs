@@ -1,4 +1,5 @@
 use core::fmt;
+use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::{fs, io};
@@ -145,6 +146,12 @@ impl Rational for f64 {
 }
 
 impl Rational for u64 {
+    fn ratio(a: Self, b: Self) -> Option<f32> {
+        Some(a as f32 / b as f32)
+    }
+}
+
+impl Rational for i64 {
     fn ratio(a: Self, b: Self) -> Option<f32> {
         Some(a as f32 / b as f32)
     }
@@ -320,16 +327,22 @@ where
     }
 }
 
+const REPORT_WIDTH: usize = 124;
+
 fn fmt_section_header(name: &str) -> String {
     format!(
         "{} {}",
         style(name).yellow().bold().bright().for_stdout(),
-        style("═".repeat(124 - name.len() - 1))
+        style("═".repeat(REPORT_WIDTH - name.len() - 1))
             .yellow()
             .bold()
             .bright()
             .for_stdout()
     )
+}
+
+fn fmt_horizontal_line() -> String {
+    format!("{}", style("─".repeat(REPORT_WIDTH)).yellow().dim())
 }
 
 fn fmt_cmp_header(display_significance: bool) -> String {
@@ -376,6 +389,16 @@ impl RunConfigCmp<'_> {
             })
             .unwrap_or_else(|| "".to_string())
     }
+
+    /// Returns the set union of custom user parameters in both configurations.
+    fn param_names(&self) -> BTreeSet<&String> {
+        let mut keys = BTreeSet::new();
+        keys.extend(self.v1.params.iter().map(|x| &x.0));
+        if let Some(v2) = self.v2 {
+            keys.extend(v2.params.iter().map(|x| &x.0));
+        }
+        keys
+    }
 }
 
 impl<'a> Display for RunConfigCmp<'a> {
@@ -397,6 +420,28 @@ impl<'a> Display for RunConfigCmp<'a> {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "".to_string())
             }),
+        ];
+
+        for l in lines {
+            writeln!(f, "{}", l)?;
+        }
+
+        writeln!(f, "{}", fmt_horizontal_line()).unwrap();
+        for k in self.param_names() {
+            let label = format!("-P {}", k);
+            writeln!(
+                f,
+                "{}",
+                self.line(label.as_str(), "", |conf| {
+                    Quantity::new(Maybe::from(conf.get_param(k)), 0)
+                })
+            )
+                .unwrap();
+        }
+
+        writeln!(f, "{}", fmt_horizontal_line()).unwrap();
+
+        let lines: Vec<Box<dyn Display>> = vec![
             self.line("Threads", "", |conf| Quantity::new(conf.threads, 0)),
             self.line("Connections", "", |conf| Quantity::new(conf.connections, 0)),
             self.line("Concurrency", "req", |conf| {

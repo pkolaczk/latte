@@ -233,7 +233,7 @@ fn load_report_or_abort(path: &Path) -> Report {
 
 async fn run(conf: RunCommand) -> Result<()> {
     let conf = conf.set_timestamp_if_empty();
-    let compare = conf.compare.as_ref().map(|p| load_report_or_abort(p));
+    let compare = conf.baseline.as_ref().map(|p| load_report_or_abort(p));
     eprintln!(
         "info: Loading workload script {}...",
         conf.workload.display()
@@ -380,10 +380,8 @@ async fn run(conf: RunCommand) -> Result<()> {
 }
 
 async fn show(conf: ShowCommand) -> Result<()> {
-    let report1 = load_report_or_abort(&PathBuf::from(conf.report1));
-    let report2 = conf
-        .report2
-        .map(|p| load_report_or_abort(&PathBuf::from(p)));
+    let report1 = load_report_or_abort(&conf.report);
+    let report2 = conf.baseline.map(|p| load_report_or_abort(&p));
 
     let config_cmp = RunConfigCmp {
         v1: &report1.conf,

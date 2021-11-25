@@ -131,9 +131,9 @@ pub struct RunCommand {
     #[serde(skip)]
     pub output: Option<PathBuf>,
 
-    /// Path to a report from another run that should be compared to side-by-side
-    #[clap(short('x'), long)]
-    pub compare: Option<PathBuf>,
+    /// Path to a report from another earlier run that should be compared to side-by-side
+    #[clap(short('b'), long)]
+    pub baseline: Option<PathBuf>,
 
     /// Skips erasing and loading data before running the benchmark.
     #[clap(long)]
@@ -166,7 +166,7 @@ impl RunCommand {
 
     /// Returns the value of parameter under given key.
     /// If key doesn't exist, or parameter is not an integer, returns `None`.
-    pub fn get_param(&self, key: &String) -> Option<i64> {
+    pub fn get_param(&self, key: &str) -> Option<i64> {
         self.params
             .iter()
             .find(|(k, _)| k == key)
@@ -177,9 +177,11 @@ impl RunCommand {
 #[derive(Parser, Debug)]
 pub struct ShowCommand {
     /// Path to the JSON report file
-    pub report1: String,
+    pub report: PathBuf,
+
     /// Optional path to another JSON report file
-    pub report2: Option<String>,
+    #[clap(short('b'), long)]
+    pub baseline: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
