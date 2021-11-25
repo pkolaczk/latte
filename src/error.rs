@@ -21,6 +21,9 @@ pub enum LatteError {
 
     #[error(display = "{}", _0)]
     Diagnostics(#[source] rune::diagnostics::EmitError),
+
+    #[error(display = "")]
+    Interrupted,
 }
 
 pub type Result<T> = std::result::Result<T, LatteError>;
