@@ -1,11 +1,10 @@
-use std::cmp::{max, min};
-use std::fs::File;
+use std::cmp::max;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 
 use clap::Parser;
-use chrono::{Local, NaiveDateTime, TimeZone};
 use futures::channel::mpsc::Sender;
 use futures::future::ready;
 use futures::{SinkExt, Stream, StreamExt};
@@ -64,7 +63,7 @@ async fn send_stats(workload: &Workload, time: Instant, tx: &mut Sender<Result<W
 /// Runs a series of requests on a separate thread and
 /// produces a stream of QueryStats
 async fn req_stream(
-    concurrency: usize,
+    concurrency: NonZeroUsize,
     rate: Option<f64>,
     sampling_period: Duration,
     workload: Workload,
@@ -87,7 +86,7 @@ async fn req_stream(
                 .map(|_| deadline.next())
                 .take_while(|i| ready(i.is_some()))
                 .map(|i| tokio::task::unconstrained(workload.run(i.unwrap() as i64)))
-                .buffer_unordered(concurrency)
+                .buffer_unordered(concurrency.get())
                 .inspect(|_| progress.tick())
         };
 
@@ -152,9 +151,9 @@ struct ExecutionOptions {
     /// Maximum rate of requests in requests per second, `None` means no limit
     rate: Option<f64>,
     /// Number of parallel threads of execution
-    threads: usize,
+    threads: NonZeroUsize,
     /// Number of outstanding async requests per each thread
-    concurrency: usize,
+    concurrency: NonZeroUsize,
 }
 
 /// Executes the given function many times in parallel.
@@ -173,7 +172,7 @@ async fn par_execute(
     workload: Workload,
     signals: Arc<InterruptHandler>,
 ) -> Result<BenchmarkStats> {
-    let threads = exec_options.threads;
+    let threads_count = exec_options.threads.get();
     let concurrency = exec_options.concurrency;
     let rate = exec_options.rate;
     let progress = match exec_options.duration {
@@ -184,12 +183,12 @@ async fn par_execute(
     let deadline = Arc::new(Deadline::new(exec_options.duration));
     let mut stats = Recorder::start(rate, concurrency);
 
-    let mut streams = Vec::with_capacity(threads);
+    let mut streams = Vec::with_capacity(threads_count);
 
-    for _ in 0..threads {
+    for _ in 0..threads_count {
         let s = req_stream(
             concurrency,
-            rate.map(|r| r / (threads as f64)),
+            rate.map(|r| r / (threads_count as f64)),
             sampling_period,
             workload.clone(),
             deadline.clone(),
@@ -239,57 +238,24 @@ fn get_default_output_name(conf: &RunCommand) -> PathBuf {
         .to_string_lossy()
         .to_string();
 
-    let timestamp = match conf.timestamp {
-        Some(ts) => Local.from_utc_datetime(&NaiveDateTime::from_timestamp(ts, 0)),
-        None => Local::now(),
-    };
-
     let mut components = vec![name];
     components.extend(conf.cluster_name.iter().map(|x| x.replace(" ", "_")));
     components.extend(conf.cass_version.iter().cloned());
-    components.push(format!("p{}", conf.concurrency));
-    components.push(format!("t{}", conf.threads));
-    components.push(format!("c{}", conf.connections));
+    components.extend(conf.tags.iter().cloned());
     if let Some(r) = conf.rate {
         components.push(format!("r{}", r))
     };
+    components.push(format!("p{}", conf.concurrency));
+    components.push(format!("t{}", conf.threads));
+    components.push(format!("c{}", conf.connections));
     let params = conf.params.iter().map(|(k, v)| format!("{}{}", k, v));
     components.extend(params);
-    components.extend(conf.tags.iter().cloned());
-    components.push(timestamp.format("%Y%m%d.%H%M%S").to_string());
-
+    components.push(chrono::Local::now().format("%Y%m%d.%H%M%S").to_string());
     PathBuf::from(format!("{}.json", components.join(".")))
-}
-
-/// Returns the output path where the report should be written to
-fn output_path(conf: &RunCommand) -> PathBuf {
-    let mut output_path = conf
-        .output
-        .clone()
-        .unwrap_or_else(|| get_default_output_name(conf));
-
-    if output_path.is_file() {
-        eprintln!("error: File already exists: {}", output_path.display());
-        exit(256);
-    }
-    if output_path.is_dir() {
-        output_path = output_path.join(get_default_output_name(conf));
-    }
-    if let Err(e) = File::create(&output_path) {
-        eprintln!(
-            "error: Could not create output file {}: {}",
-            output_path.display(),
-            e
-        );
-        exit(256);
-    }
-    output_path
 }
 
 async fn run(conf: RunCommand) -> Result<()> {
     let mut conf = conf.set_timestamp_if_empty();
-    let output_path = output_path(&conf);
-
     let compare = conf.baseline.as_ref().map(|p| load_report_or_abort(p));
     eprintln!(
         "info: Loading workload script {}...",
@@ -312,12 +278,11 @@ async fn run(conf: RunCommand) -> Result<()> {
         .await;
     if let Ok(rs) = cluster_info {
         if let Some(rows) = rs.rows {
-            for row in rows {
+            if let Some(row) = rows.into_iter().next() {
                 if let Ok((cluster_name, cass_version)) = row.into_typed() {
                     conf.cluster_name = Some(cluster_name);
                     conf.cass_version = Some(cass_version);
                 }
-                break;
             }
         }
     }
@@ -368,7 +333,7 @@ async fn run(conf: RunCommand) -> Result<()> {
                 duration: config::Duration::Count(load_count),
                 rate: None,
                 threads: conf.threads,
-                concurrency: min(128, conf.concurrency),
+                concurrency: conf.load_concurrency,
             };
             par_execute(
                 "Loading...",
@@ -391,7 +356,7 @@ async fn run(conf: RunCommand) -> Result<()> {
             duration: conf.warmup_duration,
             rate: None,
             threads: conf.threads,
-            concurrency: min(128, conf.concurrency),
+            concurrency: conf.concurrency,
         };
         par_execute(
             "Warming up...",
@@ -440,15 +405,16 @@ async fn run(conf: RunCommand) -> Result<()> {
     println!();
     println!("{}", &stats_cmp);
 
+    let path = conf
+        .output
+        .clone()
+        .unwrap_or_else(|| get_default_output_name(&conf));
+
     let report = Report::new(conf, stats);
-    match report.save(&output_path) {
+    match report.save(&path) {
         Ok(()) => {}
         Err(e) => {
-            eprintln!(
-                "error: Failed to save report to {}: {}",
-                output_path.display(),
-                e
-            );
+            eprintln!("error: Failed to save report to {}: {}", path.display(), e);
             exit(1)
         }
     }
@@ -485,8 +451,8 @@ fn main() {
     console::set_colors_enabled(true);
     let command = AppConfig::parse().command;
     let runtime = match &command {
-        Command::Run(cmd) if cmd.threads > 1 => Builder::new_multi_thread()
-            .worker_threads(cmd.threads)
+        Command::Run(cmd) if cmd.threads.get() > 1 => Builder::new_multi_thread()
+            .worker_threads(cmd.threads.get())
             .enable_all()
             .build(),
         _ => Builder::new_current_thread().enable_all().build(),

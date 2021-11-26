@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -101,17 +102,21 @@ pub struct RunCommand {
     )]
     pub run_duration: Duration,
 
-    /// Number of I/O threads used by the driver
+    /// Number of worker threads used by the driver
     #[clap(short('t'), long, default_value = "1", value_name = "COUNT")]
-    pub threads: usize,
+    pub threads: NonZeroUsize,
 
-    /// Number of connections per IO thread
+    /// Number of connections per Cassandra node / Scylla shard
     #[clap(short('c'), long, default_value = "1", value_name = "COUNT")]
-    pub connections: usize,
+    pub connections: NonZeroUsize,
 
-    /// Max number of concurrent async requests per IO thread
-    #[clap(short('p'), long, default_value = "384", value_name = "COUNT")]
-    pub concurrency: usize,
+    /// Max number of concurrent async requests per thread during data loading phase
+    #[clap(long, default_value = "128", value_name = "COUNT")]
+    pub load_concurrency: NonZeroUsize,
+
+    /// Max number of concurrent async requests per thread during the main benchmark phase
+    #[clap(short('p'), long, default_value = "128", value_name = "COUNT")]
+    pub concurrency: NonZeroUsize,
 
     /// Throughput sampling period, in seconds
     #[clap(
