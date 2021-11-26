@@ -1,5 +1,6 @@
 use std::cmp::min;
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 
 use crate::workload::WorkloadStats;
 use cpu_time::ProcessTime;
@@ -505,14 +506,14 @@ pub struct Recorder {
     pub queue_len_sum: u64,
     log: Log,
     rate_limit: Option<f64>,
-    concurrency_limit: usize,
+    concurrency_limit: NonZeroUsize,
 }
 
 impl Recorder {
     /// Creates a new recorder.
     /// The `rate_limit` and `parallelism_limit` parameters are used only as the
     /// reference levels for relative throughput and relative parallelism.
-    pub fn start(rate_limit: Option<f64>, parallelism_limit: usize) -> Recorder {
+    pub fn start(rate_limit: Option<f64>, concurrency_limit: NonZeroUsize) -> Recorder {
         let start_time = Instant::now();
         Recorder {
             start_time,
@@ -521,7 +522,7 @@ impl Recorder {
             end_cpu_time: ProcessTime::now(),
             log: Log::new(),
             rate_limit,
-            concurrency_limit: parallelism_limit,
+            concurrency_limit,
             call_count: 0,
             request_count: 0,
             row_count: 0,
@@ -580,7 +581,7 @@ impl Recorder {
         let req_throughput = self.log.req_throughput();
         let row_throughput = self.log.row_throughput();
         let concurrency = self.log.mean_concurrency();
-        let concurrency_ratio = 100.0 * concurrency.value / self.concurrency_limit as f64;
+        let concurrency_ratio = 100.0 * concurrency.value / self.concurrency_limit.get() as f64;
 
         let call_time_percentiles: Vec<Mean> = Percentile::iter()
             .map(|p| self.log.call_time_percentile(p))
