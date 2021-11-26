@@ -429,19 +429,18 @@ impl<'a> Display for RunConfigCmp<'a> {
         }
 
         writeln!(f, "{}", fmt_horizontal_line()).unwrap();
-        for k in self.param_names() {
-            let label = format!("-P {}", k);
-            writeln!(
-                f,
-                "{}",
-                self.line(label.as_str(), "", |conf| {
-                    Quantity::new(Maybe::from(conf.get_param(k)), 0)
-                })
-            )
-                .unwrap();
-        }
 
-        writeln!(f, "{}", fmt_horizontal_line()).unwrap();
+        let param_names = self.param_names();
+        if !param_names.is_empty() {
+            for k in param_names {
+                let label = format!("-P {}", k);
+                let line = self.line(label.as_str(), "", |conf| {
+                    Quantity::new(Maybe::from(conf.get_param(k)), 0)
+                });
+                writeln!(f, "{}", line).unwrap();
+            }
+            writeln!(f, "{}", fmt_horizontal_line()).unwrap();
+        }
 
         let lines: Vec<Box<dyn Display>> = vec![
             self.line("Threads", "", |conf| Quantity::new(conf.threads, 0)),

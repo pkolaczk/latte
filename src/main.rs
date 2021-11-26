@@ -301,12 +301,8 @@ async fn run(conf: RunCommand) -> Result<()> {
     }
     eprintln!(
         "info: Connected to {} running Cassandra version {}",
-        conf.cluster_name
-            .as_deref()
-            .unwrap_or("unknown"),
-        conf.cass_version
-            .as_deref()
-            .unwrap_or("unknown")
+        conf.cluster_name.as_deref().unwrap_or("unknown"),
+        conf.cass_version.as_deref().unwrap_or("unknown")
     );
 
     let mut session = Session::new(session);
