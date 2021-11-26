@@ -1,6 +1,3 @@
-use itertools::Itertools;
-use scylla::transport::errors::{DbError, NewSessionError, QueryError};
-use scylla::{QueryResult, SessionBuilder};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -8,10 +5,13 @@ use std::process::exit;
 use std::sync::Arc;
 
 use hdrhistogram::Histogram;
+use itertools::Itertools;
 use rune::runtime::TypeInfo;
 use rune::{Any, Value};
 use scylla::prepared_statement::PreparedStatement;
-
+use scylla::transport::errors::{DbError, NewSessionError, QueryError};
+use scylla::transport::session::PoolSize;
+use scylla::{QueryResult, SessionBuilder};
 use tokio::time::{Duration, Instant};
 
 use crate::config::RunCommand;
@@ -20,6 +20,7 @@ use crate::config::RunCommand;
 pub async fn connect(conf: &RunCommand) -> Result<scylla::Session, NewSessionError> {
     SessionBuilder::new()
         .known_nodes(&conf.addresses)
+        .pool_size(PoolSize::PerShard(conf.connections))
         .build()
         .await
 }
@@ -202,7 +203,7 @@ impl Session {
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
         let params = bind::to_scylla_query_params(&params)?;
         let start_time = self.stats.borrow_mut().start_request();
-        let rs = self.inner.execute(&statement, params).await;
+        let rs = self.inner.execute(statement, params).await;
         let duration = Instant::now() - start_time;
         self.stats.borrow_mut().complete_request(duration, &rs);
         rs?;
@@ -225,11 +226,11 @@ impl Session {
 
 /// Functions for binding rune values to CQL parameters
 mod bind {
-    use crate::workload::context;
-    use crate::CassErrorKind;
     use scylla::frame::response::result::CqlValue;
 
+    use crate::workload::context;
     use crate::workload::context::Uuid;
+    use crate::CassErrorKind;
 
     use super::*;
 
@@ -255,18 +256,16 @@ mod bind {
                 let obj = obj.borrow_ref().unwrap();
                 if obj.type_hash() == Uuid::type_hash() {
                     let uuid: &context::Uuid = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::Uuid(uuid.0.into()))
+                    Ok(CqlValue::Uuid(uuid.0))
                 } else {
-                    return Err(CassError(CassErrorKind::UnsupportedType(
+                    Err(CassError(CassErrorKind::UnsupportedType(
                         v.type_info().unwrap(),
-                    )));
+                    )))
                 }
             }
-            other => {
-                return Err(CassError(CassErrorKind::UnsupportedType(
-                    other.type_info().unwrap(),
-                )));
-            }
+            other => Err(CassError(CassErrorKind::UnsupportedType(
+                other.type_info().unwrap(),
+            ))),
         }
     }
 

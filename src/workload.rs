@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use hdrhistogram::Histogram;
@@ -293,14 +294,14 @@ impl Workload {
 
     /// Splits this workload into subworkloads, each producing a different subsequence of iterations.
     /// Each subworkload gets fresh metrics.
-    pub fn split(&self, n: usize) -> Vec<Workload> {
-        (0..n)
+    pub fn split(&self, n: NonZeroUsize) -> Vec<Workload> {
+        (0..n.get())
             .into_iter()
             .map(|offset| Workload {
                 session: self.session.clone(),
                 program: self.program.clone(),
                 function: self.function,
-                iter_step: n as i64,
+                iter_step: n.get() as i64,
                 iter_offset: offset as i64,
                 start_time: Cell::new(Instant::now()),
                 fn_stats: Default::default(),

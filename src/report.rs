@@ -1,6 +1,7 @@
 use core::fmt;
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::{fs, io};
 
@@ -160,6 +161,12 @@ impl Rational for i64 {
 impl Rational for usize {
     fn ratio(a: Self, b: Self) -> Option<f32> {
         Some(a as f32 / b as f32)
+    }
+}
+
+impl Rational for NonZeroUsize {
+    fn ratio(a: Self, b: Self) -> Option<f32> {
+        Some(a.get() as f32 / b.get() as f32)
     }
 }
 
