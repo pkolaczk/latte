@@ -22,7 +22,7 @@ pub enum LatteError {
     #[error(display = "{}", _0)]
     Diagnostics(#[source] rune::diagnostics::EmitError),
 
-    #[error(display = "")]
+    #[error(display = "Interrupted")]
     Interrupted,
 }
 

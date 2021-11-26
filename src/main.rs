@@ -88,7 +88,7 @@ fn req_stream(
             let mut req_stats = {
                 interval_stream(rate)
                     .map(|_| deadline.next())
-                    .take_while(|i| ready(i.is_some() && !interrupt.is_interrupted()))
+                    .take_while(|i| ready(i.is_some()))
                     .map(|i| workload.run(i.unwrap() as i64))
                     .buffer_unordered(concurrency)
                     .inspect(|_| progress.tick())
@@ -99,6 +99,9 @@ fn req_stream(
             let mut start_time = Instant::now();
             workload.reset(start_time);
             while let Some(req) = req_stats.next().await {
+                if interrupt.is_interrupted() {
+                    break;
+                }
                 match req {
                     Ok(_) | Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_)))) => {
                         let now = Instant::now();
@@ -107,7 +110,6 @@ fn req_stream(
                             send_stats(workload, start_time, &mut tx).await;
                         }
                     }
-
                     // This can happen if an error happened during generation of data or some other
                     // problem on the client-side. In this case there is no point in
                     // continuing.
