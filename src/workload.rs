@@ -310,7 +310,6 @@ impl Workload {
     /// the generated action should be a function of the iteration number.
     pub async fn run(&self, iteration: i64) -> Result<(), LatteError> {
         let start_time = Instant::now();
-        let iteration = iteration * self.iter_step + self.iter_offset;
         let result = self
             .program
             .async_call(self.function, (&self.session, iteration))
