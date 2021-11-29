@@ -67,13 +67,16 @@ impl Program {
         let mut err_module = Module::default();
         err_module.ty::<CassError>().unwrap();
         err_module
-            .inst_fn(rune::Protocol::STRING_DISPLAY, CassError::display)
+            .inst_fn(rune::runtime::Protocol::STRING_DISPLAY, CassError::display)
             .unwrap();
 
         let mut uuid_module = Module::default();
         uuid_module.ty::<context::Uuid>().unwrap();
         uuid_module
-            .inst_fn(rune::Protocol::STRING_DISPLAY, context::Uuid::display)
+            .inst_fn(
+                rune::runtime::Protocol::STRING_DISPLAY,
+                context::Uuid::display,
+            )
             .unwrap();
 
         let mut latte_module = Module::with_crate("latte");
@@ -358,7 +361,7 @@ pub mod context {
     use metrohash::{MetroHash128, MetroHash64};
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
-    use rune::ast::{Kind, Lit};
+    use rune::ast::Kind;
     use rune::macros::{quote, MacroContext, TokenStream};
     use rune::parse::Parser;
     use rune::{ast, Any};
@@ -396,15 +399,16 @@ pub mod context {
     ) -> rune::Result<TokenStream> {
         let mut parser = Parser::from_token_stream(ts, ctx.macro_span());
         let name = parser.parse::<ast::LitStr>()?;
-        let name = ctx.resolve(name)?;
+        let name = ctx.resolve(name)?.to_string();
         let sep = parser.next()?;
         if sep.kind != Kind::Comma {
             return Err(anyhow!("Expected comma"));
         }
         let expr = parser.parse::<ast::Expr>()?;
-        let rhs = match params.get(name.as_ref()) {
+        let rhs = match params.get(&name) {
             Some(value) => {
-                let value = Lit::new(ctx, value.parse::<i64>()?);
+                let src_id = ctx.insert_source(&name, value);
+                let value = ctx.parse_source::<ast::Expr>(src_id)?;
                 quote!(#value)
             }
             None => quote!(#expr),

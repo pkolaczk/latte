@@ -56,9 +56,9 @@ checksum = "7e3c0daaaae24df5995734b689627f8fa02101bc5bbc768be3055b66a010d7af"
 
 [[package]]
 name = "anyhow"
-version = "1.0.48"
+version = "1.0.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62e1f47f7dc0422027a4e370dd4548d4d66b26782e513e98dca1e689e058a80e"
+checksum = "ecc78c299ae753905840c5d3ba036c51f61ce5a98a83f98d9c9d29dffd427f71"
 
 [[package]]
 name = "approx"
@@ -232,9 +232,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81156fece84ab6a9f2afdb109ce3ae577e42b1228441eded99bd77f627953b1a"
+checksum = "3825b1e8580894917dc4468cb634a1b4e9745fddc854edad72d9c04644c0319f"
 dependencies = [
  "cfg-if",
 ]
@@ -1086,7 +1086,7 @@ checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
 [[package]]
 name = "rune"
 version = "0.10.0"
-source = "git+https://github.com/rune-rs/rune.git?branch=main#551a671daaa8a33b7c71efec7bd7e86ea43daaf4"
+source = "git+https://github.com/rune-rs/rune.git?rev=5fcf6e1#5fcf6e19bed6d5670aa2f2bfebfdadab120bccef"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1111,7 +1111,7 @@ dependencies = [
 [[package]]
 name = "rune-macros"
 version = "0.10.0"
-source = "git+https://github.com/rune-rs/rune.git?branch=main#551a671daaa8a33b7c71efec7bd7e86ea43daaf4"
+source = "git+https://github.com/rune-rs/rune.git?rev=5fcf6e1#5fcf6e19bed6d5670aa2f2bfebfdadab120bccef"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1138,9 +1138,9 @@ checksum = "61b3909d758bb75c79f23d4736fac9433868679d3ad2ea7a61e3c25cfda9a088"
 
 [[package]]
 name = "ryu"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
+checksum = "3c9613b5a66ab9ba26415184cfc41156594925a9cf3a2057e57f31ff145f6568"
 
 [[package]]
 name = "scopeguard"
@@ -1179,9 +1179,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.71"
+version = "1.0.72"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "063bf466a64011ac24040a49009724ee60a57da1b437617ceb32e53ad61bfb19"
+checksum = "d0ffa0837f2dfa6fb90868c2b5468cad482e175f7dad97e7421951e663f2b527"
 dependencies = [
  "itoa",
  "ryu",
@@ -1227,9 +1227,9 @@ dependencies = [
 
 [[package]]
 name = "status-line"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de8d19e36d4b4ffe97c986681664e611392a73aa7e42804b9014b5b4d3ae7fac"
+checksum = "37f78e4d66f7a647acb4867331a45c8f35c4ccc538e27667414173835ddde928"
 dependencies = [
  "ansi-escapes",
 ]
@@ -1263,9 +1263,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.81"
+version = "1.0.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2afee18b8beb5a596ecb4a2dce128c719b4ba399d34126b9e4396e3f9860966"
+checksum = "8daf5dd0bb60cbd4137b1b587d2fc0ae729bc07cf01cd70b36a1ed5ade3b9d59"
 dependencies = [
  "proc-macro2",
  "quote",

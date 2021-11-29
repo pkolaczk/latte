@@ -1,5 +1,7 @@
 use cassandra_cpp::stmt;
+use chrono::{Local, NaiveDateTime, TimeZone};
 use std::cmp::{max, min};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
@@ -244,24 +246,57 @@ fn get_default_output_name(conf: &RunCommand) -> PathBuf {
         .to_string_lossy()
         .to_string();
 
+    let timestamp = match conf.timestamp {
+        Some(ts) => Local.from_utc_datetime(&NaiveDateTime::from_timestamp(ts, 0)),
+        None => Local::now(),
+    };
+
     let mut components = vec![name];
     components.extend(conf.cluster_name.iter().map(|x| x.replace(" ", "_")));
     components.extend(conf.cass_version.iter().cloned());
-    components.extend(conf.tags.iter().cloned());
-    if let Some(r) = conf.rate {
-        components.push(format!("r{}", r))
-    };
     components.push(format!("p{}", conf.concurrency));
     components.push(format!("t{}", conf.threads));
     components.push(format!("c{}", conf.connections));
+    if let Some(r) = conf.rate {
+        components.push(format!("r{}", r))
+    };
     let params = conf.params.iter().map(|(k, v)| format!("{}{}", k, v));
     components.extend(params);
-    components.push(chrono::Local::now().format("%Y%m%d.%H%M%S").to_string());
+    components.extend(conf.tags.iter().cloned());
+    components.push(timestamp.format("%Y%m%d.%H%M%S").to_string());
+
     PathBuf::from(format!("{}.json", components.join(".")))
+}
+
+/// Returns the output path where the report should be written to
+fn output_path(conf: &RunCommand) -> PathBuf {
+    let mut output_path = conf
+        .output
+        .clone()
+        .unwrap_or_else(|| get_default_output_name(conf));
+
+    if output_path.is_file() {
+        eprintln!("error: File already exists: {}", output_path.display());
+        exit(256);
+    }
+    if output_path.is_dir() {
+        output_path = output_path.join(get_default_output_name(conf));
+    }
+    if let Err(e) = File::create(&output_path) {
+        eprintln!(
+            "error: Could not create output file {}: {}",
+            output_path.display(),
+            e
+        );
+        exit(256);
+    }
+    output_path
 }
 
 async fn run(conf: RunCommand) -> Result<()> {
     let mut conf = conf.set_timestamp_if_empty();
+    let output_path = output_path(&conf);
+
     let compare = conf.baseline.as_ref().map(|p| load_report_or_abort(p));
     eprintln!(
         "info: Loading workload script {}...",
@@ -417,16 +452,15 @@ async fn run(conf: RunCommand) -> Result<()> {
     println!();
     println!("{}", &stats_cmp);
 
-    let path = conf
-        .output
-        .clone()
-        .unwrap_or_else(|| get_default_output_name(&conf));
-
     let report = Report::new(conf, stats);
-    match report.save(&path) {
+    match report.save(&output_path) {
         Ok(()) => {}
         Err(e) => {
-            eprintln!("error: Failed to save report to {}: {}", path.display(), e);
+            eprintln!(
+                "error: Failed to save report to {}: {}",
+                output_path.display(),
+                e
+            );
             exit(1)
         }
     }

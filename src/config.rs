@@ -126,7 +126,7 @@ pub struct RunCommand {
     #[clap(long("tag"), number_of_values = 1, multiple_occurrences = true)]
     pub tags: Vec<String>,
 
-    /// Path to an output file where the JSON report should be written to
+    /// Path to an output file or directory where the JSON report should be written to.
     #[clap(short('o'), long)]
     #[serde(skip)]
     pub output: Option<PathBuf>,
