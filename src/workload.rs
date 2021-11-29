@@ -314,10 +314,7 @@ impl Workload {
     /// the generated action should be a function of the iteration number.
     pub async fn run(&self, iteration: i64) -> Result<(), LatteError> {
         let start_time = Instant::now();
-        let result = self
-            .program
-            .async_call(self.function, (&self.session, iteration))
-            .await;
+        let result = self.program.async_call(self.function, (&self.session, iteration)).await;
         let end_time = Instant::now();
         self.fn_stats
             .borrow_mut()

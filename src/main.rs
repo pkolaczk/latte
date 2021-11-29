@@ -1,12 +1,10 @@
 use std::cmp::max;
 use std::num::NonZeroUsize;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 
 use clap::Parser;
-use chrono::{Local, NaiveDateTime, TimeZone};
 use futures::channel::mpsc::Sender;
 use futures::future::ready;
 use futures::{SinkExt, Stream, StreamExt};
@@ -66,7 +64,7 @@ async fn send_stats(workload: &Workload, time: Instant, tx: &mut Sender<Result<W
 /// Runs a series of requests on a separate thread and
 /// produces a stream of QueryStats
 fn req_stream(
-    concurrency: usize,
+    concurrency: NonZeroUsize,
     rate: Option<f64>,
     sampling_period: Duration,
     workload: Workload,
@@ -91,8 +89,8 @@ fn req_stream(
                 interval_stream(rate)
                     .map(|_| deadline.next())
                     .take_while(|i| ready(i.is_some()))
-                    .map(|i| workload.run(i.unwrap() as i64))
-                    .buffer_unordered(concurrency)
+                    .map(|i| tokio::task::unconstrained(workload.run(i.unwrap() as i64)))
+                    .buffer_unordered(concurrency.get())
                     .inspect(|_| progress.tick())
             };
 
@@ -158,9 +156,9 @@ struct ExecutionOptions {
     /// Maximum rate of requests in requests per second, `None` means no limit
     rate: Option<f64>,
     /// Number of parallel threads of execution
-    threads: usize,
+    threads: NonZeroUsize,
     /// Number of outstanding async requests per each thread
-    concurrency: usize,
+    concurrency: NonZeroUsize,
 }
 
 /// Executes the given function many times in parallel.
@@ -190,13 +188,13 @@ async fn par_execute(
     let deadline = Arc::new(Deadline::new(exec_options.duration));
     let mut stats = Recorder::start(rate, concurrency);
 
-    let mut streams = Vec::with_capacity(threads);
+    let mut streams = Vec::with_capacity(threads.get());
     let sub_workloads = workload.split(threads);
 
     for w in sub_workloads {
         let s = req_stream(
             concurrency,
-            rate.map(|r| r / (threads as f64)),
+            rate.map(|r| r / (threads.get() as f64)),
             sampling_period,
             w,
             deadline.clone(),
@@ -286,12 +284,11 @@ async fn run(conf: RunCommand) -> Result<()> {
         .await;
     if let Ok(rs) = cluster_info {
         if let Some(rows) = rs.rows {
-            for row in rows {
+            if let Some(row) = rows.into_iter().next() {
                 if let Ok((cluster_name, cass_version)) = row.into_typed() {
                     conf.cluster_name = Some(cluster_name);
                     conf.cass_version = Some(cass_version);
                 }
-                break;
             }
         }
     }
@@ -342,7 +339,7 @@ async fn run(conf: RunCommand) -> Result<()> {
                 duration: config::Duration::Count(load_count),
                 rate: None,
                 threads: conf.threads,
-                concurrency: min(128, conf.concurrency),
+                concurrency: conf.load_concurrency,
             };
             par_execute(
                 "Loading...",
@@ -365,7 +362,7 @@ async fn run(conf: RunCommand) -> Result<()> {
             duration: conf.warmup_duration,
             rate: None,
             threads: conf.threads,
-            concurrency: min(128, conf.concurrency),
+            concurrency: conf.concurrency,
         };
         par_execute(
             "Warming up...",
