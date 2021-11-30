@@ -56,9 +56,9 @@ checksum = "7e3c0daaaae24df5995734b689627f8fa02101bc5bbc768be3055b66a010d7af"
 
 [[package]]
 name = "anyhow"
-version = "1.0.50"
+version = "1.0.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecc78c299ae753905840c5d3ba036c51f61ce5a98a83f98d9c9d29dffd427f71"
+checksum = "8b26702f315f53b6071259e15dd9d64528213b44d61de1ec926eca7715d62203"
 
 [[package]]
 name = "approx"
@@ -1086,7 +1086,7 @@ checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
 [[package]]
 name = "rune"
 version = "0.10.0"
-source = "git+https://github.com/rune-rs/rune.git?rev=5fcf6e1#5fcf6e19bed6d5670aa2f2bfebfdadab120bccef"
+source = "git+https://github.com/rune-rs/rune.git?branch=main#93a2e64078e21e6f4115badbf7f7fa2fea1b9d41"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1111,7 +1111,7 @@ dependencies = [
 [[package]]
 name = "rune-macros"
 version = "0.10.0"
-source = "git+https://github.com/rune-rs/rune.git?rev=5fcf6e1#5fcf6e19bed6d5670aa2f2bfebfdadab120bccef"
+source = "git+https://github.com/rune-rs/rune.git?branch=main#93a2e64078e21e6f4115badbf7f7fa2fea1b9d41"
 dependencies = [
  "proc-macro2",
  "quote",
