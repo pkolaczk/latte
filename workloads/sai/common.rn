@@ -1,11 +1,14 @@
 use latte::*;
 
-pub const KEYSPACE = "latte";
-pub const TABLE = "sai_main";
+pub const KEYSPACE = latte::param!("keyspace", "latte");
+pub const TABLE = latte::param!("table", "sai_main");
 
+pub const ROW_COUNT = latte::param!("rows", 100000);
+pub const PAR_COUNT = latte::param!("partitions", ROW_COUNT);
+pub const TIME_DELTA = latte::param!("time_delta", 1000);
 pub const LC = latte::param!("lc", 10);
+pub const MC = latte::param!("hc", 100);
 pub const HC = latte::param!("hc", 1000);
-pub const PAR_COUNT = latte::param!("partitions", 100000);
 
 const WRITE = "write";
 
@@ -17,15 +20,19 @@ pub async fn init_schema(db) {
         CREATE TABLE IF NOT EXISTS ${KEYSPACE}.${TABLE} (
             par_id bigint,
             row_id uuid,
-            time timestamp,
+            time1 timestamp,
+            time2 timestamp,
             hc bigint,
+            mc bigint,
             lc bigint,
             tag text,
             PRIMARY KEY (par_id, row_id)
         )`).await?;
 
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time1) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time2) USING 'StorageAttachedIndex'`).await?;
     db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(hc) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(mc) USING 'StorageAttachedIndex'`).await?;
     db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(lc) USING 'StorageAttachedIndex'`).await?;
     db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(tag) USING 'StorageAttachedIndex'`).await?;
     Ok(())
@@ -37,17 +44,21 @@ pub async fn erase(db) {
 }
 
 pub async fn prepare(db) {
-    db.prepare(WRITE, `INSERT INTO ${KEYSPACE}.${TABLE}(par_id, row_id, time, hc, lc, tag) VALUES (?, ?, ?, ?, ?, ?)`).await?;
+    db.prepare(WRITE,
+        `INSERT INTO ${KEYSPACE}.${TABLE}(par_id, row_id, time1, time2, hc, mc, lc, tag)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).await?;
     Ok(())
 }
 
 pub async fn insert_row(db, i) {
     let par_id = hash_range(i, PAR_COUNT);
     let row_id = uuid(i);
-    let time = i * 1000;
+    let time1 = i * 1000;
+    let time2 = (i + TIME_DELTA) * 1000;
     let hc = hash2(i, 1) % HC;
-    let lc = hash2(i, 2) % LC;
-    let text = "text text text";
-    db.execute_prepared(WRITE, [par_id, row_id, time, hc, lc, text]).await?;
+    let mc = hash2(i, 2) % MC;
+    let lc = hash2(i, 3) % LC;
+    let tag = "text text text";
+    db.execute_prepared(WRITE, [par_id, row_id, time1, time2, hc, mc, lc, tag]).await?;
     Ok(())
 }

@@ -18,7 +18,7 @@ pub async fn erase(db) {
 
 pub async fn prepare(db) {
     common::prepare(db).await?;
-    db.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE time >= ? AND time < ? LIMIT ${READ_SIZE}`).await?;
+    db.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE time1 >= ? AND time1 < ? LIMIT ${READ_SIZE}`).await?;
 }
 
 pub async fn load(db, i) {

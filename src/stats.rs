@@ -144,8 +144,11 @@ pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
     let se = se_sq.sqrt();
     let t = (m1 - m2) / se;
     let freedom = se_sq * se_sq / (e1_sq * e1_sq / (n1 - 1.0) + e2_sq * e2_sq / (n2 - 1.0));
-    let distrib = StudentsT::new(0.0, 1.0, freedom).unwrap();
-    2.0 * (1.0 - distrib.cdf(t.abs()))
+    if let Ok(distrib) = StudentsT::new(0.0, 1.0, freedom) {
+        2.0 * (1.0 - distrib.cdf(t.abs()))
+    } else {
+        f64::NAN
+    }
 }
 
 fn distribution(hist: &Histogram<u64>) -> Vec<Bucket> {

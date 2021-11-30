@@ -1,10 +1,9 @@
-mod common;
-
-use common::{KEYSPACE, TABLE, LC};
+use common::{KEYSPACE, TABLE};
 use latte::*;
 
+mod common;
+
 const LOAD_COUNT = latte::param!("rows", 100000);
-const READ_SIZE = latte::param!("read_size", 10);
 
 const READ = "read";
 
@@ -18,8 +17,7 @@ pub async fn erase(db) {
 
 pub async fn prepare(db) {
     common::prepare(db).await?;
-    db.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE}
-        WHERE time >= ? AND lc = ? LIMIT ${READ_SIZE}`).await?;
+    db.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE time1 = ?`).await?;
 }
 
 pub async fn load(db, i) {
@@ -27,7 +25,6 @@ pub async fn load(db, i) {
 }
 
 pub async fn run(db, i) {
-    let time = hash(i) % LOAD_COUNT * 1000;
-    let lc = hash2(i, 16542) % LC;
-    db.execute_prepared(READ, [time, lc]).await?;
+    let point = hash_range(i, LOAD_COUNT) * 1000;
+    db.execute_prepared(READ, [point]).await?;
 }
