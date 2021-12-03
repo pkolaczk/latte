@@ -1,5 +1,3 @@
-use cassandra_cpp::stmt;
-use chrono::{Local, NaiveDateTime, TimeZone};
 use std::cmp::{max, min};
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -7,6 +5,7 @@ use std::process::exit;
 use std::sync::Arc;
 
 use clap::Parser;
+use chrono::{Local, NaiveDateTime, TimeZone};
 use futures::channel::mpsc::Sender;
 use futures::future::ready;
 use futures::{SinkExt, Stream, StreamExt};
@@ -307,27 +306,22 @@ async fn run(conf: RunCommand) -> Result<()> {
     }
 
     eprintln!("info: Connecting to {:?}... ", conf.addresses);
-    let mut cluster = cluster(&conf);
-    let session = connect_or_abort(&mut cluster).await;
-    match session
-        .execute(&stmt!(
-            "SELECT cluster_name, release_version FROM system.local"
-        ))
-        .await
-    {
-        Ok(rs) => {
-            if let Some(row) = rs.first_row() {
-                conf.cluster_name = Some(row.get_column(0).unwrap().to_string());
-                conf.cass_version = Some(row.get_column(1).unwrap().to_string());
+    let session = connect_or_abort(&conf).await;
+    let cluster_info = session
+        .query("SELECT cluster_name, release_version FROM system.local", ())
+        .await;
+    if let Ok(rs) = cluster_info {
+        if let Some(rows) = rs.rows {
+            for row in rows {
+                if let Ok((cluster_name, cass_version)) = row.into_typed() {
+                    conf.cluster_name = Some(cluster_name);
+                    conf.cass_version = Some(cass_version);
+                }
+                break;
             }
         }
-        Err(e) => {
-            eprintln!(
-                "warn: Failed to fetch cluster name and release version from the server: {}",
-                e
-            );
-        }
     }
+
     eprintln!(
         "info: Connected to {} running Cassandra version {}",
         conf.cluster_name.as_deref().unwrap_or("unknown"),
