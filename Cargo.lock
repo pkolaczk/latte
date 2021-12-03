@@ -1086,7 +1086,8 @@ checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
 [[package]]
 name = "rune"
 version = "0.10.0"
-source = "git+https://github.com/rune-rs/rune.git?branch=main#93a2e64078e21e6f4115badbf7f7fa2fea1b9d41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c8f7ae92c903f09e2ae6557ad5c22ab774913a32ba706f2e65368eb9fdb91e"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1111,7 +1112,8 @@ dependencies = [
 [[package]]
 name = "rune-macros"
 version = "0.10.0"
-source = "git+https://github.com/rune-rs/rune.git?branch=main#93a2e64078e21e6f4115badbf7f7fa2fea1b9d41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2d7d99ab7915df163b611eb16090321c21d657308b20686c213fff650c55c44"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1350,6 +1352,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70e992e41e0d2fb9f755b37446f20900f64446ef54874f40a60c78f021ac6144"
 dependencies = [
  "autocfg",
+ "num_cpus",
  "pin-project-lite",
  "tokio-macros",
 ]
