@@ -74,8 +74,8 @@ impl FromStr for Duration {
 
 #[derive(Parser, Debug, Serialize, Deserialize)]
 #[clap(
-setting(AppSettings::NextLineHelp),
-setting(AppSettings::DeriveDisplayOrder)
+    setting(AppSettings::NextLineHelp),
+    setting(AppSettings::DeriveDisplayOrder)
 )]
 pub struct RunCommand {
     /// Number of requests per second to send.
@@ -85,19 +85,19 @@ pub struct RunCommand {
 
     /// Number of iterations or time duration of the warmup phase
     #[clap(
-    short('w'),
-    long("warmup"),
-    default_value = "1",
-    value_name = "TIME | COUNT"
+        short('w'),
+        long("warmup"),
+        default_value = "1",
+        value_name = "TIME | COUNT"
     )]
     pub warmup_duration: Duration,
 
     /// Number of iterations or time duration of the main benchmark phase
     #[clap(
-    short('d'),
-    long("duration"),
-    default_value = "60s",
-    value_name = "TIME | COUNT"
+        short('d'),
+        long("duration"),
+        default_value = "60s",
+        value_name = "TIME | COUNT"
     )]
     pub run_duration: Duration,
 
@@ -115,10 +115,10 @@ pub struct RunCommand {
 
     /// Throughput sampling period, in seconds
     #[clap(
-    short('s'),
-    long("sampling"),
-    default_value = "1",
-    value_name = "TIME | COUNT"
+        short('s'),
+        long("sampling"),
+        default_value = "1",
+        value_name = "TIME | COUNT"
     )]
     pub sampling_period: f64,
 

@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::process::exit;
@@ -9,7 +8,7 @@ use cassandra_cpp_sys::{cass_log_set_level, CassLogLevel_};
 use hdrhistogram::Histogram;
 use rune::runtime::TypeInfo;
 use rune::{Any, Value};
-
+use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
 
 use crate::config::RunCommand;
@@ -184,11 +183,22 @@ impl Default for SessionStats {
 /// Cassandra session object exposed in a workload script.
 /// This is the main object that a workload script can execute queries through.
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
-#[derive(Any, Clone)]
+#[derive(Any)]
 pub struct Session {
     inner: Arc<cassandra_cpp::Session>,
     prepared_statements: HashMap<String, Arc<PreparedStatement>>,
-    stats: RefCell<SessionStats>,
+    stats: Mutex<SessionStats>,
+}
+
+impl Clone for Session {
+    /// Clones the session. The new clone gets fresh statistics.
+    fn clone(&self) -> Self {
+        Session {
+            inner: self.inner.clone(),
+            prepared_statements: self.prepared_statements.clone(),
+            stats: Mutex::new(SessionStats::default()),
+        }
+    }
 }
 
 impl Session {
@@ -196,7 +206,7 @@ impl Session {
         Session {
             inner: Arc::new(session),
             prepared_statements: HashMap::new(),
-            stats: RefCell::new(SessionStats::new()),
+            stats: Mutex::new(SessionStats::new()),
         }
     }
 
@@ -211,10 +221,13 @@ impl Session {
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
         let statement = Statement::new(cql, 0);
-        let start_time = self.stats.borrow_mut().start_request();
+        let start_time = self.stats.try_lock().unwrap().start_request();
         let rs = self.inner.execute(&statement).await;
         let duration = Instant::now() - start_time;
-        self.stats.borrow_mut().complete_request(duration, &rs);
+        self.stats
+            .try_lock()
+            .unwrap()
+            .complete_request(duration, &rs);
         rs?;
         Ok(())
     }
@@ -227,17 +240,20 @@ impl Session {
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
         let mut statement = statement.bind();
         bind::bind(&mut statement, &params)?;
-        let start_time = self.stats.borrow_mut().start_request();
+        let start_time = self.stats.try_lock().unwrap().start_request();
         let rs = self.inner.execute(&statement).await;
         let duration = Instant::now() - start_time;
-        self.stats.borrow_mut().complete_request(duration, &rs);
+        self.stats
+            .try_lock()
+            .unwrap()
+            .complete_request(duration, &rs);
         rs?;
         Ok(())
     }
 
     /// Returns the current accumulated request stats snapshot and resets the stats.
     pub fn take_stats(&self) -> SessionStats {
-        let mut stats = self.stats.borrow_mut();
+        let mut stats = self.stats.try_lock().unwrap();
         let result = stats.clone();
         stats.reset();
         result
@@ -245,17 +261,17 @@ impl Session {
 
     /// Resets query and request counters
     pub fn reset_stats(&self) {
-        self.stats.borrow_mut().reset();
+        self.stats.try_lock().unwrap().reset();
     }
 }
 
 /// Functions for binding rune values to CQL parameters
 mod bind {
-    use crate::workload::context;
-    use crate::CassErrorKind;
     use cassandra_cpp::CassCollection;
 
+    use crate::workload::context;
     use crate::workload::context::Uuid;
+    use crate::CassErrorKind;
 
     use super::*;
 

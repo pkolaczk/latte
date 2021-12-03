@@ -559,37 +559,37 @@ impl<'a> Display for BenchmarkCmp<'a> {
                 Quantity::new(s.call_throughput.value, 0)
                     .with_error(s.call_throughput.std_err * ERR_MARGIN)
             })
-                .with_significance(self.cmp_call_throughput())
-                .with_goodness(1)
-                .into_box(),
+            .with_significance(self.cmp_call_throughput())
+            .with_goodness(1)
+            .into_box(),
             self.line("├─", "req/s", |s| {
                 Quantity::new(s.req_throughput.value, 0)
                     .with_error(s.req_throughput.std_err * ERR_MARGIN)
             })
-                .with_significance(self.cmp_req_throughput())
-                .with_goodness(1)
-                .into_box(),
+            .with_significance(self.cmp_req_throughput())
+            .with_goodness(1)
+            .into_box(),
             self.line("└─", "row/s", |s| {
                 Quantity::new(s.row_throughput.value, 0)
                     .with_error(s.row_throughput.std_err * ERR_MARGIN)
             })
-                .with_significance(self.cmp_row_throughput())
-                .with_goodness(1)
-                .into_box(),
+            .with_significance(self.cmp_row_throughput())
+            .with_goodness(1)
+            .into_box(),
             self.line("Mean call time", "ms", |s| {
                 Quantity::new(s.call_time_ms.mean.value, 3)
                     .with_error(s.call_time_ms.mean.std_err * ERR_MARGIN)
             })
-                .with_significance(self.cmp_mean_resp_time())
-                .with_goodness(-1)
-                .into_box(),
+            .with_significance(self.cmp_mean_resp_time())
+            .with_goodness(-1)
+            .into_box(),
             self.line("Mean resp. time", "ms", |s| {
                 Quantity::new(s.resp_time_ms.mean.value, 3)
                     .with_error(s.resp_time_ms.mean.std_err * ERR_MARGIN)
             })
-                .with_significance(self.cmp_mean_resp_time())
-                .with_goodness(-1)
-                .into_box(),
+            .with_significance(self.cmp_mean_resp_time())
+            .with_goodness(-1)
+            .into_box(),
         ];
 
         for l in summary {

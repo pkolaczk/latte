@@ -1,18 +1,52 @@
-use std::cell::{Cell, RefCell};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use hdrhistogram::Histogram;
-use rune::runtime::{GuardedArgs, RuntimeContext};
+use rune::runtime::{AnyObj, Args, RuntimeContext, Shared, VmError};
 use rune::termcolor::{ColorChoice, StandardStream};
-use rune::{Any, Diagnostics, Module, Source, Sources, Unit, Value, Vm};
+use rune::{Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
+use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
 use crate::error::LatteError;
 use crate::{CassError, Session, SessionStats};
+
+struct SessionRef<'a> {
+    session: &'a Session,
+}
+
+impl SessionRef<'_> {
+    pub fn new(session: &Session) -> SessionRef {
+        SessionRef { session }
+    }
+}
+
+impl<'a> ToValue for SessionRef<'a> {
+    fn to_value(self) -> Result<Value, VmError> {
+        let obj = unsafe { AnyObj::from_ref(self.session) };
+        Ok(Value::from(Shared::new(obj)))
+    }
+}
+
+struct SessionRefMut<'a> {
+    session: &'a mut Session,
+}
+
+impl SessionRefMut<'_> {
+    pub fn new(session: &mut Session) -> SessionRefMut {
+        SessionRefMut { session }
+    }
+}
+
+impl<'a> ToValue for SessionRefMut<'a> {
+    fn to_value(self) -> Result<Value, VmError> {
+        let obj = unsafe { AnyObj::from_mut(self.session) };
+        Ok(Value::from(Shared::new(obj)))
+    }
+}
 
 /// Stores the name and hash together.
 /// Name is used for message formatting, hash is used for fast function lookup.
@@ -138,7 +172,11 @@ impl Program {
     /// This is needed because execution of the function could actually run till completion just
     /// fine, but the function could return an error value, and in this case we should not
     /// ignore it.
-    fn convert_error(function_name: &'static str, result: Value) -> Result<Value, LatteError> {
+    fn convert_error(
+        &self,
+        function_name: &'static str,
+        result: Value,
+    ) -> Result<Value, LatteError> {
         match result {
             Value::Result(result) => match result.take().unwrap() {
                 Ok(value) => Ok(value),
@@ -150,9 +188,11 @@ impl Program {
                     let mut msg = String::new();
                     let mut buf = String::new();
                     let e = Value::Any(e);
-                    if e.string_display(&mut msg, &mut buf).unwrap().is_err() {
-                        msg = format!("{:?}", e)
-                    }
+                    self.vm().with(|| {
+                        if e.string_display(&mut msg, &mut buf).unwrap().is_err() {
+                            msg = format!("{:?}", e)
+                        }
+                    });
                     Err(LatteError::FunctionResult(function_name, msg))
                 }
                 Err(other) => Err(LatteError::FunctionResult(
@@ -171,15 +211,16 @@ impl Program {
     pub async fn async_call(
         &self,
         fun: FnRef,
-        args: impl GuardedArgs,
+        args: impl Args + Send,
     ) -> Result<Value, LatteError> {
-        let mut vm = self.vm();
-        let result = vm.async_call(fun.hash, args).await.map_err(|e| {
+        let handle_err = |e: VmError| {
             let mut out = StandardStream::stderr(ColorChoice::Auto);
             let _ = e.emit(&mut out, &self.sources);
             LatteError::ScriptExecError(fun.name, e)
-        })?;
-        vm.with(|| Self::convert_error(fun.name, result))
+        };
+        let execution = self.vm().send_execute(fun.hash, args).map_err(handle_err)?;
+        let result = execution.async_complete().await.map_err(handle_err)?;
+        self.convert_error(fun.name, result)
     }
 
     pub fn has_prepare(&self) -> bool {
@@ -206,21 +247,24 @@ impl Program {
     /// Called once at the beginning of the benchmark.
     /// Typically used to prepare statements.
     pub async fn prepare(&mut self, session: &mut Session) -> Result<(), LatteError> {
-        self.async_call(FnRef::new(PREPARE_FN), (session, )).await?;
+        let session = SessionRefMut::new(session);
+        self.async_call(FnRef::new(PREPARE_FN), (session,)).await?;
         Ok(())
     }
 
     /// Calls the script's `schema` function.
     /// Typically used to create database schema.
     pub async fn schema(&mut self, session: &mut Session) -> Result<(), LatteError> {
-        self.async_call(FnRef::new(SCHEMA_FN), (session, )).await?;
+        let session = SessionRefMut::new(session);
+        self.async_call(FnRef::new(SCHEMA_FN), (session,)).await?;
         Ok(())
     }
 
     /// Calls the script's `erase` function.
     /// Typically used to remove the data from the database before running the benchmark.
     pub async fn erase(&mut self, session: &mut Session) -> Result<(), LatteError> {
-        self.async_call(FnRef::new(ERASE_FN), (session, )).await?;
+        let session = SessionRefMut::new(session);
+        self.async_call(FnRef::new(ERASE_FN), (session,)).await?;
         Ok(())
     }
 
@@ -267,15 +311,37 @@ pub struct WorkloadStats {
     pub session_stats: SessionStats,
 }
 
-#[derive(Clone)]
+/// Mutable part of Workload
+pub struct WorkloadState {
+    start_time: Instant,
+    fn_stats: FnStats,
+}
+
+impl Default for WorkloadState {
+    fn default() -> Self {
+        WorkloadState {
+            start_time: Instant::now(),
+            fn_stats: Default::default(),
+        }
+    }
+}
+
 pub struct Workload {
     session: Session,
     program: Arc<Program>,
     function: FnRef,
-    iter_offset: i64,
-    iter_step: i64,
-    start_time: Cell<Instant>,
-    fn_stats: RefCell<FnStats>,
+    state: Mutex<WorkloadState>,
+}
+
+impl Clone for Workload {
+    fn clone(&self) -> Self {
+        Workload {
+            session: self.session.clone(),
+            program: self.program.clone(),
+            function: self.function,
+            state: Mutex::new(WorkloadState::default()),
+        }
+    }
 }
 
 impl Workload {
@@ -284,28 +350,8 @@ impl Workload {
             session,
             program,
             function,
-            iter_offset: 0,
-            iter_step: 1,
-            start_time: Cell::new(Instant::now()),
-            fn_stats: RefCell::new(Default::default()),
+            state: Mutex::new(WorkloadState::default()),
         }
-    }
-
-    /// Splits this workload into subworkloads, each producing a different subsequence of iterations.
-    /// Each subworkload gets fresh metrics.
-    pub fn split(&self, n: usize) -> Vec<Workload> {
-        (0..n)
-            .into_iter()
-            .map(|offset| Workload {
-                session: self.session.clone(),
-                program: self.program.clone(),
-                function: self.function,
-                iter_step: n as i64,
-                iter_offset: offset as i64,
-                start_time: Cell::new(Instant::now()),
-                fn_stats: Default::default(),
-            })
-            .collect()
     }
 
     /// Executes a single iteration of a workload.
@@ -313,14 +359,15 @@ impl Workload {
     /// the generated action should be a function of the iteration number.
     pub async fn run(&self, iteration: i64) -> Result<(), LatteError> {
         let start_time = Instant::now();
+        let session = SessionRef::new(&self.session);
         let result = self
             .program
-            .async_call(self.function, (&self.session, iteration))
-            .await;
+            .async_call(self.function, (session, iteration))
+            .await
+            .map(|_| ()); // erase Value, because Value is !Send
         let end_time = Instant::now();
-        self.fn_stats
-            .borrow_mut()
-            .operation_completed(end_time - start_time);
+        let mut state = self.state.lock().await;
+        state.fn_stats.operation_completed(end_time - start_time);
         result?;
         Ok(())
     }
@@ -335,20 +382,25 @@ impl Workload {
     /// Needed for producing `WorkloadStats` with
     /// recorded start and end times of measurement.
     pub fn reset(&self, start_time: Instant) {
-        self.fn_stats.replace(FnStats::default());
+        let mut state = self.state.try_lock().unwrap();
+        state.fn_stats = FnStats::default();
+        state.start_time = start_time;
         self.session.reset_stats();
-        self.start_time.set(start_time)
     }
 
     /// Returns statistics of the operations invoked by this workload so far.
     /// Resets the internal statistic counters.
     pub fn take_stats(&self, end_time: Instant) -> WorkloadStats {
-        WorkloadStats {
-            start_time: self.start_time.replace(end_time),
+        let mut state = self.state.try_lock().unwrap();
+        let result = WorkloadStats {
+            start_time: state.start_time,
             end_time,
-            function_stats: self.fn_stats.replace(FnStats::default()),
+            function_stats: state.fn_stats.clone(),
             session_stats: self.session().take_stats(),
-        }
+        };
+        state.start_time = end_time;
+        state.fn_stats = FnStats::default();
+        result
     }
 }
 
