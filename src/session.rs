@@ -3,48 +3,39 @@ use std::fmt::{Display, Formatter};
 use std::process::exit;
 use std::sync::Arc;
 
-use cassandra_cpp::{CassErrorCode, CassResult, Cluster, ErrorKind, PreparedStatement, Statement};
-use cassandra_cpp_sys::{cass_log_set_level, CassLogLevel_};
+use itertools::Itertools;
+use scylla::transport::errors::{DbError, NewSessionError, QueryError};
+use scylla::{QueryResult, SessionBuilder};
+
 use hdrhistogram::Histogram;
 use rune::runtime::TypeInfo;
 use rune::{Any, Value};
+use scylla::prepared_statement::PreparedStatement;
+
 use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
 
 use crate::config::RunCommand;
 
 /// Configures connection to Cassandra.
-pub fn cluster(conf: &RunCommand) -> Cluster {
-    unsafe { cass_log_set_level(CassLogLevel_::CASS_LOG_DISABLED) }
-
-    let mut cluster = Cluster::default();
-    for addr in conf.addresses.iter() {
-        cluster.set_contact_points(addr).unwrap();
-    }
-    cluster.set_protocol_version(4).unwrap();
-    cluster
-        .set_core_connections_per_host(conf.connections as u32)
-        .unwrap();
-    cluster
-        .set_max_connections_per_host(conf.connections as u32)
-        .unwrap();
-    cluster
-        .set_queue_size_event(conf.concurrency as u32)
-        .unwrap();
-    cluster.set_queue_size_io(conf.concurrency as u32).unwrap();
-    cluster.set_num_threads_io(conf.threads as u32).unwrap();
-    cluster.set_connect_timeout(std::time::Duration::from_secs(5));
-    cluster.set_load_balance_round_robin();
-    cluster
+pub async fn connect(conf: &RunCommand) -> Result<scylla::Session, NewSessionError> {
+    SessionBuilder::new()
+        .known_nodes(&conf.addresses)
+        .build()
+        .await
 }
 
 /// Connects to the cluster and returns a connected session object.
 /// On failure, displays an error message and aborts the application.
-pub async fn connect_or_abort(cluster: &mut Cluster) -> cassandra_cpp::Session {
-    match cluster.connect_async().await {
+pub async fn connect_or_abort(conf: &RunCommand) -> scylla::Session {
+    match connect(conf).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: Failed to connect to Cassandra: {}", e);
+            eprintln!(
+                "error: Failed to connect to Cassandra at [{}]: {}",
+                conf.addresses.iter().join(", "),
+                e
+            );
             exit(1)
         }
     }
@@ -57,8 +48,8 @@ pub struct CassError(pub CassErrorKind);
 pub enum CassErrorKind {
     PreparedStatementNotFound(String),
     UnsupportedType(TypeInfo),
-    Overloaded(cassandra_cpp::Error),
-    Other(cassandra_cpp::Error),
+    Overloaded(QueryError),
+    Other(QueryError),
 }
 
 impl CassError {
@@ -85,28 +76,15 @@ impl Display for CassError {
     }
 }
 
-impl From<cassandra_cpp::Error> for CassError {
-    fn from(e: cassandra_cpp::Error) -> Self {
-        match e {
-            cassandra_cpp::Error(
-                ErrorKind::CassErrorResult(
-                    CassErrorCode::SERVER_OVERLOADED
-                    | CassErrorCode::SERVER_READ_TIMEOUT
-                    | CassErrorCode::SERVER_READ_FAILURE
-                    | CassErrorCode::SERVER_WRITE_TIMEOUT
-                    | CassErrorCode::SERVER_WRITE_FAILURE,
-                    ..,
-                ),
+impl From<QueryError> for CassError {
+    fn from(err: QueryError) -> Self {
+        match err {
+            QueryError::TimeoutError
+            | QueryError::DbError(
+                DbError::Overloaded | DbError::ReadTimeout { .. } | DbError::WriteTimeout { .. },
                 _,
-            )
-            | cassandra_cpp::Error(
-                ErrorKind::CassError(
-                    CassErrorCode::LIB_REQUEST_QUEUE_FULL | CassErrorCode::LIB_REQUEST_TIMED_OUT,
-                    ..,
-                ),
-                _,
-            ) => CassError(CassErrorKind::Overloaded(e)),
-            _ => CassError(CassErrorKind::Other(e)),
+            ) => CassError(CassErrorKind::Overloaded(err)),
+            _ => CassError(CassErrorKind::Other(err)),
         }
     }
 }
@@ -138,13 +116,13 @@ impl SessionStats {
         Instant::now()
     }
 
-    pub fn complete_request(&mut self, duration: Duration, rs: &cassandra_cpp::Result<CassResult>) {
+    pub fn complete_request(&mut self, duration: Duration, rs: &Result<QueryResult, QueryError>) {
         self.queue_length -= 1;
         let duration_us = duration.as_micros().clamp(1, u64::MAX as u128) as u64;
         self.resp_times_us.record(duration_us).unwrap();
         self.req_count += 1;
         match rs {
-            Ok(rs) => self.row_count += rs.row_count(),
+            Ok(rs) => self.row_count += rs.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64,
             Err(e) => {
                 self.req_error_count += 1;
                 self.req_errors.insert(format!("{}", e));
@@ -185,7 +163,7 @@ impl Default for SessionStats {
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
 #[derive(Any)]
 pub struct Session {
-    inner: Arc<cassandra_cpp::Session>,
+    inner: Arc<scylla::Session>,
     prepared_statements: HashMap<String, Arc<PreparedStatement>>,
     stats: Mutex<SessionStats>,
 }
@@ -202,7 +180,7 @@ impl Clone for Session {
 }
 
 impl Session {
-    pub fn new(session: cassandra_cpp::Session) -> Session {
+    pub fn new(session: scylla::Session) -> Session {
         Session {
             inner: Arc::new(session),
             prepared_statements: HashMap::new(),
@@ -212,7 +190,7 @@ impl Session {
 
     /// Prepares a statement and stores it in an internal statement map for future use.
     pub async fn prepare(&mut self, key: &str, cql: &str) -> Result<(), CassError> {
-        let statement = self.inner.prepare(cql)?.await?;
+        let statement = self.inner.prepare(cql).await?;
         self.prepared_statements
             .insert(key.to_string(), Arc::new(statement));
         Ok(())
@@ -220,9 +198,8 @@ impl Session {
 
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
-        let statement = Statement::new(cql, 0);
         let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.inner.execute(&statement).await;
+        let rs = self.inner.query(cql, ()).await;
         let duration = Instant::now() - start_time;
         self.stats
             .try_lock()
@@ -238,10 +215,9 @@ impl Session {
             .prepared_statements
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
-        let mut statement = statement.bind();
-        bind::bind(&mut statement, &params)?;
+        let params = bind::to_scylla_query_params(&params)?;
         let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.inner.execute(&statement).await;
+        let rs = self.inner.execute(&statement, params).await;
         let duration = Instant::now() - start_time;
         self.stats
             .try_lock()
@@ -267,159 +243,36 @@ impl Session {
 
 /// Functions for binding rune values to CQL parameters
 mod bind {
-    use cassandra_cpp::CassCollection;
-
     use crate::workload::context;
     use crate::workload::context::Uuid;
     use crate::CassErrorKind;
+    use scylla::frame::response::result::CqlValue;
 
     use super::*;
 
-    /// Appends a single item to a CQL list.
-    fn append_list(list: &mut cassandra_cpp::List, value: &Value) -> Result<(), CassError> {
-        match value {
-            Value::Bool(v) => {
-                list.append_bool(*v)?;
-            }
-            Value::Byte(v) => {
-                list.append_int8((*v) as i8)?;
-            }
-            Value::Bytes(v) => {
-                list.append_bytes(v.borrow_ref().unwrap().to_vec())?;
-            }
-            Value::Integer(v) => {
-                list.append_int64(*v)?;
-            }
-            Value::Float(v) => {
-                list.append_double(*v)?;
-            }
-            Value::StaticString(v) => {
-                list.append_string(v.as_str())?;
-            }
-            Value::String(v) => {
-                list.append_string(v.borrow_ref().unwrap().as_str())?;
-            }
-            Value::Option(v) => {
-                if let Some(v) = v.borrow_ref().unwrap().as_ref() {
-                    append_list(list, v)?;
-                }
-            }
-            other => {
-                return Err(CassError(CassErrorKind::UnsupportedType(
-                    other.type_info().unwrap(),
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// Builds a CQL list from an array of rune values.
-    fn build_list(values: &[Value]) -> Result<cassandra_cpp::List, CassError> {
-        let mut list = cassandra_cpp::List::with_capacity(values.len());
-        for v in values {
-            append_list(&mut list, v)?;
-        }
-        Ok(list)
-    }
-
-    /// Binds a statement key to a `Value` passed from the workload script.
-    fn bind_name(statement: &mut Statement, key: &str, v: &Value) -> Result<(), CassError> {
+    fn to_scylla_value(v: &Value) -> Result<CqlValue, CassError> {
         match v {
-            Value::Bool(v) => {
-                statement.bind_bool_by_name(key, *v)?;
-            }
-            Value::Byte(v) => {
-                statement.bind_int8_by_name(key, (*v) as i8)?;
-            }
-            Value::Bytes(v) => {
-                statement.bind_bytes_by_name(key, v.borrow_ref().unwrap().to_vec())?;
-            }
-            Value::Integer(v) => {
-                statement.bind_int64_by_name(key, *v)?;
-            }
-            Value::Float(v) => {
-                statement.bind_double_by_name(key, *v)?;
-            }
-            Value::StaticString(v) => {
-                statement.bind_string_by_name(key, v.as_str())?;
-            }
-            Value::String(v) => {
-                statement.bind_string_by_name(key, v.borrow_ref().unwrap().as_str())?;
-            }
+            Value::Bool(v) => Ok(CqlValue::Boolean(*v)),
+            Value::Byte(v) => Ok(CqlValue::TinyInt(*v as i8)),
+            Value::Integer(v) => Ok(CqlValue::BigInt(*v)),
+            Value::Float(v) => Ok(CqlValue::Double(*v)),
+            Value::StaticString(v) => Ok(CqlValue::Text(v.as_str().to_string())),
+            Value::String(v) => Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string())),
+            Value::Bytes(v) => Ok(CqlValue::Blob(v.borrow_ref().unwrap().to_vec())),
             Value::Option(v) => match v.borrow_ref().unwrap().as_ref() {
-                Some(v) => {
-                    bind_name(statement, key, v)?;
-                }
-                None => {
-                    statement.bind_null_by_name(key)?;
-                }
+                Some(v) => to_scylla_value(v),
+                None => Ok(CqlValue::Empty),
             },
             Value::Vec(v) => {
                 let v = v.borrow_ref().unwrap();
-                statement.bind_list_by_name(key, build_list(v.as_ref())?)?;
-            }
-            Value::Any(obj) => {
-                let obj = obj.borrow_ref().unwrap();
-                if obj.type_hash() == Uuid::type_hash() {
-                    let uuid: &Uuid = obj.downcast_borrow_ref().unwrap();
-                    statement.bind_uuid_by_name(key, uuid.0.into())?;
-                } else {
-                    return Err(CassError(CassErrorKind::UnsupportedType(
-                        v.type_info().unwrap(),
-                    )));
-                }
-            }
-            other => {
-                return Err(CassError(CassErrorKind::UnsupportedType(
-                    other.type_info().unwrap(),
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// Binds i-th statement argument to a `Value` passed from the workload script.
-    // TODO: unify with `bind_name` using traits
-    fn bind_index(statement: &mut Statement, index: usize, v: &Value) -> Result<(), CassError> {
-        match v {
-            Value::Bool(v) => {
-                statement.bind_bool(index, *v)?;
-            }
-            Value::Byte(v) => {
-                statement.bind_int8(index, (*v) as i8)?;
-            }
-            Value::Integer(v) => {
-                statement.bind_int64(index, *v)?;
-            }
-            Value::Float(v) => {
-                statement.bind_double(index, *v)?;
-            }
-            Value::StaticString(v) => {
-                statement.bind_string(index, v.as_str())?;
-            }
-            Value::String(v) => {
-                statement.bind_string(index, v.borrow_ref().unwrap().as_str())?;
-            }
-            Value::Bytes(v) => {
-                statement.bind_bytes(index, v.borrow_ref().unwrap().to_vec())?;
-            }
-            Value::Option(v) => match v.borrow_ref().unwrap().as_ref() {
-                Some(v) => {
-                    bind_index(statement, index, v)?;
-                }
-                None => {
-                    statement.bind_null(index)?;
-                }
-            },
-            Value::Vec(v) => {
-                let v = v.borrow_ref().unwrap();
-                statement.bind_list(index, build_list(v.as_ref())?)?;
+                let elements = v.as_ref().iter().map(to_scylla_value).try_collect()?;
+                Ok(CqlValue::List(elements))
             }
             Value::Any(obj) => {
                 let obj = obj.borrow_ref().unwrap();
                 if obj.type_hash() == Uuid::type_hash() {
                     let uuid: &context::Uuid = obj.downcast_borrow_ref().unwrap();
-                    statement.bind_uuid(index, uuid.0.into())?;
+                    Ok(CqlValue::Uuid(uuid.0.into()))
                 } else {
                     return Err(CassError(CassErrorKind::UnsupportedType(
                         v.type_info().unwrap(),
@@ -432,35 +285,23 @@ mod bind {
                 )));
             }
         }
-        Ok(())
     }
 
     /// Binds parameters passed as a single rune value to the arguments of the statement.
     /// The `params` value can be a tuple, a vector, a struct or an object.
-    pub fn bind(statement: &mut Statement, params: &Value) -> Result<(), CassError> {
+    pub fn to_scylla_query_params(params: &Value) -> Result<Vec<CqlValue>, CassError> {
+        let mut values = Vec::new();
         match params {
-            Value::Object(obj) => {
-                let obj = obj.borrow_ref().unwrap();
-                for (k, v) in obj.iter() {
-                    bind_name(statement, k.as_str(), v)?
-                }
-            }
-            Value::Struct(obj) => {
-                let obj = obj.borrow_ref().unwrap();
-                for (k, v) in obj.data().iter() {
-                    bind_name(statement, k.as_str(), v)?
-                }
-            }
             Value::Tuple(tuple) => {
                 let tuple = tuple.borrow_ref().unwrap();
-                for (i, v) in tuple.iter().enumerate() {
-                    bind_index(statement, i, v)?
+                for v in tuple.iter() {
+                    values.push(to_scylla_value(v)?);
                 }
             }
             Value::Vec(vec) => {
                 let vec = vec.borrow_ref().unwrap();
-                for (i, v) in vec.iter().enumerate() {
-                    bind_index(statement, i, v)?
+                for v in vec.iter() {
+                    values.push(to_scylla_value(v)?);
                 }
             }
             other => {
@@ -469,6 +310,6 @@ mod bind {
                 )));
             }
         }
-        Ok(())
+        Ok(values)
     }
 }
