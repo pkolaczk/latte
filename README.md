@@ -6,20 +6,27 @@
 
 ## Why Yet Another Benchmarking Program?
 
-- Latte outperforms other benchmarking tools for Apache Cassandra by a wide margin.
+- Latte outperforms other benchmarking tools for Apache Cassandra by a wide margin. See [benchmarks](BENCHMARKS.md).
 - Latte aims to offer the most flexible way of defining workloads.
 
 ### Performance
 
-Contrary to `cassandra-stress`, `nosqlbench` or `tlp-stress`, Latte has been written in Rust and uses DataStax C++
-Driver for Cassandra. It uses a fully asynchronous, thread-per-core workload execution engine. That leads so:
+Contrary to 
+[NoSQLBench](https://github.com/nosqlbench/nosqlbench), 
+[Cassandra Stress](https://cassandra.apache.org/doc/4.0/cassandra/tools/cassandra_stress.html)
+and [tlp-stress](https://thelastpickle.com/tlp-stress/), 
+Latte has been written in Rust and uses the native Cassandra driver from Scylla. 
+It features a fully asynchronous, thread-per-core execution engine, 
+capable of running thousands of requests per second from a single thread. 
 
+Latte has the following unique performance characteristics:
 * Great scalability on multi-core machines.
-* About 25x-50x lower memory footprint than Java-based tools.
-* About 5x-10x better CPU efficiency than Java-based tools. This means you can test larger clusters or reduce the number
-  of client machines.
-* Running on one of the nodes with virtually no performance impact on the server.
-* No client code warmup needed. The client code works with maximum performance from the first iteration.
+* About 10x better CPU efficiency than NoSQLBench. 
+  This means you can test large clusters with a small number of clients.  
+* About 50x-100x lower memory footprint than Java-based tools. 
+* Very low impact on operating system resources – low number of syscalls, context switches and page faults.  
+* No client code warmup needed. The client code works with maximum performance from the first iteration. 
+  Even runs as short as 30 seconds give accurate results.  
 * No GC pauses nor HotSpot recompilation happening in the middle of the test. You want to measure hiccups of the server,
   not the benchmarking tool.
 
@@ -28,13 +35,15 @@ different workloads.
 
 ### Flexibility
 
-Other benchmarking tools often use configuration files to specify workloads. Although that makes it easy to define
-simple workloads, it quickly becomes cumbersome when you want to script more realistic scenarios that issue multiple
+Other benchmarking tools often use configuration files to specify workload recipes. 
+Although that makes it easy to define simple workloads, it quickly becomes cumbersome when you want 
+to script more realistic scenarios that issue multiple
 queries or need to generate data in different ways than the ones directly built into the tool.
 
 Instead of trying to bend a popular configuration file format into a turing-complete scripting language, Latte simply
 embeds a real, fully-featured, turing-complete, modern scripting language. We chose [Rune](https://rune-rs.github.io/)
-due to painless integration with Rust, first-class async support, and satisfying performance.
+due to painless integration with Rust, first-class async support, satisfying performance and great support from its
+maintainers.
 
 Rune offers syntax and features similar to Rust, albeit with dynamic typing and easy automatic memory management. Hence,
 you can not only just issue custom CQL queries, but you can program  
@@ -42,7 +51,7 @@ anything you wish. There are variables, conditional statements, loops, pattern m
 user-defined data structures, objects, enums, constants, macros and many more.
 
 ## Features
-
+* Compatible with Apache Cassandra 3.x, 4.x, DataStax Enterprise 6.x and ScyllaDB 
 * Custom workloads with a powerful scripting engine
 * Asynchronous queries
 * Prepared queries
@@ -68,11 +77,8 @@ Latte is still early stage software under intensive development.
 * Backwards compatibility may be broken frequently.
 
 ## Installation
-
-1. [Install Datastax C++ Driver 2.15](https://docs.datastax.com/en/developer/cpp-driver/2.15/topics/installation/)
-   with development packages
-2. [Install Rust toolchain](https://rustup.rs/)
-3. Run `cargo install --git https://github.com/pkolaczk/latte`
+1. [Install Rust toolchain](https://rustup.rs/)
+2. Run `cargo install --git https://github.com/pkolaczk/latte`
 
 ## Usage
 
@@ -214,5 +220,3 @@ Errors during execution of a workload script are divided into three classes:
   errors terminate  
   the benchmark immediately. Overload errors (e.g. timeouts) that happen during the main run phase are counted and
   reported in the benchmark report.
-
-
