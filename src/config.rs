@@ -196,6 +196,7 @@ pub struct ShowCommand {
 }
 
 #[derive(Parser, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Runs the benchmark
     Run(RunCommand),
