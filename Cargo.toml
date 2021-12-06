@@ -1,9 +1,11 @@
 [package]
 name = "latte"
-description = "Cassandra Latency and Throughput Tester. Runs CQL queries in parallel, measures performance and computes useful statistics."
+description = "A database benchmarking tool for Apache Cassandra"
 version = "0.10.0"
 authors = ["Piotr Kołaczkowski <pkolaczk@datastax.com>"]
-edition = "2021"
+edition = "2018"
+readme = "README.md"
+license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
@@ -22,7 +24,6 @@ lazy_static = "1.4.0"
 metrohash = "1.0"
 num_cpus = "1.13.0"
 parse_duration = "2.1.1"
-proc-macro2 = "1.0.32"
 rand = "0.7.3"
 regex = "1.5.4"
 rune = "0.10.0"
@@ -45,3 +46,20 @@ tokio = { version = "1.11", features = ["rt", "test-util", "macros"] }
 [profile.release]
 lto = true
 panic = "abort"
+
+[package.metadata.deb]
+maintainer = "Piotr Kołaczkowski <pkolaczk@gmail.com>"
+copyright = "2020, Piotr Kołaczkowski <pkolaczk@gmail.com>"
+license-file = ["LICENSE", "4"]
+extended-description = """
+A database benchmarking tool for Apache Cassandra.
+Runs CQL queries in parallel, measures throughput and response times.
+Can compute statistical significance of differences between two runs.
+"""
+depends = "$auto"
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/latte", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/latte/README", "644"],
+]
