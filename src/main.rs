@@ -85,6 +85,7 @@ async fn req_stream(
             interval_stream(rate)
                 .map(|_| deadline.next())
                 .take_while(|i| ready(i.is_some()))
+                // unconstrained to workaround quadratic complexity of buffer_unordered ()
                 .map(|i| tokio::task::unconstrained(workload.run(i.unwrap() as i64)))
                 .buffer_unordered(concurrency.get())
                 .inspect(|_| progress.tick())

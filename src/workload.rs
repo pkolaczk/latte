@@ -14,6 +14,8 @@ use tokio::time::Instant;
 use crate::error::LatteError;
 use crate::{CassError, Session, SessionStats};
 
+/// Wraps a reference to Session that can be converted to a Rune `Value`
+/// and passed as one of `Args` arguments to a function.
 struct SessionRef<'a> {
     session: &'a Session,
 }
@@ -24,6 +26,14 @@ impl SessionRef<'_> {
     }
 }
 
+/// We need this to be able to pass a reference to `Session` as an argument
+/// to Rune function.
+///
+/// Caution! Be careful using this trait. Undefined Behaviour possible.
+/// This is unsound - it is theoretically
+/// possible that the underlying `Session` gets dropped before the `Value` produced by this trait
+/// implementation and the compiler is not going to catch that.
+/// The receiver of a `Value` must ensure that it is dropped before `Session`!
 impl<'a> ToValue for SessionRef<'a> {
     fn to_value(self) -> Result<Value, VmError> {
         let obj = unsafe { AnyObj::from_ref(self.session) };
@@ -31,6 +41,8 @@ impl<'a> ToValue for SessionRef<'a> {
     }
 }
 
+/// Wraps a mutable reference to Session that can be converted to a Rune `Value` and passed
+/// as one of `Args` arguments to a function.
 struct SessionRefMut<'a> {
     session: &'a mut Session,
 }
@@ -41,6 +53,7 @@ impl SessionRefMut<'_> {
     }
 }
 
+/// Caution! See `impl ToValue for SessionRef`.
 impl<'a> ToValue for SessionRefMut<'a> {
     fn to_value(self) -> Result<Value, VmError> {
         let obj = unsafe { AnyObj::from_mut(self.session) };
