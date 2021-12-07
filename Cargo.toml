@@ -1,9 +1,9 @@
 [package]
 name = "latte"
 description = "A database benchmarking tool for Apache Cassandra"
-version = "0.10.0"
+version = "0.10.1"
 authors = ["Piotr Kołaczkowski <pkolaczk@datastax.com>"]
-edition = "2018"
+edition = "2021"
 readme = "README.md"
 license = "Apache-2.0"
 
@@ -36,7 +36,7 @@ strum = { version = "0.19.5", features = ["derive"] }
 strum_macros = "0.19.4"
 time = "0.1.44"
 thiserror = "1.0.26"
-tokio = { version = "1.14", features = ["rt", "rt-multi-thread", "time"] }
+tokio = { version = "1.14", features = ["rt", "rt-multi-thread", "time", "parking_lot"] }
 tokio-stream = "0.1"
 uuid = { version = "0.8", features = ["v4"] }
 
@@ -44,7 +44,9 @@ uuid = { version = "0.8", features = ["v4"] }
 tokio = { version = "1.11", features = ["rt", "test-util", "macros"] }
 
 [profile.release]
+opt-level = 3
 lto = true
+debug = true
 panic = "abort"
 
 [package.metadata.deb]

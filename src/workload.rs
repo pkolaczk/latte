@@ -1,15 +1,14 @@
 use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use std::time::Instant;
 
 use hdrhistogram::Histogram;
 use rune::runtime::{AnyObj, Args, RuntimeContext, Shared, VmError};
 use rune::termcolor::{ColorChoice, StandardStream};
 use rune::{Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
-use tokio::sync::Mutex;
-use tokio::time::Duration;
-use tokio::time::Instant;
 
 use crate::error::LatteError;
 use crate::{CassError, Session, SessionStats};
@@ -379,7 +378,7 @@ impl Workload {
             .await
             .map(|_| ()); // erase Value, because Value is !Send
         let end_time = Instant::now();
-        let mut state = self.state.lock().await;
+        let mut state = self.state.try_lock().unwrap();
         state.fn_stats.operation_completed(end_time - start_time);
         result?;
         Ok(())

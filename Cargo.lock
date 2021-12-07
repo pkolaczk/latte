@@ -504,6 +504,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "instant"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a5bbe824c507c5da5956355e86a746d82e0e1464f65d862cc5e71da70e94b2c"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "itertools"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -514,9 +523,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.10.1"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69ddb889f9d0d08a67338271fa9b62996bc788c7796a5c18cf057420aaed5eaf"
+checksum = "a9a9d19fa1e79b6215ff29b9d6880b706147f16e9b1dbb1e4e5947b5b02bc5e3"
 dependencies = [
  "either",
 ]
@@ -550,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "latte"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -601,6 +610,15 @@ name = "libm"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7d73b3f436185384286bd8098d17ec07c9a7d2388a6599f824d8502b529702a"
+
+[[package]]
+name = "lock_api"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712a4d093c9976e24e7dbca41db895dabcbac38eb5f4045393d17a95bdfb1109"
+dependencies = [
+ "scopeguard",
+]
 
 [[package]]
 name = "log"
@@ -948,6 +966,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "parking_lot"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
+dependencies = [
+ "instant",
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d76e8e1493bcac0d2766c42737f34458f1c8c50c0d23bcb24ea953affb273216"
+dependencies = [
+ "cfg-if",
+ "instant",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "winapi",
+]
+
+[[package]]
 name = "parse_duration"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1145,6 +1188,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
+name = "redox_syscall"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8383f39639269cde97d255a32bdb68c047337295414940c68bdd30c2e13203ff"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "regex"
 version = "1.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1211,6 +1263,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c9613b5a66ab9ba26415184cfc41156594925a9cf3a2057e57f31ff145f6568"
 
 [[package]]
+name = "scopeguard"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
+
+[[package]]
 name = "scylla"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1225,7 +1283,7 @@ dependencies = [
  "dashmap",
  "futures",
  "histogram",
- "itertools 0.10.1",
+ "itertools 0.10.3",
  "num-bigint 0.3.3",
  "num_enum",
  "rand 0.8.4",
@@ -1454,6 +1512,7 @@ dependencies = [
  "memchr",
  "mio",
  "num_cpus",
+ "parking_lot",
  "pin-project-lite",
  "tokio-macros",
  "winapi",

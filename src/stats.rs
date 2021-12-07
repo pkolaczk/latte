@@ -1,6 +1,7 @@
 use std::cmp::min;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
+use std::time::Instant;
 
 use crate::workload::WorkloadStats;
 use cpu_time::ProcessTime;
@@ -10,7 +11,6 @@ use statrs::distribution::{StudentsT, Univariate};
 use strum::EnumCount;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumCount as EnumCountM, EnumIter};
-use tokio::time::Instant;
 
 /// Controls the maximum order of autocovariance taken into
 /// account when estimating the long run mean error. Higher values make the estimator
