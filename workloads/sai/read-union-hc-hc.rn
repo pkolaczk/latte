@@ -1,0 +1,34 @@
+mod common;
+
+use common::{KEYSPACE, TABLE, HC};
+use latte::*;
+
+pub const LOAD_COUNT = latte::param!("rows", 100000);
+
+const READ_SIZE = latte::param!("read_size", 10);
+
+const READ = "read";
+
+pub async fn schema(db) {
+    common::init_schema(db).await?;
+}
+
+pub async fn erase(db) {
+    common::erase(db).await?;
+}
+
+pub async fn prepare(db) {
+    common::prepare(db).await?;
+    db.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE}
+        WHERE hc = ? OR hc = ? LIMIT ${READ_SIZE}`).await?;
+}
+
+pub async fn load(db, i) {
+    common::insert_row(db, i).await?;
+}
+
+pub async fn run(db, i) {
+    let hc1 = hash2(i, 85790) % HC;
+    let hc2 = hash2(i, 24303) % HC;
+    db.execute_prepared(READ, [hc1, hc2]).await?;
+}
