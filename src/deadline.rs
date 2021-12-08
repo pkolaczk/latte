@@ -1,6 +1,10 @@
+use std::cmp;
+use std::ops::Range;
 use crate::config;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::Instant;
+
+
 
 /// Decides when to stop benchmark execution.
 pub enum Deadline {
@@ -13,6 +17,8 @@ pub enum Deadline {
         deadline: Instant,
     },
 }
+
+const BATCH_SIZE: u64 = 64;
 
 impl Deadline {
     /// Creates a new deadline based on configured benchmark duration.
@@ -29,21 +35,19 @@ impl Deadline {
     }
 
     /// Returns the next iteration number or `None` if deadline or iteration count was exceeded.
-    pub fn next(&self) -> Option<u64> {
+    pub fn next(&self) -> Range<u64> {
         match self {
             Deadline::FixedCount { current, count } => {
-                let next = current.fetch_add(1, Ordering::Relaxed);
-                if next < *count {
-                    Some(next)
-                } else {
-                    None
-                }
+                let start = current.fetch_add(BATCH_SIZE, Ordering::Relaxed);
+                let end = cmp::min(*count, start + BATCH_SIZE);
+                Range { start, end }
             }
             Deadline::FixedTime { current, deadline } => {
                 if Instant::now() < *deadline {
-                    Some(current.fetch_add(1, Ordering::Relaxed))
+                    let start = current.fetch_add(BATCH_SIZE, Ordering::Relaxed);
+                    Range { start, end: start + BATCH_SIZE }
                 } else {
-                    None
+                    Range::default()
                 }
             }
         }
