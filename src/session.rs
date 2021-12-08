@@ -12,8 +12,8 @@ use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
 use scylla::{QueryResult, SessionBuilder};
 
-use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
+use try_lock::TryLock;
 
 use crate::config::RunCommand;
 
@@ -166,7 +166,7 @@ impl Default for SessionStats {
 pub struct Session {
     inner: Arc<scylla::Session>,
     prepared_statements: HashMap<String, Arc<PreparedStatement>>,
-    stats: Mutex<SessionStats>,
+    stats: TryLock<SessionStats>,
 }
 
 impl Clone for Session {
@@ -175,7 +175,7 @@ impl Clone for Session {
         Session {
             inner: self.inner.clone(),
             prepared_statements: self.prepared_statements.clone(),
-            stats: Mutex::new(SessionStats::default()),
+            stats: TryLock::new(SessionStats::default()),
         }
     }
 }
@@ -185,7 +185,7 @@ impl Session {
         Session {
             inner: Arc::new(session),
             prepared_statements: HashMap::new(),
-            stats: Mutex::new(SessionStats::new()),
+            stats: TryLock::new(SessionStats::new()),
         }
     }
 
