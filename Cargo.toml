@@ -49,6 +49,12 @@ lto = true
 debug = true
 panic = "abort"
 
+[profile.release-no-lto]
+inherits = "release"
+opt-level = 3
+lto = false
+debug = true
+
 [package.metadata.deb]
 maintainer = "Piotr Kołaczkowski <pkolaczk@gmail.com>"
 copyright = "2020, Piotr Kołaczkowski <pkolaczk@gmail.com>"

@@ -463,16 +463,19 @@ impl<'a> Display for RunConfigCmp<'a> {
                 Quantity::new(Maybe::from(conf.warmup_duration.seconds()), 0)
             }),
             self.line("└─", "op", |conf| {
-                Quantity::new(Maybe::from(conf.warmup_duration.calls()), 0)
+                Quantity::new(Maybe::from(conf.warmup_duration.count()), 0)
             }),
             self.line("Run time", "s", |conf| {
                 Quantity::new(Maybe::from(conf.run_duration.seconds()), 1)
             }),
             self.line("└─", "op", |conf| {
-                Quantity::new(Maybe::from(conf.run_duration.calls()), 0)
+                Quantity::new(Maybe::from(conf.run_duration.count()), 0)
             }),
             self.line("Sampling", "s", |conf| {
-                Quantity::new(conf.sampling_period, 1)
+                Quantity::new(Maybe::from(conf.sampling_period.seconds()), 1)
+            }),
+            self.line("└─", "op", |conf| {
+                Quantity::new(Maybe::from(conf.sampling_period.count()), 0)
             }),
         ];
 
