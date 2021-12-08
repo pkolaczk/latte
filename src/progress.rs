@@ -1,7 +1,7 @@
 use console::style;
 use std::cmp::min;
 use std::fmt::{Display, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use hytra::TrAdder;
 
 use tokio::time::{Duration, Instant};
 
@@ -13,7 +13,7 @@ enum ProgressBound {
 pub struct Progress {
     start_time: Instant,
     bound: ProgressBound,
-    pos: AtomicU64,
+    pos: TrAdder<u64>,
     msg: String,
 }
 
@@ -22,7 +22,7 @@ impl Progress {
         Progress {
             start_time: Instant::now(),
             bound: ProgressBound::Duration(max_time),
-            pos: AtomicU64::new(0),
+            pos: TrAdder::new(),
             msg,
         }
     }
@@ -31,13 +31,13 @@ impl Progress {
         Progress {
             start_time: Instant::now(),
             bound: ProgressBound::Count(count),
-            pos: AtomicU64::new(0),
+            pos: TrAdder::new(),
             msg,
         }
     }
 
     pub fn tick(&self) {
-        self.pos.fetch_add(1, Ordering::Relaxed);
+        self.pos.inc(1);
     }
 
     /// Returns progress bar as string `[====>   ]`
@@ -54,7 +54,7 @@ impl Progress {
 impl Display for Progress {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         const WIDTH: usize = 60;
-        let pos = self.pos.load(Ordering::Relaxed);
+        let pos = self.pos.get();
         let text = match self.bound {
             ProgressBound::Count(count) => {
                 let pos = min(count, pos);
