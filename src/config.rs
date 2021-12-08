@@ -39,7 +39,7 @@ impl Duration {
         }
     }
 
-    pub fn calls(&self) -> Option<u64> {
+    pub fn count(&self) -> Option<u64> {
         if let Duration::Count(c) = self {
             Some(*c)
         } else {
@@ -122,10 +122,10 @@ pub struct RunCommand {
     #[clap(
         short('s'),
         long("sampling"),
-        default_value = "1",
+        default_value = "1s",
         value_name = "TIME | COUNT"
     )]
-    pub sampling_period: f64,
+    pub sampling_period: Duration,
 
     /// Label that will be added to the report to help identifying the test
     #[clap(long("tag"), number_of_values = 1, multiple_occurrences = true)]
