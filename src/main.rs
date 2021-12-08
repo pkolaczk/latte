@@ -1,5 +1,6 @@
 use std::cmp::max;
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
@@ -113,7 +114,7 @@ impl<'a> Snapshotter<'a> {
 /// - interrupt: allows for terminating the stream early
 /// - out: the channel to receive workload statistics
 async fn run_stream(
-    stream: impl Stream<Item = Option<u64>> + std::marker::Unpin,
+    stream: impl Stream<Item = Range<u64>> + std::marker::Unpin,
     workload: Workload,
     concurrency: NonZeroUsize,
     sampling: Option<config::Duration>,
@@ -124,8 +125,8 @@ async fn run_stream(
     workload.reset(Instant::now());
 
     let mut result_stream = stream
-        // send new requests only as long as we're getting new iteration numbers
-        .take_while(|i| ready(i.is_some()))
+        .take_while(|i| ready(!i.is_empty()))
+        .flat_map(|range| futures::stream::iter(range))
         // unconstrained to workaround quadratic complexity of buffer_unordered ()
         .map(|i| tokio::task::unconstrained(workload.run(i as i64)))
         .buffer_unordered(concurrency.get())
