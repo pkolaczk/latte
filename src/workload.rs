@@ -1,7 +1,7 @@
 use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -9,6 +9,7 @@ use hdrhistogram::Histogram;
 use rune::runtime::{AnyObj, Args, RuntimeContext, Shared, VmError};
 use rune::termcolor::{ColorChoice, StandardStream};
 use rune::{Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
+use try_lock::TryLock;
 
 use crate::error::LatteError;
 use crate::{CassError, CassErrorKind, Session, SessionStats};
@@ -342,7 +343,7 @@ pub struct Workload {
     session: Session,
     program: Arc<Program>,
     function: FnRef,
-    state: Mutex<WorkloadState>,
+    state: TryLock<WorkloadState>,
 }
 
 impl Clone for Workload {
@@ -351,7 +352,7 @@ impl Clone for Workload {
             session: self.session.clone(),
             program: self.program.clone(),
             function: self.function,
-            state: Mutex::new(WorkloadState::default()),
+            state: TryLock::new(WorkloadState::default()),
         }
     }
 }
@@ -362,7 +363,7 @@ impl Workload {
             session,
             program,
             function,
-            state: Mutex::new(WorkloadState::default()),
+            state: TryLock::new(WorkloadState::default()),
         }
     }
 

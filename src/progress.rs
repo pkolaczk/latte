@@ -1,7 +1,7 @@
 use console::style;
+use hytra::TrAdder;
 use std::cmp::min;
 use std::fmt::{Display, Formatter};
-use hytra::TrAdder;
 
 use tokio::time::{Duration, Instant};
 

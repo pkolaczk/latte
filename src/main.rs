@@ -88,13 +88,13 @@ impl<'a> Snapshotter<'a> {
             config::Duration::Time(d) => {
                 if end_time - self.last_snapshot_time > d {
                     send_stats(self.workload, self.output).await;
-                    self.last_snapshot_time = self.last_snapshot_time + d;
+                    self.last_snapshot_time += d;
                 }
             }
             config::Duration::Count(cnt) => {
                 if self.current_iter - self.last_snapshot_iter > cnt {
                     send_stats(self.workload, self.output).await;
-                    self.last_snapshot_iter = self.last_snapshot_iter + cnt;
+                    self.last_snapshot_iter += cnt;
                 }
             }
         }
