@@ -126,7 +126,7 @@ async fn run_stream(
 
     let mut result_stream = stream
         .take_while(|i| ready(!i.is_empty()))
-        .flat_map(|range| futures::stream::iter(range))
+        .flat_map(futures::stream::iter)
         // unconstrained to workaround quadratic complexity of buffer_unordered ()
         .map(|i| tokio::task::unconstrained(workload.run(i as i64)))
         .buffer_unordered(concurrency.get())
