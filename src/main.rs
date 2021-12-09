@@ -402,7 +402,6 @@ async fn run(conf: RunCommand) -> Result<()> {
         }
     }
 
-    let program = Arc::new(program);
     let loader = Workload::new(session.clone(), program.clone(), FnRef::new(LOAD_FN));
     let runner = Workload::new(session.clone(), program.clone(), FnRef::new(RUN_FN));
 

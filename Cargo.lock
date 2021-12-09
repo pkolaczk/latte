@@ -1289,8 +1289,7 @@ checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
 [[package]]
 name = "rune"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "996fe2e9f814db578e6a5f4d3c63791c90d030040bdb58ca8e367c3ed7b7e8e9"
+source = "git+https://github.com/pkolaczk/rune/?branch=cloneable-unit-and-context#5d778585da08031f904f53fe48cd2e6e6ba241a6"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1315,8 +1314,7 @@ dependencies = [
 [[package]]
 name = "rune-macros"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0a4a9e848538bfed0281b47a0af878e81c7cc87fcedaef4d5ea275c7f3db5b9"
+source = "git+https://github.com/pkolaczk/rune/?branch=cloneable-unit-and-context#5d778585da08031f904f53fe48cd2e6e6ba241a6"
 dependencies = [
  "proc-macro2",
  "quote",
