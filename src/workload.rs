@@ -308,14 +308,14 @@ impl Program {
 #[derive(Clone, Debug)]
 pub struct FnStats {
     pub call_count: u64,
-    pub call_durations_us: Histogram<u64>,
+    pub call_times_ns: Histogram<u64>,
 }
 
 impl FnStats {
     pub fn operation_completed(&mut self, duration: Duration) {
         self.call_count += 1;
-        self.call_durations_us
-            .record(duration.as_micros().clamp(1, u64::MAX as u128) as u64)
+        self.call_times_ns
+            .record(duration.as_nanos().clamp(1, u64::MAX as u128) as u64)
             .unwrap();
     }
 }
@@ -324,7 +324,7 @@ impl Default for FnStats {
     fn default() -> Self {
         FnStats {
             call_count: 0,
-            call_durations_us: Histogram::new(3).unwrap(),
+            call_times_ns: Histogram::new(3).unwrap(),
         }
     }
 }

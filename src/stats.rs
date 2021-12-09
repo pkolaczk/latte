@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::time::Instant;
 
-use crate::workload::WorkloadStats;
 use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
@@ -11,6 +10,9 @@ use statrs::distribution::{StudentsT, Univariate};
 use strum::EnumCount;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumCount as EnumCountM, EnumIter};
+
+use crate::histogram::SerializableHistogram;
+use crate::workload::WorkloadStats;
 
 /// Controls the maximum order of autocovariance taken into
 /// account when estimating the long run mean error. Higher values make the estimator
@@ -95,10 +97,10 @@ pub fn long_run_err(mean: f64, values: &[f32], weights: &[f32]) -> f64 {
     (long_run_variance(mean, values, weights) / values.len() as f64).sqrt()
 }
 
-fn percentiles(hist: &Histogram<u64>) -> [f32; Percentile::COUNT] {
+fn percentiles_ms(hist: &Histogram<u64>) -> [f32; Percentile::COUNT] {
     let mut percentiles = [0.0; Percentile::COUNT];
     for (i, p) in Percentile::iter().enumerate() {
-        percentiles[i] = hist.value_at_percentile(p.value()) as f32 / 1000.0;
+        percentiles[i] = hist.value_at_percentile(p.value()) as f32 / 1000000.0;
     }
     percentiles
 }
@@ -155,10 +157,10 @@ pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
 fn distribution(hist: &Histogram<u64>) -> Vec<Bucket> {
     let mut result = Vec::new();
     if !hist.is_empty() {
-        for x in hist.iter_log(100, 2.15443469) {
+        for x in hist.iter_log(100000, 2.15443469) {
             result.push(Bucket {
                 percentile: x.percentile(),
-                duration_ms: x.value_iterated_to() as f64 / 1000.0,
+                duration_ms: x.value_iterated_to() as f64 / 1000000.0,
                 count: x.count_since_last_iteration(),
                 cumulative_count: x.count_at_value(),
             });
@@ -249,13 +251,15 @@ pub struct Sample {
     pub mean_resp_time_ms: f32,
     pub call_time_percentiles: [f32; Percentile::COUNT],
     pub resp_time_percentiles: [f32; Percentile::COUNT],
+    pub call_time_histogram_ns: SerializableHistogram,
+    pub resp_time_histogram_ns: SerializableHistogram,
 }
 
 impl Sample {
     pub fn new(base_start_time: Instant, stats: &[WorkloadStats]) -> Sample {
         assert!(!stats.is_empty());
         let mut call_count = 0;
-        let mut call_times_us = Histogram::new(3).unwrap();
+        let mut call_times_ns = Histogram::new(3).unwrap();
 
         let mut request_count = 0;
         let mut row_count = 0;
@@ -263,7 +267,10 @@ impl Sample {
         let mut error_count = 0;
         let mut mean_queue_len = 0.0;
         let mut duration_s = 0.0;
-        let mut resp_times_us = Histogram::new(3).unwrap();
+        let mut resp_times_ns = Histogram::new(3).unwrap();
+
+        let mut call_time_histogram_ns = Histogram::new(3).unwrap();
+        let mut resp_time_histogram_ns = Histogram::new(3).unwrap();
 
         for s in stats {
             let ss = &s.session_stats;
@@ -276,13 +283,15 @@ impl Sample {
             error_count += ss.req_error_count;
             mean_queue_len += ss.mean_queue_length / stats.len() as f32;
             duration_s += (s.end_time - s.start_time).as_secs_f32() / stats.len() as f32;
-            resp_times_us.add(&ss.resp_times_us).unwrap();
+            resp_times_ns.add(&ss.resp_times_ns).unwrap();
+            resp_time_histogram_ns.add(&ss.resp_times_ns).unwrap();
 
             call_count += fs.call_count;
-            call_times_us.add(&fs.call_durations_us).unwrap();
+            call_times_ns.add(&fs.call_times_ns).unwrap();
+            call_time_histogram_ns.add(&fs.call_times_ns).unwrap();
         }
-        let resp_time_percentiles = percentiles(&resp_times_us);
-        let call_time_percentiles = percentiles(&call_times_us);
+        let resp_time_percentiles = percentiles_ms(&resp_times_ns);
+        let call_time_percentiles = percentiles_ms(&call_times_ns);
 
         Sample {
             time_s: (stats[0].start_time - base_start_time).as_secs_f32(),
@@ -296,10 +305,12 @@ impl Sample {
             call_throughput: call_count as f32 / duration_s,
             req_throughput: request_count as f32 / duration_s,
             row_throughput: row_count as f32 / duration_s,
-            mean_call_time_ms: call_times_us.mean() as f32 / 1000.0,
+            mean_call_time_ms: call_times_ns.mean() as f32 / 1000000.0,
+            call_time_histogram_ns: SerializableHistogram(call_time_histogram_ns),
             call_time_percentiles,
-            mean_resp_time_ms: resp_times_us.mean() as f32 / 1000.0,
+            mean_resp_time_ms: resp_times_ns.mean() as f32 / 1000000.0,
             resp_time_percentiles,
+            resp_time_histogram_ns: SerializableHistogram(resp_time_histogram_ns),
         }
     }
 }
@@ -501,8 +512,8 @@ pub struct Recorder {
     pub errors: HashSet<String>,
     pub error_count: u64,
     pub row_count: u64,
-    pub call_times_us: Histogram<u64>,
-    pub resp_times_us: Histogram<u64>,
+    pub call_times_ns: Histogram<u64>,
+    pub resp_times_ns: Histogram<u64>,
     pub queue_len_sum: u64,
     log: Log,
     rate_limit: Option<f64>,
@@ -528,8 +539,8 @@ impl Recorder {
             row_count: 0,
             errors: HashSet::new(),
             error_count: 0,
-            call_times_us: Histogram::new(3).unwrap(),
-            resp_times_us: Histogram::new(3).unwrap(),
+            call_times_ns: Histogram::new(3).unwrap(),
+            resp_times_ns: Histogram::new(3).unwrap(),
             queue_len_sum: 0,
         }
     }
@@ -538,11 +549,11 @@ impl Recorder {
     /// Called on completion of each sample.
     pub fn record(&mut self, samples: &[WorkloadStats]) -> &Sample {
         for s in samples.iter() {
-            self.resp_times_us
-                .add(&s.session_stats.resp_times_us)
+            self.resp_times_ns
+                .add(&s.session_stats.resp_times_ns)
                 .unwrap();
-            self.call_times_us
-                .add(&s.function_stats.call_durations_us)
+            self.call_times_ns
+                .add(&s.function_stats.call_times_ns)
                 .unwrap();
         }
         let stats = Sample::new(self.start_time, samples);
@@ -609,12 +620,12 @@ impl Recorder {
             call_time_ms: TimeDistribution {
                 mean: self.log.call_time_ms(),
                 percentiles: call_time_percentiles,
-                distribution: distribution(&self.call_times_us),
+                distribution: distribution(&self.call_times_ns),
             },
             resp_time_ms: TimeDistribution {
                 mean: self.log.resp_time_ms(),
                 percentiles: resp_time_percentiles,
-                distribution: distribution(&self.resp_times_us),
+                distribution: distribution(&self.resp_times_ns),
             },
             concurrency,
             concurrency_ratio,
