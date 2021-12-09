@@ -85,8 +85,9 @@ pub const LOAD_FN: &str = "load";
 pub const RUN_FN: &str = "run";
 
 /// Compiled workload program
+#[derive(Clone)]
 pub struct Program {
-    sources: Sources,
+    sources: Arc<Sources>,
     context: Arc<RuntimeContext>,
     unit: Arc<Unit>,
 }
@@ -165,10 +166,22 @@ impl Program {
         let unit = unit?;
 
         Ok(Program {
-            sources,
+            sources: Arc::new(sources),
             context: Arc::new(context.runtime()),
             unit: Arc::new(unit),
         })
+    }
+
+    /// Makes a deep copy of context and unit.
+    /// Calling this method instead of `clone` ensures that Rune runtime structures
+    /// are separate and can be moved to different CPU cores efficiently without accidental
+    /// sharing of Arc references.
+    fn unshare(&self) -> Program {
+        Program {
+            sources: self.sources.clone(),
+            context: Arc::new(self.context.as_ref().clone()),
+            unit: Arc::new(self.unit.as_ref().clone()),
+        }
     }
 
     /// Initializes a fresh virtual machine needed to execute this program.
@@ -237,23 +250,23 @@ impl Program {
     }
 
     pub fn has_prepare(&self) -> bool {
-        self.unit.lookup(FnRef::new(PREPARE_FN).hash).is_some()
+        self.unit.function(FnRef::new(PREPARE_FN).hash).is_some()
     }
 
     pub fn has_schema(&self) -> bool {
-        self.unit.lookup(FnRef::new(SCHEMA_FN).hash).is_some()
+        self.unit.function(FnRef::new(SCHEMA_FN).hash).is_some()
     }
 
     pub fn has_erase(&self) -> bool {
-        self.unit.lookup(FnRef::new(ERASE_FN).hash).is_some()
+        self.unit.function(FnRef::new(ERASE_FN).hash).is_some()
     }
 
     pub fn has_load(&self) -> bool {
-        self.unit.lookup(FnRef::new(LOAD_FN).hash).is_some()
+        self.unit.function(FnRef::new(LOAD_FN).hash).is_some()
     }
 
     pub fn has_run(&self) -> bool {
-        self.unit.lookup(FnRef::new(RUN_FN).hash).is_some()
+        self.unit.function(FnRef::new(RUN_FN).hash).is_some()
     }
 
     /// Calls the script's `init` function.
@@ -341,7 +354,7 @@ impl Default for WorkloadState {
 
 pub struct Workload {
     session: Session,
-    program: Arc<Program>,
+    program: Program,
     function: FnRef,
     state: TryLock<WorkloadState>,
 }
@@ -350,7 +363,8 @@ impl Clone for Workload {
     fn clone(&self) -> Self {
         Workload {
             session: self.session.clone(),
-            program: self.program.clone(),
+            // make a deep copy to avoid congestion on Arc ref counts used heavily by Rune
+            program: self.program.unshare(),
             function: self.function,
             state: TryLock::new(WorkloadState::default()),
         }
@@ -358,7 +372,7 @@ impl Clone for Workload {
 }
 
 impl Workload {
-    pub fn new(session: Session, program: Arc<Program>, function: FnRef) -> Workload {
+    pub fn new(session: Session, program: Program, function: FnRef) -> Workload {
         Workload {
             session,
             program,

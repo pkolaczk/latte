@@ -1,10 +1,8 @@
+use crate::config;
 use std::cmp;
 use std::ops::Range;
-use crate::config;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::Instant;
-
-
 
 /// Decides when to stop benchmark execution.
 pub enum Deadline {
@@ -45,7 +43,10 @@ impl Deadline {
             Deadline::FixedTime { current, deadline } => {
                 if Instant::now() < *deadline {
                     let start = current.fetch_add(BATCH_SIZE, Ordering::Relaxed);
-                    Range { start, end: start + BATCH_SIZE }
+                    Range {
+                        start,
+                        end: start + BATCH_SIZE,
+                    }
                 } else {
                     Range::default()
                 }
