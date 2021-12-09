@@ -33,6 +33,7 @@ use crate::workload::{FnRef, Workload, WorkloadStats, LOAD_FN, RUN_FN};
 mod config;
 mod deadline;
 mod error;
+mod histogram;
 mod interrupt;
 mod progress;
 mod report;

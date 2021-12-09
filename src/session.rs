@@ -100,7 +100,7 @@ pub struct SessionStats {
     pub row_count: u64,
     pub queue_length: u64,
     pub mean_queue_length: f32,
-    pub resp_times_us: Histogram<u64>,
+    pub resp_times_ns: Histogram<u64>,
 }
 
 impl SessionStats {
@@ -119,8 +119,8 @@ impl SessionStats {
 
     pub fn complete_request(&mut self, duration: Duration, rs: &Result<QueryResult, QueryError>) {
         self.queue_length -= 1;
-        let duration_us = duration.as_micros().clamp(1, u64::MAX as u128) as u64;
-        self.resp_times_us.record(duration_us).unwrap();
+        let duration_ns = duration.as_nanos().clamp(1, u64::MAX as u128) as u64;
+        self.resp_times_ns.record(duration_ns).unwrap();
         self.req_count += 1;
         match rs {
             Ok(rs) => self.row_count += rs.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64,
@@ -138,7 +138,7 @@ impl SessionStats {
         self.req_count = 0;
         self.mean_queue_length = 0.0;
         self.req_errors.clear();
-        self.resp_times_us.clear();
+        self.resp_times_ns.clear();
 
         // note that current queue_length is *not* reset to zero because there
         // might be pending requests and if we set it to zero, that would underflow
@@ -154,7 +154,7 @@ impl Default for SessionStats {
             row_count: 0,
             queue_length: 0,
             mean_queue_length: 0.0,
-            resp_times_us: Histogram::new(3).unwrap(),
+            resp_times_ns: Histogram::new(3).unwrap(),
         }
     }
 }
