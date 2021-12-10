@@ -582,20 +582,3 @@ fn main() {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_take_one_of_each() {
-        let s1 = futures::stream::iter(1..=3);
-        let s2 = futures::stream::iter(1..=2);
-        let s3 = futures::stream::iter(1..=2);
-        let mut streams = vec![s1, s2, s3];
-        assert_eq!(take_one_of_each(&mut streams).await, vec![1, 1, 1]);
-        assert_eq!(take_one_of_each(&mut streams).await, vec![2, 2, 2]);
-        assert_eq!(take_one_of_each(&mut streams).await, vec![3]);
-        assert_eq!(take_one_of_each(&mut streams).await, Vec::<u32>::new());
-        assert!(streams.is_empty());
-    }
-}
