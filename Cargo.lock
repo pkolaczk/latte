@@ -651,9 +651,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.109"
+version = "0.2.110"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f98a04dce437184842841303488f70d0188c5f51437d2a834dc097eafa909a01"
+checksum = "b58a4469763e4e3a906c4ed786e1c70512d16aa88f84dded826da42640fc6a1c"
 
 [[package]]
 name = "libm"
@@ -1291,7 +1291,7 @@ checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
 [[package]]
 name = "rune"
 version = "0.10.1"
-source = "git+https://github.com/pkolaczk/rune/?branch=cloneable-unit-and-context#e277a630b9680aa2013ef0e60b6b7c666dcb6e03"
+source = "git+https://github.com/pkolaczk/rune/?branch=cloneable-unit-and-context#940524df9c7b49f0156d011bad048a3cb8ecb2d3"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1316,7 +1316,7 @@ dependencies = [
 [[package]]
 name = "rune-macros"
 version = "0.10.1"
-source = "git+https://github.com/pkolaczk/rune/?branch=cloneable-unit-and-context#e277a630b9680aa2013ef0e60b6b7c666dcb6e03"
+source = "git+https://github.com/pkolaczk/rune/?branch=cloneable-unit-and-context#940524df9c7b49f0156d011bad048a3cb8ecb2d3"
 dependencies = [
  "proc-macro2",
  "quote",

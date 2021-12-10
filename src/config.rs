@@ -148,9 +148,14 @@ pub struct RunCommand {
     #[clap(name = "workload", required = true, value_name = "PATH")]
     pub workload: PathBuf,
 
+    /// Parameter values passed to the workload, accessible through param! macro.
     #[clap(short('P'), parse(try_from_str = parse_key_val),
     number_of_values = 1, multiple_occurrences = true)]
     pub params: Vec<(String, String)>,
+
+    /// Don't display the progress bar.
+    #[clap(short, long)]
+    pub quiet: bool,
 
     /// List of Cassandra addresses to connect to
     #[clap(name = "addresses", default_value = "localhost")]

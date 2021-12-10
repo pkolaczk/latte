@@ -253,6 +253,7 @@ async fn par_execute(
     sampling_period: Option<config::Duration>,
     workload: Workload,
     signals: Arc<InterruptHandler>,
+    show_progress: bool,
 ) -> Result<BenchmarkStats> {
     let thread_count = exec_options.threads.get();
     let concurrency = exec_options.concurrency;
@@ -261,7 +262,11 @@ async fn par_execute(
         config::Duration::Count(count) => Progress::with_count(name.to_string(), count),
         config::Duration::Time(duration) => Progress::with_duration(name.to_string(), duration),
     };
-    let progress = Arc::new(StatusLine::new(progress));
+    let progress_opts = status_line::Options {
+        initially_visible: show_progress,
+        refresh_period: Duration::from_millis(200),
+    };
+    let progress = Arc::new(StatusLine::with_options(progress, progress_opts));
     let deadline = Arc::new(Deadline::new(exec_options.duration));
     let sampling_period = sampling_period.map(|s| match s {
         config::Duration::Count(cnt) => config::Duration::Count(cnt / thread_count as u64),
@@ -297,7 +302,7 @@ async fn par_execute(
         if sampling_period.is_some() {
             progress.set_visible(false);
             println!("{}", aggregate);
-            progress.set_visible(true);
+            progress.set_visible(show_progress);
         }
     }
 
@@ -415,7 +420,15 @@ async fn run(conf: RunCommand) -> Result<()> {
                 threads: conf.threads,
                 concurrency: conf.load_concurrency,
             };
-            par_execute("Loading...", &load_options, None, loader, interrupt.clone()).await?;
+            par_execute(
+                "Loading...",
+                &load_options,
+                None,
+                loader,
+                interrupt.clone(),
+                !conf.quiet,
+            )
+            .await?;
         }
     }
 
@@ -437,6 +450,7 @@ async fn run(conf: RunCommand) -> Result<()> {
             None,
             runner.clone(),
             interrupt.clone(),
+            !conf.quiet,
         )
         .await?;
     }
@@ -468,6 +482,7 @@ async fn run(conf: RunCommand) -> Result<()> {
         Some(conf.sampling_period),
         runner,
         interrupt.clone(),
+        !conf.quiet,
     )
     .await?;
 
@@ -581,4 +596,3 @@ fn main() {
         exit(128);
     }
 }
-
