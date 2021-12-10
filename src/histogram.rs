@@ -1,7 +1,7 @@
 use std::fmt;
 use std::io::Cursor;
 
-use hdrhistogram::serialization::{Serializer, V2Serializer};
+use hdrhistogram::serialization::{Serializer, V2DeflateSerializer};
 use hdrhistogram::Histogram;
 use serde::de::{Error, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -16,7 +16,7 @@ impl Serialize for SerializableHistogram {
         S: serde::Serializer,
     {
         let mut serialized_histogram = Vec::new();
-        V2Serializer::new()
+        V2DeflateSerializer::new()
             .serialize(&self.0, &mut serialized_histogram)
             .unwrap();
         let encoded = base64::encode(serialized_histogram);

@@ -137,7 +137,7 @@ pub struct RunCommand {
     pub output: Option<PathBuf>,
 
     /// Path to a report from another earlier run that should be compared to side-by-side
-    #[clap(short('b'), long)]
+    #[clap(short('b'), long, value_name = "PATH")]
     pub baseline: Option<PathBuf>,
 
     /// Skips erasing and loading data before running the benchmark.
@@ -145,7 +145,7 @@ pub struct RunCommand {
     pub no_load: bool,
 
     /// Path to the workload definition file
-    #[clap(name = "workload", required = true)]
+    #[clap(name = "workload", required = true, value_name = "PATH")]
     pub workload: PathBuf,
 
     #[clap(short('P'), parse(try_from_str = parse_key_val),
@@ -183,25 +183,61 @@ impl RunCommand {
             .find(|(k, _)| k == key)
             .and_then(|v| v.1.parse().ok())
     }
+
+    /// Returns benchmark name
+    pub fn name(&self) -> String {
+        self.workload
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    }
 }
 
 #[derive(Parser, Debug)]
 pub struct ShowCommand {
     /// Path to the JSON report file
+    #[clap(value_name = "PATH")]
     pub report: PathBuf,
 
     /// Optional path to another JSON report file
-    #[clap(short('b'), long)]
+    #[clap(short('b'), long, value_name = "PATH")]
     pub baseline: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct HdrCommand {
+    /// Path to the input JSON report file
+    #[clap(value_name = "PATH")]
+    pub report: PathBuf,
+
+    /// Output file; if not given, the hdr log gets printed to stdout
+    #[clap(short('o'), long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// Runs the benchmark
+    /// Runs the benchmark.
+    ///
+    /// Prints nicely formatted statistics to the standard output.
+    /// Additionally dumps all data into a JSON report file.
     Run(RunCommand),
-    /// Displays the report(s) of previously executed benchmark(s)
+
+    /// Displays the report(s) of previously executed benchmark(s).
+    ///
+    /// Can compare two runs.
     Show(ShowCommand),
+
+    /// Exports call- and response-time histograms as a compressed HDR interval log.
+    ///
+    /// To be used with HdrHistogram (https://github.com/HdrHistogram/HdrHistogram).
+    /// Timestamps are given in seconds since Unix epoch.
+    /// Response times are recorded in nanoseconds.
+    ///
+    /// Each histogram is tagged by the benchmark name, parameters and benchmark tags.
+    Hdr(HdrCommand),
 }
 
 #[derive(Parser, Debug)]
