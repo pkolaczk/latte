@@ -1,4 +1,6 @@
 use std::cmp::max;
+use std::fs::File;
+use std::io::{stdout, Write};
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -11,6 +13,8 @@ use futures::channel::mpsc;
 use futures::channel::mpsc::{Receiver, Sender};
 use futures::future::ready;
 use futures::{SinkExt, Stream, StreamExt};
+use hdrhistogram::serialization::interval_log::Tag;
+use hdrhistogram::serialization::{interval_log, V2DeflateSerializer};
 use itertools::Itertools;
 use rune::Source;
 use status_line::StatusLine;
@@ -19,7 +23,7 @@ use tokio_stream::wrappers::IntervalStream;
 
 use config::RunCommand;
 
-use crate::config::{AppConfig, Command, ShowCommand};
+use crate::config::{AppConfig, Command, HdrCommand, ShowCommand};
 use crate::deadline::Deadline;
 use crate::error::{LatteError, Result};
 use crate::interrupt::InterruptHandler;
@@ -40,6 +44,8 @@ mod report;
 mod session;
 mod stats;
 mod workload;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -315,20 +321,11 @@ fn load_report_or_abort(path: &Path) -> Report {
 /// Constructs the output report file name from the parameters in the command.
 /// Separates parameters with underscores.
 fn get_default_output_name(conf: &RunCommand) -> PathBuf {
-    let name = conf
-        .workload
-        .file_stem()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-
-    let mut components = vec![name];
+    let mut components = vec![conf.name()];
     components.extend(conf.cluster_name.iter().map(|x| x.replace(" ", "_")));
     components.extend(conf.cass_version.iter().cloned());
     components.extend(conf.tags.iter().cloned());
-    if let Some(r) = conf.rate {
-        components.push(format!("r{}", r))
-    };
+    components.extend(conf.rate.map(|r| format!("r{}", r)));
     components.push(format!("p{}", conf.concurrency));
     components.push(format!("t{}", conf.threads));
     components.push(format!("c{}", conf.connections));
@@ -515,10 +512,56 @@ async fn show(conf: ShowCommand) -> Result<()> {
     Ok(())
 }
 
+/// Reads histograms from the report and dumps them to an hdr log
+async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
+    let report = load_report_or_abort(&conf.report);
+    let stdout = stdout();
+    let output_file: File;
+    let stdout_stream;
+    let mut out: Box<dyn Write> = match conf.output {
+        Some(path) => {
+            output_file = File::create(&path).map_err(|e| LatteError::OutputFileCreate(path, e))?;
+            Box::new(output_file)
+        }
+        None => {
+            stdout_stream = stdout.lock();
+            Box::new(stdout_stream)
+        }
+    };
+
+    let mut serializer = V2DeflateSerializer::new();
+    let mut log_writer = interval_log::IntervalLogWriterBuilder::new()
+        .add_comment(format!("[Logged with Latte {}]", VERSION).as_str())
+        .with_start_time(report.result.start_time.into())
+        .with_base_time(report.result.start_time.into())
+        .with_max_value_divisor(1000000.0) // ms
+        .begin_log_with(&mut out, &mut serializer)
+        .unwrap();
+
+    for sample in &report.result.log {
+        let interval_start_time = Duration::from_millis((sample.time_s * 1000.0) as u64);
+        let interval_duration = Duration::from_millis((sample.duration_s * 1000.0) as u64);
+        log_writer.write_histogram(
+            &sample.call_time_histogram_ns.0,
+            interval_start_time,
+            interval_duration,
+            Tag::new("call_time"),
+        )?;
+        log_writer.write_histogram(
+            &sample.resp_time_histogram_ns.0,
+            interval_start_time,
+            interval_duration,
+            Tag::new("resp_time"),
+        )?;
+    }
+    Ok(())
+}
+
 async fn async_main(command: Command) -> Result<()> {
     match command {
         Command::Run(config) => run(config).await?,
         Command::Show(config) => show(config).await?,
+        Command::Hdr(config) => export_hdr_log(config).await?,
     }
     Ok(())
 }

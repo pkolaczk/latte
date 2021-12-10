@@ -1,7 +1,8 @@
+use chrono::{DateTime, Local};
 use std::cmp::min;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
@@ -418,6 +419,8 @@ pub struct TimeDistribution {
 /// Stores the final statistics of the test run.
 #[derive(Serialize, Deserialize)]
 pub struct BenchmarkStats {
+    pub start_time: DateTime<Local>,
+    pub end_time: DateTime<Local>,
     pub elapsed_time_s: f64,
     pub cpu_time_s: f64,
     pub cpu_util: f64,
@@ -437,7 +440,7 @@ pub struct BenchmarkStats {
     pub resp_time_ms: TimeDistribution,
     pub concurrency: Mean,
     pub concurrency_ratio: f64,
-    pub samples: Vec<Sample>,
+    pub log: Vec<Sample>,
 }
 
 /// Stores the statistics of one or two test runs.
@@ -503,8 +506,10 @@ impl BenchmarkCmp<'_> {
 /// Can be also used to split the time-series into smaller sub-samples and to
 /// compute statistics for each sub-sample separately.
 pub struct Recorder {
-    pub start_time: Instant,
-    pub end_time: Instant,
+    pub start_time: SystemTime,
+    pub end_time: SystemTime,
+    pub start_instant: Instant,
+    pub end_instant: Instant,
     pub start_cpu_time: ProcessTime,
     pub end_cpu_time: ProcessTime,
     pub call_count: u64,
@@ -522,13 +527,16 @@ pub struct Recorder {
 
 impl Recorder {
     /// Creates a new recorder.
-    /// The `rate_limit` and `parallelism_limit` parameters are used only as the
+    /// The `rate_limit` and `concurrency_limit` parameters are used only as the
     /// reference levels for relative throughput and relative parallelism.
     pub fn start(rate_limit: Option<f64>, concurrency_limit: NonZeroUsize) -> Recorder {
-        let start_time = Instant::now();
+        let start_time = SystemTime::now();
+        let start_instant = Instant::now();
         Recorder {
             start_time,
             end_time: start_time,
+            start_instant,
+            end_instant: start_instant,
             start_cpu_time: ProcessTime::now(),
             end_cpu_time: ProcessTime::now(),
             log: Log::new(),
@@ -556,7 +564,7 @@ impl Recorder {
                 .add(&s.function_stats.call_times_ns)
                 .unwrap();
         }
-        let stats = Sample::new(self.start_time, samples);
+        let stats = Sample::new(self.start_instant, samples);
         self.call_count += stats.call_count;
         self.request_count += stats.request_count;
         self.row_count += stats.row_count;
@@ -569,7 +577,8 @@ impl Recorder {
 
     /// Stops the recording, computes the statistics and returns them as the new object.
     pub fn finish(mut self) -> BenchmarkStats {
-        self.end_time = Instant::now();
+        self.end_time = SystemTime::now();
+        self.end_instant = Instant::now();
         self.end_cpu_time = ProcessTime::now();
         self.stats()
     }
@@ -577,7 +586,7 @@ impl Recorder {
     /// Computes the final statistics based on collected data
     /// and turn them into report that can be serialized
     fn stats(self) -> BenchmarkStats {
-        let elapsed_time_s = (self.end_time - self.start_time).as_secs_f64();
+        let elapsed_time_s = (self.end_instant - self.start_instant).as_secs_f64();
         let cpu_time_s = self
             .end_cpu_time
             .duration_since(self.start_cpu_time)
@@ -602,6 +611,8 @@ impl Recorder {
             .collect();
 
         BenchmarkStats {
+            start_time: self.start_time.into(),
+            end_time: self.end_time.into(),
             elapsed_time_s,
             cpu_time_s,
             cpu_util,
@@ -629,7 +640,7 @@ impl Recorder {
             },
             concurrency,
             concurrency_ratio,
-            samples: self.log.samples,
+            log: self.log.samples,
         }
     }
 }

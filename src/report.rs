@@ -554,12 +554,12 @@ impl<'a> Display for BenchmarkCmp<'a> {
             self.line("└─", "row/req", |s| {
                 Quantity::new(s.row_count_per_req, 1)
             }),
-            self.line("Samples", "", |s| Quantity::new(s.samples.len(), 0)),
+            self.line("Samples", "", |s| Quantity::new(s.log.len(), 0)),
             self.line("Mean sample size", "op", |s| {
-                Quantity::new(s.samples.iter().map(|s| s.call_count as f64).mean(), 0)
+                Quantity::new(s.log.iter().map(|s| s.call_count as f64).mean(), 0)
             }),
             self.line("└─", "req", |s| {
-                Quantity::new(s.samples.iter().map(|s| s.request_count as f64).mean(), 0)
+                Quantity::new(s.log.iter().map(|s| s.request_count as f64).mean(), 0)
             }),
             self.line("Concurrency", "req", |s| {
                 Quantity::new(s.concurrency.value, 1)
