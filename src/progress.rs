@@ -84,7 +84,7 @@ impl Display for Progress {
 
         write!(
             f,
-            "\n{:21}{}",
+            "{:21}{}",
             style(&self.msg)
                 .white()
                 .bright()

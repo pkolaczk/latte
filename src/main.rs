@@ -1,4 +1,5 @@
 use std::cmp::max;
+use std::default::Default;
 use std::fs::File;
 use std::io::{stdout, Write};
 use std::num::NonZeroUsize;
@@ -16,6 +17,7 @@ use futures::{SinkExt, Stream, StreamExt};
 use hdrhistogram::serialization::interval_log::Tag;
 use hdrhistogram::serialization::{interval_log, V2DeflateSerializer};
 use itertools::Itertools;
+
 use rune::Source;
 use status_line::StatusLine;
 use tokio::runtime::Builder;
@@ -264,7 +266,7 @@ async fn par_execute(
     };
     let progress_opts = status_line::Options {
         initially_visible: show_progress,
-        refresh_period: Duration::from_millis(200),
+        ..Default::default()
     };
     let progress = Arc::new(StatusLine::with_options(progress, progress_opts));
     let deadline = Arc::new(Deadline::new(exec_options.duration));
@@ -582,7 +584,6 @@ async fn async_main(command: Command) -> Result<()> {
 }
 
 fn main() {
-    console::set_colors_enabled(true);
     let command = AppConfig::parse().command;
     let runtime = match &command {
         Command::Run(cmd) if cmd.threads.get() >= 1 => Builder::new_multi_thread()
