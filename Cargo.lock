@@ -1457,11 +1457,12 @@ dependencies = [
 
 [[package]]
 name = "status-line"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37f78e4d66f7a647acb4867331a45c8f35c4ccc538e27667414173835ddde928"
+checksum = "a20cc99bbe608305546a850ec4352907279a8b8044f9c13ae58bd0a8ab46ebc1"
 dependencies = [
  "ansi-escapes",
+ "atty",
 ]
 
 [[package]]

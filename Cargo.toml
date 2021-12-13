@@ -33,7 +33,7 @@ scylla = "0.3.1"
 serde = { version = "1.0.116", features = ["derive"] }
 serde_json = "1.0.57"
 statrs = "0.13.0"
-status-line = "0.1.0"
+status-line = "0.2.0"
 strum = { version = "0.19.5", features = ["derive"] }
 strum_macros = "0.19.4"
 time = "0.1.44"
