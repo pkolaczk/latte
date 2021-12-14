@@ -14,7 +14,9 @@ use statrs::statistics::Statistics;
 use strum::IntoEnumIterator;
 
 use crate::config::RunCommand;
-use crate::stats::{BenchmarkCmp, BenchmarkStats, Bucket, Percentile, Sample, Significance};
+use crate::stats::{
+    BenchmarkCmp, BenchmarkStats, Bucket, Mean, Percentile, Sample, Significance, TimeDistribution,
+};
 
 /// A standard error is multiplied by this factor to get the error margin.
 /// For a normally distributed random variable,
@@ -63,53 +65,36 @@ impl Report {
     }
 }
 
-/// This is similar as the builtin `Option`, but we need it, because the
-/// builtin `Option` doesn't implement
-/// `Display` and there is no way to do it in this crate.
-/// Maybe formats None as an empty string.
-pub enum Maybe<T> {
-    None,
-    Some(T),
-}
-
-impl<T> From<Option<T>> for Maybe<T> {
-    fn from(opt: Option<T>) -> Maybe<T> {
-        match opt {
-            Some(t) => Maybe::Some(t),
-            None => Maybe::None,
-        }
-    }
-}
-
-impl<T: Display> Display for Maybe<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match &self {
-            Maybe::Some(value) => value.fmt(f),
-            Maybe::None => Ok(()),
-        }
-    }
-}
-
-pub struct Quantity<T: Display> {
-    pub value: T,
+/// A displayable, optional value with an optional error.
+/// Controls formatting options such as precision.
+/// Thanks to this wrapper we can format all numeric values in a consistent way.
+pub struct Quantity<T> {
+    pub value: Option<T>,
     pub error: Option<T>,
     pub precision: usize,
 }
 
-impl<T: Display> Quantity<T> {
-    pub fn new(value: T, precision: usize) -> Quantity<T> {
+impl<T> Quantity<T> {
+    pub fn new(value: Option<T>) -> Quantity<T> {
         Quantity {
             value,
             error: None,
-            precision,
+            precision: 0,
         }
     }
 
-    pub fn with_error(mut self, e: T) -> Self {
-        self.error = Some(e);
+    pub fn with_precision(mut self, precision: usize) -> Self {
+        self.precision = precision;
         self
     }
 
+    pub fn with_error(mut self, e: Option<T>) -> Self {
+        self.error = e;
+        self
+    }
+}
+
+impl<T: Display> Quantity<T> {
     fn format_error(&self) -> String {
         match &self.error {
             None => "".to_owned(),
@@ -118,15 +103,69 @@ impl<T: Display> Quantity<T> {
     }
 }
 
+impl<T: Display> From<T> for Quantity<T> {
+    fn from(value: T) -> Self {
+        Quantity::new(Some(value))
+    }
+}
+
+impl<T: Display> From<Option<T>> for Quantity<T> {
+    fn from(value: Option<T>) -> Self {
+        Quantity::new(value)
+    }
+}
+
+impl From<Mean> for Quantity<f64> {
+    fn from(m: Mean) -> Self {
+        Quantity::new(Some(m.value)).with_error(m.std_err.map(|e| e * ERR_MARGIN))
+    }
+}
+
+impl From<Option<Mean>> for Quantity<f64> {
+    fn from(m: Option<Mean>) -> Self {
+        Quantity::new(m.map(|mean| mean.value))
+            .with_error(m.and_then(|mean| mean.std_err.map(|e| e * ERR_MARGIN)))
+    }
+}
+
+impl From<&TimeDistribution> for Quantity<f64> {
+    fn from(td: &TimeDistribution) -> Self {
+        Quantity::from(td.mean)
+    }
+}
+
+impl From<&Option<TimeDistribution>> for Quantity<f64> {
+    fn from(td: &Option<TimeDistribution>) -> Self {
+        Quantity::from(td.as_ref().map(|td| td.mean))
+    }
+}
+
 impl<T: Display> Display for Quantity<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{value:9.prec$} {error:8}",
-            value = style(&self.value).bright().for_stdout(),
-            prec = self.precision,
-            error = style(self.format_error()).dim().for_stdout(),
-        )
+        match &self.value {
+            None => write!(f, "{}", " ".repeat(18)),
+            Some(v) => write!(
+                f,
+                "{value:9.prec$} {error:8}",
+                value = style(v).bright().for_stdout(),
+                prec = self.precision,
+                error = style(self.format_error()).dim().for_stdout(),
+            ),
+        }
+    }
+}
+
+/// Wrapper for displaying an optional value.
+/// If value is `Some`, displays the original value.
+/// If value is `None`, displays nothing (empty string).
+struct OptionDisplay<T>(Option<T>);
+
+impl<T: Display> Display for OptionDisplay<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            None => write!(f, ""),
+            Some(v) => write!(f, "{}", v),
+        }
     }
 }
 
@@ -170,18 +209,16 @@ impl Rational for NonZeroUsize {
     }
 }
 
-impl<T: Rational> Rational for Maybe<T> {
+impl<T: Rational> Rational for OptionDisplay<T> {
     fn ratio(a: Self, b: Self) -> Option<f32> {
-        match (a, b) {
-            (Maybe::Some(a), Maybe::Some(b)) => Rational::ratio(a, b),
-            _ => None,
-        }
+        a.0.and_then(|a| b.0.and_then(|b| Rational::ratio(a, b)))
     }
 }
 
 impl<T: Rational + Display> Rational for Quantity<T> {
     fn ratio(a: Self, b: Self) -> Option<f32> {
-        Rational::ratio(a.value, b.value)
+        a.value
+            .and_then(|a| b.value.and_then(|b| Rational::ratio(a, b)))
     }
 }
 
@@ -253,7 +290,7 @@ where
         Box::new(self)
     }
 
-    fn with_goodness(mut self, goodness: i8) -> Self {
+    fn with_orientation(mut self, goodness: i8) -> Self {
         self.goodness = goodness;
         self
     }
@@ -329,7 +366,10 @@ where
             m1 = pad_str(m1.as_str(), 30, Alignment::Left, None),
             m2 = pad_str(m2.as_str(), 30, Alignment::Left, None),
             cmp = self.fmt_relative_change(self.goodness, is_significant),
-            signif = format!("{}", Maybe::from(self.significance))
+            signif = match &self.significance {
+                Some(s) => format!("{}", s),
+                None => "".to_owned(),
+            }
         )
     }
 }
@@ -418,9 +458,11 @@ impl<'a> Display for RunConfigCmp<'a> {
         let lines: Vec<Box<dyn Display>> = vec![
             self.line("Date", "", |conf| self.format_time(conf, "%a, %d %b %Y")),
             self.line("Time", "", |conf| self.format_time(conf, "%H:%M:%S %z")),
-            self.line("Cluster", "", |conf| Maybe::from(conf.cluster_name.clone())),
-            self.line("C* version", "", |conf| {
-                Maybe::from(conf.cass_version.clone())
+            self.line("Cluster", "", |conf| {
+                OptionDisplay(conf.cluster_name.clone())
+            }),
+            self.line("Cass. version", "", |conf| {
+                OptionDisplay(conf.cass_version.clone())
             }),
             self.line("Tags", "", |conf| conf.tags.iter().join(", ")),
             self.line("Workload", "", |conf| {
@@ -441,41 +483,36 @@ impl<'a> Display for RunConfigCmp<'a> {
         if !param_names.is_empty() {
             for k in param_names {
                 let label = format!("-P {}", k);
-                let line = self.line(label.as_str(), "", |conf| {
-                    Quantity::new(Maybe::from(conf.get_param(k)), 0)
-                });
+                let line = self.line(label.as_str(), "", |conf| Quantity::from(conf.get_param(k)));
                 writeln!(f, "{}", line).unwrap();
             }
             writeln!(f, "{}", fmt_horizontal_line()).unwrap();
         }
 
         let lines: Vec<Box<dyn Display>> = vec![
-            self.line("Threads", "", |conf| Quantity::new(conf.threads, 0)),
-            self.line("Connections", "", |conf| Quantity::new(conf.connections, 0)),
+            self.line("Threads", "", |conf| Quantity::from(conf.threads)),
+            self.line("Connections", "", |conf| Quantity::from(conf.connections)),
             self.line("Concurrency", "req", |conf| {
-                Quantity::new(conf.concurrency, 0)
+                Quantity::from(conf.concurrency)
             }),
-            self.line("Max rate", "op/s", |conf| match conf.rate {
-                Some(r) => Quantity::new(Maybe::Some(r), 0),
-                None => Quantity::new(Maybe::None, 0),
-            }),
+            self.line("Max rate", "op/s", |conf| Quantity::from(conf.rate)),
             self.line("Warmup", "s", |conf| {
-                Quantity::new(Maybe::from(conf.warmup_duration.seconds()), 0)
+                Quantity::from(conf.warmup_duration.seconds())
             }),
             self.line("└─", "op", |conf| {
-                Quantity::new(Maybe::from(conf.warmup_duration.count()), 0)
+                Quantity::from(conf.warmup_duration.count())
             }),
             self.line("Run time", "s", |conf| {
-                Quantity::new(Maybe::from(conf.run_duration.seconds()), 1)
+                Quantity::from(conf.run_duration.seconds()).with_precision(1)
             }),
             self.line("└─", "op", |conf| {
-                Quantity::new(Maybe::from(conf.run_duration.count()), 0)
+                Quantity::from(conf.run_duration.count())
             }),
             self.line("Sampling", "s", |conf| {
-                Quantity::new(Maybe::from(conf.sampling_period.seconds()), 1)
+                Quantity::from(conf.sampling_period.seconds()).with_precision(1)
             }),
             self.line("└─", "op", |conf| {
-                Quantity::new(Maybe::from(conf.sampling_period.count()), 0)
+                Quantity::from(conf.sampling_period.count())
             }),
         ];
 
@@ -540,65 +577,60 @@ impl<'a> Display for BenchmarkCmp<'a> {
         }
 
         let summary: Vec<Box<dyn Display>> = vec![
-            self.line("Elapsed time", "s", |s| Quantity::new(s.elapsed_time_s, 3)),
-            self.line("CPU time", "s", |s| Quantity::new(s.cpu_time_s, 3)),
-            self.line("CPU utilisation", "%", |s| Quantity::new(s.cpu_util, 1)),
-            self.line("Calls", "op", |s| Quantity::new(s.call_count, 0)),
-            self.line("Errors", "op", |s| Quantity::new(s.error_count, 0)),
-            self.line("└─", "%", |s| Quantity::new(s.errors_ratio, 1)),
-            self.line("Requests", "req", |s| Quantity::new(s.request_count, 0)),
+            self.line("Elapsed time", "s", |s| {
+                Quantity::from(s.elapsed_time_s).with_precision(3)
+            }),
+            self.line("CPU time", "s", |s| {
+                Quantity::from(s.cpu_time_s).with_precision(3)
+            }),
+            self.line("CPU utilisation", "%", |s| {
+                Quantity::from(s.cpu_util).with_precision(1)
+            }),
+            self.line("Calls", "op", |s| Quantity::from(s.call_count)),
+            self.line("Errors", "op", |s| Quantity::from(s.error_count)),
+            self.line("└─", "%", |s| {
+                Quantity::from(s.errors_ratio).with_precision(1)
+            }),
+            self.line("Requests", "req", |s| Quantity::from(s.request_count)),
             self.line("└─", "req/op", |s| {
-                Quantity::new(s.requests_per_call, 1)
+                Quantity::from(s.requests_per_call).with_precision(1)
             }),
-            self.line("Rows", "row", |s| Quantity::new(s.row_count, 0)),
+            self.line("Rows", "row", |s| Quantity::from(s.row_count)),
             self.line("└─", "row/req", |s| {
-                Quantity::new(s.row_count_per_req, 1)
+                Quantity::from(s.row_count_per_req).with_precision(1)
             }),
-            self.line("Samples", "", |s| Quantity::new(s.log.len(), 0)),
+            self.line("Samples", "", |s| Quantity::from(s.log.len())),
             self.line("Mean sample size", "op", |s| {
-                Quantity::new(s.log.iter().map(|s| s.call_count as f64).mean(), 0)
+                Quantity::from(s.log.iter().map(|s| s.call_count as f64).mean())
             }),
             self.line("└─", "req", |s| {
-                Quantity::new(s.log.iter().map(|s| s.request_count as f64).mean(), 0)
+                Quantity::from(s.log.iter().map(|s| s.request_count as f64).mean())
             }),
-            self.line("Concurrency", "req", |s| {
-                Quantity::new(s.concurrency.value, 1)
-            }),
-            self.line("└─", "%", |s| Quantity::new(s.concurrency_ratio, 1)),
-            self.line("Throughput", "op/s", |s| {
-                Quantity::new(s.call_throughput.value, 0)
-                    .with_error(s.call_throughput.std_err * ERR_MARGIN)
-            })
-            .with_significance(self.cmp_call_throughput())
-            .with_goodness(1)
-            .into_box(),
-            self.line("├─", "req/s", |s| {
-                Quantity::new(s.req_throughput.value, 0)
-                    .with_error(s.req_throughput.std_err * ERR_MARGIN)
-            })
-            .with_significance(self.cmp_req_throughput())
-            .with_goodness(1)
-            .into_box(),
-            self.line("└─", "row/s", |s| {
-                Quantity::new(s.row_throughput.value, 0)
-                    .with_error(s.row_throughput.std_err * ERR_MARGIN)
-            })
-            .with_significance(self.cmp_row_throughput())
-            .with_goodness(1)
-            .into_box(),
+            self.line("Concurrency", "req", |s| Quantity::from(s.concurrency)),
+            self.line("└─", "%", |s| Quantity::from(s.concurrency_ratio)),
+            self.line("Throughput", "op/s", |s| Quantity::from(s.call_throughput))
+                .with_significance(self.cmp_call_throughput())
+                .with_orientation(1)
+                .into_box(),
+            self.line("├─", "req/s", |s| Quantity::from(s.req_throughput))
+                .with_significance(self.cmp_req_throughput())
+                .with_orientation(1)
+                .into_box(),
+            self.line("└─", "row/s", |s| Quantity::from(s.row_throughput))
+                .with_significance(self.cmp_row_throughput())
+                .with_orientation(1)
+                .into_box(),
             self.line("Mean call time", "ms", |s| {
-                Quantity::new(s.call_time_ms.mean.value, 3)
-                    .with_error(s.call_time_ms.mean.std_err * ERR_MARGIN)
+                Quantity::from(&s.call_time_ms).with_precision(3)
             })
             .with_significance(self.cmp_mean_resp_time())
-            .with_goodness(-1)
+            .with_orientation(-1)
             .into_box(),
             self.line("Mean resp. time", "ms", |s| {
-                Quantity::new(s.resp_time_ms.mean.value, 3)
-                    .with_error(s.resp_time_ms.mean.std_err * ERR_MARGIN)
+                Quantity::from(s.resp_time_ms.as_ref().map(|rt| rt.mean)).with_precision(3)
             })
             .with_significance(self.cmp_mean_resp_time())
-            .with_goodness(-1)
+            .with_orientation(-1)
             .into_box(),
         ];
 
@@ -630,10 +662,13 @@ impl<'a> Display for BenchmarkCmp<'a> {
             for p in resp_time_percentiles.iter() {
                 let l = self
                     .line(p.name(), "", |s| {
-                        let rt = s.resp_time_ms.percentiles[*p as usize];
-                        Quantity::new(rt.value, 3).with_error(rt.std_err * ERR_MARGIN)
+                        let rt = s
+                            .resp_time_ms
+                            .as_ref()
+                            .map(|rt| rt.percentiles[*p as usize]);
+                        Quantity::from(rt)
                     })
-                    .with_goodness(-1)
+                    .with_orientation(-1)
                     .with_significance(self.cmp_resp_time_percentile(*p));
                 writeln!(f, "{}", l)?;
             }
@@ -647,7 +682,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
                 count: 0,
                 cumulative_count: 0,
             };
-            let dist = &self.v1.resp_time_ms.distribution;
+            let dist = &self.v1.resp_time_ms.as_ref().unwrap().distribution;
             let max_count = dist.iter().map(|b| b.count).max().unwrap_or(1);
             for (low, high) in ([zero].iter().chain(dist)).tuple_windows() {
                 writeln!(
