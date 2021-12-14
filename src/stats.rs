@@ -113,7 +113,7 @@ fn percentiles_ms(hist: &Histogram<u64>) -> [f32; Percentile::COUNT] {
 pub struct Mean {
     pub n: u64,
     pub value: f64,
-    pub std_err: f64,
+    pub std_err: Option<f64>,
 }
 
 impl Mean {
@@ -122,7 +122,7 @@ impl Mean {
         Mean {
             n: v.len() as u64,
             value: m,
-            std_err: long_run_err(m, v, weights),
+            std_err: not_nan(long_run_err(m, v, weights)),
         }
     }
 }
@@ -131,15 +131,21 @@ impl Mean {
 /// Uses Welch's t-test allowing samples to have different variances.
 /// See https://en.wikipedia.org/wiki/Welch%27s_t-test.
 ///
+/// If any of the means is given without the error, or if the number of observations is too low,
+/// returns 1.0.
+///
 /// Assumes data are i.i.d and distributed normally, but it can be used
 /// for autocorrelated data as well, if the errors are properly corrected for autocorrelation
 /// using Wilk's method. This is what `Mean` struct is doing automatically
 /// when constructed from a vector.
 pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
+    if mean1.std_err.is_none() || mean2.std_err.is_none() {
+        return 1.0;
+    }
     let n1 = mean1.n as f64;
     let n2 = mean2.n as f64;
-    let e1 = mean1.std_err;
-    let e2 = mean2.std_err;
+    let e1 = mean1.std_err.unwrap();
+    let e2 = mean2.std_err.unwrap();
     let m1 = mean1.value;
     let m2 = mean2.value;
     let e1_sq = e1 * e1;
@@ -151,7 +157,7 @@ pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
     if let Ok(distrib) = StudentsT::new(0.0, 1.0, freedom) {
         2.0 * (1.0 - distrib.cdf(t.abs()))
     } else {
-        f64::NAN
+        1.0
     }
 }
 
@@ -168,6 +174,24 @@ fn distribution(hist: &Histogram<u64>) -> Vec<Bucket> {
         }
     }
     result
+}
+
+/// Converts NaN to None.
+fn not_nan(x: f64) -> Option<f64> {
+    if x.is_nan() {
+        None
+    } else {
+        Some(x)
+    }
+}
+
+/// Converts NaN to None.
+fn not_nan_f32(x: f32) -> Option<f32> {
+    if x.is_nan() {
+        None
+    } else {
+        Some(x)
+    }
 }
 
 const MAX_KEPT_ERRORS: usize = 10;
@@ -302,7 +326,7 @@ impl Sample {
             row_count,
             error_count,
             errors,
-            mean_queue_len,
+            mean_queue_len: not_nan_f32(mean_queue_len).unwrap_or(0.0),
             call_throughput: call_count as f32 / duration_s,
             req_throughput: request_count as f32 / duration_s,
             row_throughput: row_count as f32 / duration_s,
@@ -397,7 +421,16 @@ impl Log {
     fn mean_concurrency(&self) -> Mean {
         let p: Vec<f32> = self.samples.iter().map(|s| s.mean_queue_len).collect();
         let w = self.weights_by_request_count();
-        Mean::compute(p.as_slice(), w.as_slice())
+        let m = Mean::compute(p.as_slice(), w.as_slice());
+        if m.value.is_nan() {
+            Mean {
+                n: 0,
+                value: 0.0,
+                std_err: None,
+            }
+        } else {
+            m
+        }
     }
 }
 
@@ -429,15 +462,15 @@ pub struct BenchmarkStats {
     pub requests_per_call: f64,
     pub errors: Vec<String>,
     pub error_count: u64,
-    pub errors_ratio: f64,
+    pub errors_ratio: Option<f64>,
     pub row_count: u64,
-    pub row_count_per_req: f64,
+    pub row_count_per_req: Option<f64>,
     pub call_throughput: Mean,
     pub call_throughput_ratio: Option<f64>,
     pub req_throughput: Mean,
     pub row_throughput: Mean,
     pub call_time_ms: TimeDistribution,
-    pub resp_time_ms: TimeDistribution,
+    pub resp_time_ms: Option<TimeDistribution>,
     pub concurrency: Mean,
     pub concurrency_ratio: f64,
     pub log: Vec<Sample>,
@@ -461,43 +494,45 @@ impl BenchmarkCmp<'_> {
     /// `f` a function applied to each sample
     fn cmp<F>(&self, f: F) -> Option<Significance>
     where
-        F: Fn(&BenchmarkStats) -> Mean + Copy,
+        F: Fn(&BenchmarkStats) -> Option<Mean> + Copy,
     {
-        self.v2.map(|v2| {
+        self.v2.and_then(|v2| {
             let m1 = f(self.v1);
             let m2 = f(v2);
-            Significance(t_test(&m1, &m2))
+            m1.and_then(|m1| m2.map(|m2| {
+                Significance(t_test(&m1, &m2))
+            }))
         })
     }
 
     /// Checks if call throughput means of two benchmark runs are significantly different.
     /// Returns None if the second benchmark is unset.
     pub fn cmp_call_throughput(&self) -> Option<Significance> {
-        self.cmp(|s| s.call_throughput)
+        self.cmp(|s| Some(s.call_throughput))
     }
 
     /// Checks if request throughput means of two benchmark runs are significantly different.
     /// Returns None if the second benchmark is unset.
     pub fn cmp_req_throughput(&self) -> Option<Significance> {
-        self.cmp(|s| s.req_throughput)
+        self.cmp(|s| Some(s.req_throughput))
     }
 
     /// Checks if row throughput means of two benchmark runs are significantly different.
     /// Returns None if the second benchmark is unset.
     pub fn cmp_row_throughput(&self) -> Option<Significance> {
-        self.cmp(|s| s.row_throughput)
+        self.cmp(|s| Some(s.row_throughput))
     }
 
     // Checks if mean response time of two benchmark runs are significantly different.
     // Returns None if the second benchmark is unset.
     pub fn cmp_mean_resp_time(&self) -> Option<Significance> {
-        self.cmp(|s| s.resp_time_ms.mean)
+        self.cmp(|s| s.resp_time_ms.as_ref().map(|r| r.mean))
     }
 
     // Checks corresponding response time percentiles of two benchmark runs
     // are statistically different. Returns None if the second benchmark is unset.
     pub fn cmp_resp_time_percentile(&self, p: Percentile) -> Option<Significance> {
-        self.cmp(|s| s.resp_time_ms.percentiles[p as usize])
+        self.cmp(|s| s.resp_time_ms.as_ref().map(|r| r.percentiles[p as usize]))
     }
 }
 
@@ -619,11 +654,11 @@ impl Recorder {
             call_count: self.call_count,
             errors: self.errors.into_iter().collect(),
             error_count: self.error_count,
-            errors_ratio: 100.0 * self.error_count as f64 / count as f64,
+            errors_ratio: not_nan(100.0 * self.error_count as f64 / count as f64),
             request_count: self.request_count,
             requests_per_call: self.request_count as f64 / self.call_count as f64,
             row_count: self.row_count,
-            row_count_per_req: self.row_count as f64 / self.request_count as f64,
+            row_count_per_req: not_nan(self.row_count as f64 / self.request_count as f64),
             call_throughput,
             call_throughput_ratio,
             req_throughput,
@@ -633,10 +668,14 @@ impl Recorder {
                 percentiles: call_time_percentiles,
                 distribution: distribution(&self.call_times_ns),
             },
-            resp_time_ms: TimeDistribution {
-                mean: self.log.resp_time_ms(),
-                percentiles: resp_time_percentiles,
-                distribution: distribution(&self.resp_times_ns),
+            resp_time_ms: if self.request_count > 0 {
+                Some(TimeDistribution {
+                    mean: self.log.resp_time_ms(),
+                    percentiles: resp_time_percentiles,
+                    distribution: distribution(&self.resp_times_ns),
+                })
+            } else {
+                None
             },
             concurrency,
             concurrency_ratio,
@@ -714,12 +753,12 @@ mod test {
         let mean1 = Mean {
             n: 100,
             value: 1.0,
-            std_err: 0.1,
+            std_err: Some(0.1),
         };
         let mean2 = Mean {
             n: 100,
             value: 1.0,
-            std_err: 0.2,
+            std_err: Some(0.2),
         };
         assert!(t_test(&mean1, &mean2) > 0.9999);
     }
@@ -729,12 +768,12 @@ mod test {
         let mean1 = Mean {
             n: 100,
             value: 1.0,
-            std_err: 0.1,
+            std_err: Some(0.1),
         };
         let mean2 = Mean {
             n: 100,
             value: 1.3,
-            std_err: 0.1,
+            std_err: Some(0.1),
         };
         assert!(t_test(&mean1, &mean2) < 0.05);
         assert!(t_test(&mean2, &mean1) < 0.05);
@@ -742,12 +781,12 @@ mod test {
         let mean1 = Mean {
             n: 10000,
             value: 1.0,
-            std_err: 0.0,
+            std_err: Some(0.0),
         };
         let mean2 = Mean {
             n: 10000,
             value: 1.329,
-            std_err: 0.1,
+            std_err: Some(0.1),
         };
         assert!(t_test(&mean1, &mean2) < 0.0011);
         assert!(t_test(&mean2, &mean1) < 0.0011);
