@@ -499,9 +499,7 @@ impl BenchmarkCmp<'_> {
         self.v2.and_then(|v2| {
             let m1 = f(self.v1);
             let m2 = f(v2);
-            m1.and_then(|m1| m2.map(|m2| {
-                Significance(t_test(&m1, &m2))
-            }))
+            m1.and_then(|m1| m2.map(|m2| Significance(t_test(&m1, &m2))))
         })
     }
 

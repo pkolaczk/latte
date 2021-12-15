@@ -3,7 +3,6 @@ use std::default::Default;
 use std::fs::File;
 use std::io::{stdout, Write};
 use std::num::NonZeroUsize;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
@@ -26,9 +25,9 @@ use tokio_stream::wrappers::IntervalStream;
 use config::RunCommand;
 
 use crate::config::{AppConfig, Command, HdrCommand, ShowCommand};
-use crate::deadline::Deadline;
 use crate::error::{LatteError, Result};
 use crate::interrupt::InterruptHandler;
+use crate::iteration::BoundedIterationCounter;
 use crate::progress::Progress;
 use crate::report::{Report, RunConfigCmp};
 use crate::session::*;
@@ -37,10 +36,10 @@ use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
 use crate::workload::{FnRef, Workload, WorkloadStats, LOAD_FN, RUN_FN};
 
 mod config;
-mod deadline;
 mod error;
 mod histogram;
 mod interrupt;
+mod iteration;
 mod progress;
 mod report;
 mod session;
@@ -123,7 +122,7 @@ impl<'a> Snapshotter<'a> {
 /// - interrupt: allows for terminating the stream early
 /// - out: the channel to receive workload statistics
 async fn run_stream(
-    stream: impl Stream<Item = Range<u64>> + std::marker::Unpin,
+    stream: impl Stream<Item = Option<u64>> + std::marker::Unpin,
     workload: Workload,
     concurrency: NonZeroUsize,
     sampling: Option<config::Duration>,
@@ -134,10 +133,9 @@ async fn run_stream(
     workload.reset(Instant::now());
 
     let mut result_stream = stream
-        .take_while(|i| ready(!i.is_empty()))
-        .flat_map(futures::stream::iter)
+        .take_while(|i| ready(i.is_some()))
         // unconstrained to workaround quadratic complexity of buffer_unordered ()
-        .map(|i| tokio::task::unconstrained(workload.run(i as i64)))
+        .map(|i| tokio::task::unconstrained(workload.run(i.unwrap() as i64)))
         .buffer_unordered(concurrency.get())
         .inspect(|_| progress.tick());
 
@@ -174,11 +172,12 @@ fn spawn_stream(
     rate: Option<f64>,
     sampling: Option<config::Duration>,
     workload: Workload,
-    deadline: Arc<Deadline>,
+    deadline: BoundedIterationCounter,
     interrupt: Arc<InterruptHandler>,
     progress: Arc<StatusLine<Progress>>,
 ) -> Receiver<Result<WorkloadStats>> {
     let (tx, rx) = mpsc::channel(1);
+    let mut deadline = deadline;
 
     tokio::spawn(async move {
         match rate {
@@ -269,7 +268,7 @@ async fn par_execute(
         ..Default::default()
     };
     let progress = Arc::new(StatusLine::with_options(progress, progress_opts));
-    let deadline = Arc::new(Deadline::new(exec_options.duration));
+    let deadline = BoundedIterationCounter::new(exec_options.duration);
     let sampling_period = sampling_period.map(|s| match s {
         config::Duration::Count(cnt) => config::Duration::Count(cnt / thread_count as u64),
         config::Duration::Time(d) => config::Duration::Time(d),
@@ -283,7 +282,7 @@ async fn par_execute(
             rate.map(|r| r / (thread_count as f64)),
             sampling_period,
             workload.clone(),
-            deadline.clone(),
+            deadline.share(),
             signals.clone(),
             progress.clone(),
         );
@@ -477,6 +476,7 @@ async fn run(conf: RunCommand) -> Result<()> {
         rate: conf.rate,
         threads: conf.threads,
     };
+
     report::print_log_header();
     let stats = par_execute(
         "Running...",
