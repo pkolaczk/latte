@@ -25,7 +25,7 @@ Latte has the following unique performance characteristics:
   This means you can test large clusters with a small number of clients.  
 * About 50x-100x lower memory footprint than Java-based tools. 
 * Very low impact on operating system resources – low number of syscalls, context switches and page faults.  
-* No client code warmup needed. The client code works with maximum performance from the first iteration. 
+* No client code warmup needed. The client code works with maximum performance from the first benchmark cycle. 
   Even runs as short as 30 seconds give accurate results.  
 * No GC pauses nor HotSpot recompilation happening in the middle of the test. You want to measure hiccups of the server,
   not the benchmarking tool.
@@ -110,7 +110,7 @@ A workload script defines a set of public functions that Latte calls automatical
 must define at least a single public async function `run` with two arguments:
 
 - `ctx` – session context that provides the access to Cassandra
-- `i` – current unique iteration number of a 64-bit integer type, starting at 0
+- `i` – current unique cycle number of a 64-bit integer type, starting at 0
 
 The following script would benchmark querying the `system.local` table:
 
@@ -181,7 +181,7 @@ If needed, you can skip the loading phase by passing `--no-load` command line fl
 ### Generating data
 
 Latte comes with a library of data generating functions. They are accessible in the `latte` crate. Typically, those
-functions accept an integer `i` iteration number, so you can generate consistent numbers. The data generating functions
+functions accept an integer `i` cycle number, so you can generate consistent numbers. The data generating functions
 are pure, i.e. invoking them multiple times with the same parameters yields always the same results.
 
 - `latte::uuid(i)` – generates a random (type 4) UUID

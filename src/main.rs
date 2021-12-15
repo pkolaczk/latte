@@ -14,10 +14,10 @@ use tokio::runtime::Builder;
 use config::RunCommand;
 
 use crate::config::{AppConfig, Command, HdrCommand, Interval, ShowCommand};
+use crate::cycle::BoundedCycleCounter;
 use crate::error::{LatteError, Result};
 use crate::exec::{par_execute, ExecutionOptions};
 use crate::interrupt::InterruptHandler;
-use crate::iteration::BoundedIterationCounter;
 use crate::progress::Progress;
 use crate::report::{Report, RunConfigCmp};
 use crate::sampler::Sampler;
@@ -27,11 +27,11 @@ use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
 use crate::workload::{FnRef, Workload, WorkloadStats, LOAD_FN, RUN_FN};
 
 mod config;
+mod cycle;
 mod error;
 mod exec;
 mod histogram;
 mod interrupt;
-mod iteration;
 mod progress;
 mod report;
 mod sampler;
@@ -293,16 +293,16 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
         let interval_start_time = Duration::from_millis((sample.time_s * 1000.0) as u64);
         let interval_duration = Duration::from_millis((sample.duration_s * 1000.0) as u64);
         log_writer.write_histogram(
-            &sample.call_time_histogram_ns.0,
+            &sample.cycle_time_histogram_ns.0,
             interval_start_time,
             interval_duration,
-            Tag::new("call_time"),
+            Tag::new("cycles"),
         )?;
         log_writer.write_histogram(
             &sample.resp_time_histogram_ns.0,
             interval_start_time,
             interval_duration,
-            Tag::new("resp_time"),
+            Tag::new("requests"),
         )?;
     }
     Ok(())
