@@ -105,8 +105,8 @@ impl BoundedIterationCounter {
 #[cfg(test)]
 mod test {
     use crate::iteration::{IterationCounter, BATCH_SIZE};
-    use std::collections::BTreeSet;
     use itertools::Itertools;
+    use std::collections::BTreeSet;
 
     #[test]
     pub fn iteration_counter_must_return_all_numbers() {
@@ -127,6 +127,9 @@ mod test {
             set1.insert(counter1.next());
             set2.insert(counter2.next());
         }
-        assert_eq!(set1.intersection(&set2).cloned().collect_vec(), Vec::<u64>::new())
+        assert_eq!(
+            set1.intersection(&set2).cloned().collect_vec(),
+            Vec::<u64>::new()
+        )
     }
 }
