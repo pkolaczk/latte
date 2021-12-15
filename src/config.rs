@@ -25,22 +25,29 @@ where
 
 /// Controls how long the benchmark should run.
 /// We can specify either a time-based duration or a number of calls to perform.
+/// It is also used for controlling sampling.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum Duration {
+pub enum Interval {
     Count(u64),
     Time(tokio::time::Duration),
+    Unbounded,
 }
 
-impl Duration {
+impl Interval {
     pub fn is_not_zero(&self) -> bool {
         match self {
-            Duration::Count(cnt) => *cnt > 0,
-            Duration::Time(d) => !d.is_zero(),
+            Interval::Count(cnt) => *cnt > 0,
+            Interval::Time(d) => !d.is_zero(),
+            Interval::Unbounded => false,
         }
     }
 
+    pub fn is_bounded(&self) -> bool {
+        !matches!(self, Interval::Unbounded)
+    }
+
     pub fn count(&self) -> Option<u64> {
-        if let Duration::Count(c) = self {
+        if let Interval::Count(c) = self {
             Some(*c)
         } else {
             None
@@ -48,7 +55,7 @@ impl Duration {
     }
 
     pub fn seconds(&self) -> Option<f32> {
-        if let Duration::Time(d) = self {
+        if let Interval::Time(d) = self {
             Some(d.as_secs_f32())
         } else {
             None
@@ -59,14 +66,14 @@ impl Duration {
 /// If the string is a valid integer, it is assumed to be the number of iterations.
 /// If the string additionally contains a time unit, e.g. "s" or "secs", it is parsed
 /// as time duration.
-impl FromStr for Duration {
+impl FromStr for Interval {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(i) = s.parse() {
-            Ok(Duration::Count(i))
+            Ok(Interval::Count(i))
         } else if let Ok(d) = parse_duration::parse(s) {
-            Ok(Duration::Time(d))
+            Ok(Interval::Time(d))
         } else {
             Err("Required integer number of iterations or time duration".to_string())
         }
@@ -92,7 +99,7 @@ pub struct RunCommand {
         default_value = "1",
         value_name = "TIME | COUNT"
     )]
-    pub warmup_duration: Duration,
+    pub warmup_duration: Interval,
 
     /// Number of iterations or time duration of the main benchmark phase
     #[clap(
@@ -101,7 +108,7 @@ pub struct RunCommand {
         default_value = "60s",
         value_name = "TIME | COUNT"
     )]
-    pub run_duration: Duration,
+    pub run_duration: Interval,
 
     /// Number of worker threads used by the driver
     #[clap(short('t'), long, default_value = "1", value_name = "COUNT")]
@@ -126,7 +133,7 @@ pub struct RunCommand {
         default_value = "1s",
         value_name = "TIME | COUNT"
     )]
-    pub sampling_period: Duration,
+    pub sampling_interval: Interval,
 
     /// Label that will be added to the report to help identifying the test
     #[clap(long("tag"), number_of_values = 1, multiple_occurrences = true)]

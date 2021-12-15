@@ -509,10 +509,10 @@ impl<'a> Display for RunConfigCmp<'a> {
                 Quantity::from(conf.run_duration.count())
             }),
             self.line("Sampling", "s", |conf| {
-                Quantity::from(conf.sampling_period.seconds()).with_precision(1)
+                Quantity::from(conf.sampling_interval.seconds()).with_precision(1)
             }),
             self.line("└─", "op", |conf| {
-                Quantity::from(conf.sampling_period.count())
+                Quantity::from(conf.sampling_interval.count())
             }),
         ];
 

@@ -1,5 +1,5 @@
 use crate::config;
-use crate::config::Duration;
+use crate::config::Interval;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -55,7 +55,7 @@ impl IterationCounter {
 /// Provides distinct benchmark iteration numbers to multiple threads of execution.
 /// Decides when to stop the benchmark execution.
 pub struct BoundedIterationCounter {
-    pub duration: config::Duration,
+    pub duration: config::Interval,
     start_time: Instant,
     iteration_counter: IterationCounter,
 }
@@ -63,7 +63,7 @@ pub struct BoundedIterationCounter {
 impl BoundedIterationCounter {
     /// Creates a new iteration counter based on configured benchmark duration.
     /// For time-based deadline, the clock starts ticking when this object is created.
-    pub fn new(duration: config::Duration) -> Self {
+    pub fn new(duration: config::Interval) -> Self {
         BoundedIterationCounter {
             duration,
             start_time: Instant::now(),
@@ -74,7 +74,7 @@ impl BoundedIterationCounter {
     /// Returns the next iteration number or `None` if deadline or iteration count was exceeded.
     pub fn next(&mut self) -> Option<u64> {
         match self.duration {
-            Duration::Count(count) => {
+            Interval::Count(count) => {
                 let result = self.iteration_counter.next();
                 if result < count {
                     Some(result)
@@ -82,13 +82,14 @@ impl BoundedIterationCounter {
                     None
                 }
             }
-            Duration::Time(duration) => {
+            Interval::Time(duration) => {
                 if Instant::now() < self.start_time + duration {
                     Some(self.iteration_counter.next())
                 } else {
                     None
                 }
             }
+            Interval::Unbounded => Some(self.iteration_counter.next()),
         }
     }
 
