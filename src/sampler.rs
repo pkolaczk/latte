@@ -14,7 +14,7 @@ pub struct Sampler<'a> {
     output: &'a mut Sender<Result<WorkloadStats>>,
     start_time: Instant,
     last_snapshot_time: Instant,
-    last_snapshot_iter: u64,
+    last_snapshot_cycle: u64,
 }
 
 impl<'a> Sampler<'a> {
@@ -32,15 +32,15 @@ impl<'a> Sampler<'a> {
             output,
             start_time,
             last_snapshot_time: start_time,
-            last_snapshot_iter: 0,
+            last_snapshot_cycle: 0,
         }
     }
 
     /// Should be called when a workload iteration finished.
     /// If there comes the time, it will send the stats to the output.
-    pub async fn iteration_completed(&mut self, iteration: u64, now: Instant) {
+    pub async fn cycle_completed(&mut self, iteration: u64, now: Instant) {
         let current_interval_duration = now - self.last_snapshot_time;
-        let current_interval_iter_count = iteration - self.last_snapshot_iter;
+        let current_interval_iter_count = iteration - self.last_snapshot_cycle;
 
         // Don't snapshot if we're too close to the end of the run,
         // to avoid excessively small samples:
@@ -58,9 +58,9 @@ impl<'a> Sampler<'a> {
                 }
             }
             Interval::Count(cnt) => {
-                if iteration > self.last_snapshot_iter + cnt && far_from_the_end {
+                if iteration > self.last_snapshot_cycle + cnt && far_from_the_end {
                     self.send_stats().await;
-                    self.last_snapshot_iter += cnt;
+                    self.last_snapshot_cycle += cnt;
                 }
             }
             Interval::Unbounded => {}

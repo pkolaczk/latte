@@ -535,7 +535,7 @@ impl Display for Sample {
             f,
             "{:8.3} {:11.0} {:11.0}   {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3}",
             self.time_s + self.duration_s,
-            self.call_throughput,
+            self.cycle_throughput,
             self.req_throughput,
             self.resp_time_percentiles[Percentile::Min as usize],
             self.resp_time_percentiles[Percentile::P25 as usize],
@@ -586,14 +586,14 @@ impl<'a> Display for BenchmarkCmp<'a> {
             self.line("CPU utilisation", "%", |s| {
                 Quantity::from(s.cpu_util).with_precision(1)
             }),
-            self.line("Calls", "op", |s| Quantity::from(s.call_count)),
+            self.line("Cycles", "op", |s| Quantity::from(s.cycle_count)),
             self.line("Errors", "op", |s| Quantity::from(s.error_count)),
             self.line("└─", "%", |s| {
                 Quantity::from(s.errors_ratio).with_precision(1)
             }),
             self.line("Requests", "req", |s| Quantity::from(s.request_count)),
             self.line("└─", "req/op", |s| {
-                Quantity::from(s.requests_per_call).with_precision(1)
+                Quantity::from(s.requests_per_cycle).with_precision(1)
             }),
             self.line("Rows", "row", |s| Quantity::from(s.row_count)),
             self.line("└─", "row/req", |s| {
@@ -601,15 +601,15 @@ impl<'a> Display for BenchmarkCmp<'a> {
             }),
             self.line("Samples", "", |s| Quantity::from(s.log.len())),
             self.line("Mean sample size", "op", |s| {
-                Quantity::from(s.log.iter().map(|s| s.call_count as f64).mean())
+                Quantity::from(s.log.iter().map(|s| s.cycle_count as f64).mean())
             }),
             self.line("└─", "req", |s| {
                 Quantity::from(s.log.iter().map(|s| s.request_count as f64).mean())
             }),
             self.line("Concurrency", "req", |s| Quantity::from(s.concurrency)),
             self.line("└─", "%", |s| Quantity::from(s.concurrency_ratio)),
-            self.line("Throughput", "op/s", |s| Quantity::from(s.call_throughput))
-                .with_significance(self.cmp_call_throughput())
+            self.line("Throughput", "op/s", |s| Quantity::from(s.cycle_throughput))
+                .with_significance(self.cmp_cycle_throughput())
                 .with_orientation(1)
                 .into_box(),
             self.line("├─", "req/s", |s| Quantity::from(s.req_throughput))
@@ -620,8 +620,8 @@ impl<'a> Display for BenchmarkCmp<'a> {
                 .with_significance(self.cmp_row_throughput())
                 .with_orientation(1)
                 .into_box(),
-            self.line("Mean call time", "ms", |s| {
-                Quantity::from(&s.call_time_ms).with_precision(3)
+            self.line("Mean cycle time", "ms", |s| {
+                Quantity::from(&s.cycle_time_ms).with_precision(3)
             })
             .with_significance(self.cmp_mean_resp_time())
             .with_orientation(-1)

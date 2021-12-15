@@ -6,26 +6,27 @@ use std::time::Instant;
 
 const BATCH_SIZE: u64 = 64;
 
-/// Provides distinct benchmark iteration numbers to multiple threads of execution.
-pub struct IterationCounter {
+/// Provides distinct benchmark cycle numbers to multiple threads of execution.
+/// Cycle numbers increase and never repeat.
+pub struct CycleCounter {
     shared: Arc<AtomicU64>,
     local: u64,
     local_max: u64,
 }
 
-impl IterationCounter {
-    /// Creates a new iteration counter, starting at `start`.
+impl CycleCounter {
+    /// Creates a new cycle counter, starting at `start`.
     /// The counter is logically positioned at one item before `start`, so the first call
     /// to `next` will return `start`.
     pub fn new(start: u64) -> Self {
-        IterationCounter {
+        CycleCounter {
             shared: Arc::new(AtomicU64::new(start)),
             local: 0, // the value does not matter as long as it is not lower than local_max
             local_max: 0, // force getting the shared count in the first call to `next`
         }
     }
 
-    /// Gets the next iteration number and advances the counter by one
+    /// Gets the next cycle number and advances the counter by one.
     pub fn next(&mut self) -> u64 {
         if self.local >= self.local_max {
             self.next_batch();
@@ -35,16 +36,16 @@ impl IterationCounter {
         result
     }
 
-    /// Reserves the next batch of iterations
+    /// Reserves the next batch of cycles.
     fn next_batch(&mut self) {
         self.local = self.shared.fetch_add(BATCH_SIZE, Ordering::Relaxed);
         self.local_max = self.local + BATCH_SIZE;
     }
 
-    /// Creates a new counter sharing the list of iterations with this one.
-    /// The new counter will never return the same iteration number as this one.
-    pub fn share(&self) -> IterationCounter {
-        IterationCounter {
+    /// Creates a new counter sharing the list of cycles with this one.
+    /// The new counter will never return the same cycle number as this one.
+    pub fn share(&self) -> CycleCounter {
+        CycleCounter {
             shared: self.shared.clone(),
             local: 0,
             local_max: 0,
@@ -52,30 +53,30 @@ impl IterationCounter {
     }
 }
 
-/// Provides distinct benchmark iteration numbers to multiple threads of execution.
+/// Provides distinct benchmark cycle numbers to multiple threads of execution.
 /// Decides when to stop the benchmark execution.
-pub struct BoundedIterationCounter {
+pub struct BoundedCycleCounter {
     pub duration: config::Interval,
     start_time: Instant,
-    iteration_counter: IterationCounter,
+    cycle_counter: CycleCounter,
 }
 
-impl BoundedIterationCounter {
-    /// Creates a new iteration counter based on configured benchmark duration.
+impl BoundedCycleCounter {
+    /// Creates a new counter based on configured benchmark duration.
     /// For time-based deadline, the clock starts ticking when this object is created.
     pub fn new(duration: config::Interval) -> Self {
-        BoundedIterationCounter {
+        BoundedCycleCounter {
             duration,
             start_time: Instant::now(),
-            iteration_counter: IterationCounter::new(0),
+            cycle_counter: CycleCounter::new(0),
         }
     }
 
-    /// Returns the next iteration number or `None` if deadline or iteration count was exceeded.
+    /// Returns the next cycle number or `None` if deadline or cycle count was exceeded.
     pub fn next(&mut self) -> Option<u64> {
         match self.duration {
             Interval::Count(count) => {
-                let result = self.iteration_counter.next();
+                let result = self.cycle_counter.next();
                 if result < count {
                     Some(result)
                 } else {
@@ -84,34 +85,34 @@ impl BoundedIterationCounter {
             }
             Interval::Time(duration) => {
                 if Instant::now() < self.start_time + duration {
-                    Some(self.iteration_counter.next())
+                    Some(self.cycle_counter.next())
                 } else {
                     None
                 }
             }
-            Interval::Unbounded => Some(self.iteration_counter.next()),
+            Interval::Unbounded => Some(self.cycle_counter.next()),
         }
     }
 
     /// Shares this counter e.g. with another thread.
     pub fn share(&self) -> Self {
-        BoundedIterationCounter {
+        BoundedCycleCounter {
             start_time: self.start_time,
             duration: self.duration,
-            iteration_counter: self.iteration_counter.share(),
+            cycle_counter: self.cycle_counter.share(),
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::iteration::{IterationCounter, BATCH_SIZE};
+    use crate::cycle::{CycleCounter, BATCH_SIZE};
     use itertools::Itertools;
     use std::collections::BTreeSet;
 
     #[test]
-    pub fn iteration_counter_must_return_all_numbers() {
-        let mut counter = IterationCounter::new(10);
+    pub fn cycle_counter_must_return_all_numbers() {
+        let mut counter = CycleCounter::new(10);
         for i in 10..(10 + 2 * BATCH_SIZE) {
             let iter = counter.next();
             assert_eq!(i, iter)
@@ -119,8 +120,8 @@ mod test {
     }
 
     #[test]
-    pub fn shared_iteration_counter_must_return_distinct_numbers() {
-        let mut counter1 = IterationCounter::new(10);
+    pub fn shared_cycle_counter_must_return_distinct_numbers() {
+        let mut counter1 = CycleCounter::new(10);
         let mut counter2 = counter1.share();
         let mut set1 = BTreeSet::new();
         let mut set2 = BTreeSet::new();

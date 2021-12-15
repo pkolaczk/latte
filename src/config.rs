@@ -63,7 +63,7 @@ impl Interval {
     }
 }
 
-/// If the string is a valid integer, it is assumed to be the number of iterations.
+/// If the string is a valid integer, it is assumed to be the number of cycles.
 /// If the string additionally contains a time unit, e.g. "s" or "secs", it is parsed
 /// as time duration.
 impl FromStr for Interval {
@@ -75,7 +75,7 @@ impl FromStr for Interval {
         } else if let Ok(d) = parse_duration::parse(s) {
             Ok(Interval::Time(d))
         } else {
-            Err("Required integer number of iterations or time duration".to_string())
+            Err("Required integer number of cycles or time duration".to_string())
         }
     }
 }
@@ -86,13 +86,12 @@ impl FromStr for Interval {
     setting(AppSettings::DeriveDisplayOrder)
 )]
 pub struct RunCommand {
-    /// Number of requests per second to send.
-    /// If not given or zero the requests will be sent as fast as possible within
-    /// the parallelism limit
+    /// Number of cycles per second to execute.
+    /// If not given, the benchmark cycles will be executed as fast as possible.
     #[clap(short('r'), long, value_name = "COUNT")]
     pub rate: Option<f64>,
 
-    /// Number of iterations or time duration of the warmup phase
+    /// Number of cycles or duration of the warmup phase
     #[clap(
         short('w'),
         long("warmup"),
@@ -101,7 +100,7 @@ pub struct RunCommand {
     )]
     pub warmup_duration: Interval,
 
-    /// Number of iterations or time duration of the main benchmark phase
+    /// Number of cycles or duration of the main benchmark phase
     #[clap(
         short('d'),
         long("duration"),

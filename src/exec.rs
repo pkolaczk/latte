@@ -13,8 +13,8 @@ use tokio_stream::wrappers::IntervalStream;
 
 use crate::error::Result;
 use crate::{
-    BenchmarkStats, BoundedIterationCounter, InterruptHandler, Interval, Progress, Recorder,
-    Sampler, Workload, WorkloadStats,
+    BenchmarkStats, BoundedCycleCounter, InterruptHandler, Interval, Progress, Recorder, Sampler,
+    Workload, WorkloadStats,
 };
 
 /// Returns a stream emitting `rate` events per second.
@@ -23,16 +23,16 @@ fn interval_stream(rate: f64) -> IntervalStream {
     IntervalStream::new(tokio::time::interval(interval))
 }
 
-/// Runs a stream of workload iterations till completion in the context of the current task.
+/// Runs a stream of workload cycles till completion in the context of the current task.
 /// Periodically sends workload statistics to the `out` channel.
 ///
 /// # Parameters
-/// - stream: a stream of iteration numbers; None means the end of the stream
+/// - stream: a stream of cycle numbers; None means the end of the stream
 /// - workload: defines the function to call
-/// - iter_counter: shared iteration numbers provider
+/// - cycle_counter: shared cycle numbers provider
 /// - concurrency: the maximum number of pending workload calls
 /// - sampling: controls when to output workload statistics
-/// - progress: progress bar notified about each successful iteration
+/// - progress: progress bar notified about each successful cycle
 /// - interrupt: allows for terminating the stream early
 /// - out: the channel to receive workload statistics
 ///
@@ -40,7 +40,7 @@ fn interval_stream(rate: f64) -> IntervalStream {
 async fn run_stream<T>(
     stream: impl Stream<Item = T> + std::marker::Unpin,
     workload: Workload,
-    iter_counter: BoundedIterationCounter,
+    cycle_counter: BoundedCycleCounter,
     concurrency: NonZeroUsize,
     sampling: Interval,
     interrupt: Arc<InterruptHandler>,
@@ -49,7 +49,7 @@ async fn run_stream<T>(
 ) {
     workload.reset(Instant::now());
 
-    let mut iter_counter = iter_counter;
+    let mut iter_counter = cycle_counter;
     let mut sampler = Sampler::new(iter_counter.duration, sampling, &workload, &mut out);
 
     let mut result_stream = stream
@@ -62,7 +62,7 @@ async fn run_stream<T>(
 
     while let Some(res) = result_stream.next().await {
         match res {
-            Ok((iter, end_time)) => sampler.iteration_completed(iter, end_time).await,
+            Ok((iter, end_time)) => sampler.cycle_completed(iter, end_time).await,
             Err(e) => {
                 out.send(Err(e)).await.unwrap();
                 return;
@@ -78,8 +78,8 @@ async fn run_stream<T>(
 
 /// Launches a new worker task that runs a series of invocations of the workload function.
 ///
-/// The task will run as long as `deadline` produces new iteration numbers.
-/// The task updates the `progress` bar after each successful iteration.
+/// The task will run as long as `deadline` produces new cycle numbers.
+/// The task updates the `progress` bar after each successful cycle.
 ///
 /// Returns a stream where workload statistics are published.
 fn spawn_stream(
@@ -87,7 +87,7 @@ fn spawn_stream(
     rate: Option<f64>,
     sampling: Interval,
     workload: Workload,
-    iter_counter: BoundedIterationCounter,
+    iter_counter: BoundedCycleCounter,
     interrupt: Arc<InterruptHandler>,
     progress: Arc<StatusLine<Progress>>,
 ) -> Receiver<Result<WorkloadStats>> {
@@ -161,7 +161,7 @@ pub struct ExecutionOptions {
 ///
 /// # Parameters
 ///   - `name`: text displayed next to the progress bar
-///   - `count`: number of iterations
+///   - `count`: number of cycles
 ///   - `exec_options`: controls execution options such as parallelism level and rate
 ///   - `workload`: encapsulates a set of queries to execute
 pub async fn par_execute(
@@ -185,7 +185,7 @@ pub async fn par_execute(
         ..Default::default()
     };
     let progress = Arc::new(StatusLine::with_options(progress, progress_opts));
-    let deadline = BoundedIterationCounter::new(exec_options.duration);
+    let deadline = BoundedCycleCounter::new(exec_options.duration);
     let mut streams = Vec::with_capacity(thread_count);
     let mut stats = Recorder::start(rate, concurrency);
 
