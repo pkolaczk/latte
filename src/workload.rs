@@ -384,24 +384,24 @@ impl Workload {
     /// Executes a single iteration of a workload.
     /// This should be idempotent –
     /// the generated action should be a function of the iteration number.
-    /// Returns the end time of the query.
-    pub async fn run(&self, iteration: i64) -> Result<Instant, LatteError> {
+    /// Returns the iteration number and the end time of the query.
+    pub async fn run(&self, iteration: u64) -> Result<(u64, Instant), LatteError> {
         let start_time = Instant::now();
         let session = SessionRef::new(&self.session);
         let result = self
             .program
-            .async_call(self.function, (session, iteration))
+            .async_call(self.function, (session, iteration as i64))
             .await
             .map(|_| ()); // erase Value, because Value is !Send
         let end_time = Instant::now();
         let mut state = self.state.try_lock().unwrap();
         state.fn_stats.operation_completed(end_time - start_time);
         match result {
-            Ok(_) => Ok(end_time),
+            Ok(_) => Ok((iteration, end_time)),
             Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_)))) => {
                 // don't stop on overload errors;
                 // they are being counted by the session stats anyways
-                Ok(end_time)
+                Ok((iteration, end_time))
             }
             Err(e) => Err(e),
         }
