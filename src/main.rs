@@ -64,44 +64,58 @@ async fn send_stats(workload: &Workload, tx: &mut Sender<Result<WorkloadStats>>)
 
 /// Responsible for periodically getting a snapshot of statistics from the `workload`
 /// and sending them to the `output` channel. The sampling period is controlled by `sampling`.
+/// Snapshot is not taken near the end of the run to avoid small final sample.
 struct Snapshotter<'a> {
+    run_duration: config::Duration,
     sampling: config::Duration,
     workload: &'a Workload,
     output: &'a mut Sender<Result<WorkloadStats>>,
+    start_time: Instant,
     last_snapshot_time: Instant,
     last_snapshot_iter: u64,
-    current_iter: u64,
 }
 
 impl<'a> Snapshotter<'a> {
     pub fn new(
+        run_duration: config::Duration,
         sampling: config::Duration,
         workload: &'a Workload,
         output: &'a mut Sender<Result<WorkloadStats>>,
     ) -> Snapshotter<'a> {
+        let start_time = Instant::now();
         Snapshotter {
+            run_duration,
             sampling,
             workload,
             output,
-            last_snapshot_time: Instant::now(),
+            start_time,
+            last_snapshot_time: start_time,
             last_snapshot_iter: 0,
-            current_iter: 0,
         }
     }
 
     /// Should be called when a workload iteration finished.
     /// If there comes the time, it will send the stats to the output.
-    pub async fn iteration_completed(&mut self, end_time: Instant) {
-        self.current_iter += 1;
+    pub async fn iteration_completed(&mut self, iteration: u64, now: Instant) {
+        let current_interval_duration = now - self.last_snapshot_time;
+        let current_interval_iter_count = iteration - self.last_snapshot_iter;
+
+        // Don't snapshot if we're too close to the end of the run,
+        // to avoid excessively small samples:
+        let far_from_the_end = match self.run_duration {
+            config::Duration::Time(d) => now < self.start_time + d - current_interval_duration / 2,
+            config::Duration::Count(count) => iteration < count - current_interval_iter_count / 2,
+        };
+
         match self.sampling {
             config::Duration::Time(d) => {
-                if end_time - self.last_snapshot_time > d {
+                if now > self.last_snapshot_time + d && far_from_the_end {
                     send_stats(self.workload, self.output).await;
                     self.last_snapshot_time += d;
                 }
             }
             config::Duration::Count(cnt) => {
-                if self.current_iter - self.last_snapshot_iter > cnt {
+                if iteration > self.last_snapshot_iter + cnt && far_from_the_end {
                     send_stats(self.workload, self.output).await;
                     self.last_snapshot_iter += cnt;
                 }
@@ -121,9 +135,10 @@ impl<'a> Snapshotter<'a> {
 /// - progress: progress bar notified about each successful iteration
 /// - interrupt: allows for terminating the stream early
 /// - out: the channel to receive workload statistics
-async fn run_stream(
-    stream: impl Stream<Item = Option<u64>> + std::marker::Unpin,
+async fn run_stream<T>(
+    stream: impl Stream<Item = T> + std::marker::Unpin,
     workload: Workload,
+    iter_counter: BoundedIterationCounter,
     concurrency: NonZeroUsize,
     sampling: Option<config::Duration>,
     interrupt: Arc<InterruptHandler>,
@@ -132,19 +147,23 @@ async fn run_stream(
 ) {
     workload.reset(Instant::now());
 
+    let mut iter_counter = iter_counter;
+    let mut snapshotter =
+        sampling.map(|s| Snapshotter::new(iter_counter.duration, s, &workload, &mut out));
+
     let mut result_stream = stream
+        .map(|_| iter_counter.next())
         .take_while(|i| ready(i.is_some()))
         // unconstrained to workaround quadratic complexity of buffer_unordered ()
-        .map(|i| tokio::task::unconstrained(workload.run(i.unwrap() as i64)))
+        .map(|i| tokio::task::unconstrained(workload.run(i.unwrap())))
         .buffer_unordered(concurrency.get())
         .inspect(|_| progress.tick());
 
-    let mut snapshotter = sampling.map(|s| Snapshotter::new(s, &workload, &mut out));
     while let Some(res) = result_stream.next().await {
         match res {
-            Ok(end_time) => {
+            Ok((iter, end_time)) => {
                 if let Some(snapshotter) = &mut snapshotter {
-                    snapshotter.iteration_completed(end_time).await
+                    snapshotter.iteration_completed(iter, end_time).await
                 }
             }
             Err(e) => {
@@ -172,20 +191,20 @@ fn spawn_stream(
     rate: Option<f64>,
     sampling: Option<config::Duration>,
     workload: Workload,
-    deadline: BoundedIterationCounter,
+    iter_counter: BoundedIterationCounter,
     interrupt: Arc<InterruptHandler>,
     progress: Arc<StatusLine<Progress>>,
 ) -> Receiver<Result<WorkloadStats>> {
     let (tx, rx) = mpsc::channel(1);
-    let mut deadline = deadline;
 
     tokio::spawn(async move {
         match rate {
             Some(rate) => {
-                let stream = interval_stream(rate).map(|_| deadline.next());
+                let stream = interval_stream(rate);
                 run_stream(
                     stream,
                     workload,
+                    iter_counter,
                     concurrency,
                     sampling,
                     interrupt,
@@ -195,10 +214,11 @@ fn spawn_stream(
                 .await
             }
             None => {
-                let stream = futures::stream::repeat_with(|| deadline.next());
+                let stream = futures::stream::repeat_with(|| ());
                 run_stream(
                     stream,
                     workload,
+                    iter_counter,
                     concurrency,
                     sampling,
                     interrupt,
@@ -269,10 +289,6 @@ async fn par_execute(
     };
     let progress = Arc::new(StatusLine::with_options(progress, progress_opts));
     let deadline = BoundedIterationCounter::new(exec_options.duration);
-    let sampling_period = sampling_period.map(|s| match s {
-        config::Duration::Count(cnt) => config::Duration::Count(cnt / thread_count as u64),
-        config::Duration::Time(d) => config::Duration::Time(d),
-    });
     let mut streams = Vec::with_capacity(thread_count);
     let mut stats = Recorder::start(rate, concurrency);
 

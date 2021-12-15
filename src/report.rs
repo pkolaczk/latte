@@ -534,7 +534,7 @@ impl Display for Sample {
         write!(
             f,
             "{:8.3} {:11.0} {:11.0}   {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3}",
-            self.time_s,
+            self.time_s + self.duration_s,
             self.call_throughput,
             self.req_throughput,
             self.resp_time_percentiles[Percentile::Min as usize],

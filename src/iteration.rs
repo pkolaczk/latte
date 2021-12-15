@@ -55,8 +55,8 @@ impl IterationCounter {
 /// Provides distinct benchmark iteration numbers to multiple threads of execution.
 /// Decides when to stop the benchmark execution.
 pub struct BoundedIterationCounter {
+    pub duration: config::Duration,
     start_time: Instant,
-    duration: config::Duration,
     iteration_counter: IterationCounter,
 }
 
@@ -65,8 +65,8 @@ impl BoundedIterationCounter {
     /// For time-based deadline, the clock starts ticking when this object is created.
     pub fn new(duration: config::Duration) -> Self {
         BoundedIterationCounter {
-            start_time: Instant::now(),
             duration,
+            start_time: Instant::now(),
             iteration_counter: IterationCounter::new(0),
         }
     }
