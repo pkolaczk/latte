@@ -80,7 +80,8 @@ impl FromStr for Duration {
 )]
 pub struct RunCommand {
     /// Number of requests per second to send.
-    /// If not given the requests will be sent as fast as possible within the parallelism limit
+    /// If not given or zero the requests will be sent as fast as possible within
+    /// the parallelism limit
     #[clap(short('r'), long, value_name = "COUNT")]
     pub rate: Option<f64>,
 
