@@ -1,11 +1,7 @@
 mod common;
 
-use common::{KEYSPACE, TABLE, LC};
+use common::{KEYSPACE, TABLE, LC, READ_SIZE};
 use latte::*;
-
-pub const LOAD_COUNT = latte::param!("rows", 100000);
-
-const READ_SIZE = latte::param!("read_size", 10);
 
 const READ = "read";
 

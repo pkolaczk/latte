@@ -152,40 +152,43 @@ impl Default for SessionStats {
     }
 }
 
-/// Cassandra session object exposed in a workload script.
-/// This is the main object that a workload script can execute queries through.
+/// This is the main object that a workload script uses to interface with the outside world.
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
 #[derive(Any)]
-pub struct Session {
-    inner: Arc<scylla::Session>,
-    prepared_statements: HashMap<String, Arc<PreparedStatement>>,
+pub struct Context {
+    session: Arc<scylla::Session>,
+    statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
+    #[rune(get, set, add_assign, copy)]
+    pub load_cycle_count: u64,
 }
 
-impl Clone for Session {
+impl Clone for Context {
     /// Clones the session. The new clone gets fresh statistics.
     fn clone(&self) -> Self {
-        Session {
-            inner: self.inner.clone(),
-            prepared_statements: self.prepared_statements.clone(),
+        Context {
+            session: self.session.clone(),
+            statements: self.statements.clone(),
             stats: TryLock::new(SessionStats::default()),
+            load_cycle_count: self.load_cycle_count,
         }
     }
 }
 
-impl Session {
-    pub fn new(session: scylla::Session) -> Session {
-        Session {
-            inner: Arc::new(session),
-            prepared_statements: HashMap::new(),
+impl Context {
+    pub fn new(session: scylla::Session) -> Context {
+        Context {
+            session: Arc::new(session),
+            statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
+            load_cycle_count: 0,
         }
     }
 
     /// Returns cluster metadata such as cluster name and cassandra version.
     pub async fn cluster_info(&self) -> Result<Option<ClusterInfo>, CassError> {
         let rs = self
-            .inner
+            .session
             .query("SELECT cluster_name, release_version FROM system.local", ())
             .await?;
         if let Some(rows) = rs.rows {
@@ -203,16 +206,15 @@ impl Session {
 
     /// Prepares a statement and stores it in an internal statement map for future use.
     pub async fn prepare(&mut self, key: &str, cql: &str) -> Result<(), CassError> {
-        let statement = self.inner.prepare(cql).await?;
-        self.prepared_statements
-            .insert(key.to_string(), Arc::new(statement));
+        let statement = self.session.prepare(cql).await?;
+        self.statements.insert(key.to_string(), Arc::new(statement));
         Ok(())
     }
 
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
         let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.inner.query(cql, ()).await;
+        let rs = self.session.query(cql, ()).await;
         let duration = Instant::now() - start_time;
         self.stats
             .try_lock()
@@ -225,12 +227,12 @@ impl Session {
     /// Executes a statement prepared and registered earlier by a call to `prepare`.
     pub async fn execute_prepared(&self, key: &str, params: Value) -> Result<(), CassError> {
         let statement = self
-            .prepared_statements
+            .statements
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
         let params = bind::to_scylla_query_params(&params)?;
         let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.inner.execute(statement, params).await;
+        let rs = self.session.execute(statement, params).await;
         let duration = Instant::now() - start_time;
         self.stats
             .try_lock()
@@ -241,7 +243,7 @@ impl Session {
     }
 
     /// Returns the current accumulated request stats snapshot and resets the stats.
-    pub fn take_stats(&self) -> SessionStats {
+    pub fn take_session_stats(&self) -> SessionStats {
         let mut stats = self.stats.try_lock().unwrap();
         let result = stats.clone();
         stats.reset();
@@ -249,7 +251,7 @@ impl Session {
     }
 
     /// Resets query and request counters
-    pub fn reset_stats(&self) {
+    pub fn reset_session_stats(&self) {
         self.stats.try_lock().unwrap().reset();
     }
 }
@@ -258,8 +260,8 @@ impl Session {
 mod bind {
     use scylla::frame::response::result::CqlValue;
 
-    use crate::workload::context;
-    use crate::workload::context::Uuid;
+    use crate::workload::globals;
+    use crate::workload::globals::Uuid;
     use crate::CassErrorKind;
 
     use super::*;
@@ -285,7 +287,7 @@ mod bind {
             Value::Any(obj) => {
                 let obj = obj.borrow_ref().unwrap();
                 if obj.type_hash() == Uuid::type_hash() {
-                    let uuid: &context::Uuid = obj.downcast_borrow_ref().unwrap();
+                    let uuid: &globals::Uuid = obj.downcast_borrow_ref().unwrap();
                     Ok(CqlValue::Uuid(uuid.0))
                 } else {
                     Err(CassError(CassErrorKind::UnsupportedType(

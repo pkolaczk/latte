@@ -1,13 +1,14 @@
 mod common;
 
-pub const LOAD_COUNT = 0;
-
 pub async fn schema(db) {
     common::init_schema(db).await?;
 }
 
 pub async fn erase(db) {
     common::erase(db).await?;
+}
+
+pub async fn load(db) {
 }
 
 pub async fn prepare(db) {

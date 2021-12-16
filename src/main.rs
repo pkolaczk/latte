@@ -16,6 +16,8 @@ use config::RunCommand;
 use crate::config::{
     AppConfig, Command, ConnectionConf, HdrCommand, Interval, LoadCommand, ShowCommand,
 };
+use crate::context::*;
+use crate::context::{CassError, CassErrorKind, Context, SessionStats};
 use crate::cycle::BoundedCycleCounter;
 use crate::error::{LatteError, Result};
 use crate::exec::{par_execute, ExecutionOptions};
@@ -23,12 +25,11 @@ use crate::interrupt::InterruptHandler;
 use crate::progress::Progress;
 use crate::report::{Report, RunConfigCmp};
 use crate::sampler::Sampler;
-use crate::session::*;
-use crate::session::{CassError, CassErrorKind, Session, SessionStats};
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
 use crate::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN, RUN_FN};
 
 mod config;
+mod context;
 mod cycle;
 mod error;
 mod exec;
@@ -37,7 +38,6 @@ mod interrupt;
 mod progress;
 mod report;
 mod sampler;
-mod session;
 mod stats;
 mod workload;
 
@@ -86,15 +86,19 @@ fn load_workload_script(workload: &Path, params: &[(String, String)]) -> Result<
 }
 
 /// Connects to the server and returns the session
-async fn connect(conf: &ConnectionConf) -> Result<(Session, Option<ClusterInfo>)> {
+async fn connect(conf: &ConnectionConf) -> Result<(Context, Option<ClusterInfo>)> {
     eprintln!("info: Connecting to {:?}... ", conf.addresses);
-    let session = session::connect(conf).await?;
-    let session = Session::new(session);
+    let session = context::connect(conf).await?;
+    let session = Context::new(session);
     let cluster_info = session.cluster_info().await?;
     eprintln!(
         "info: Connected to {} running Cassandra version {}",
-        cluster_info.as_ref().map(|c| c.name.as_str()).unwrap_or("unknown"),
-        cluster_info.as_ref()
+        cluster_info
+            .as_ref()
+            .map(|c| c.name.as_str())
+            .unwrap_or("unknown"),
+        cluster_info
+            .as_ref()
             .map(|c| c.cassandra_version.as_str())
             .unwrap_or("unknown")
     );
@@ -108,7 +112,6 @@ async fn load(conf: LoadCommand) -> Result<()> {
         exit(255);
     }
     let (mut session, _) = connect(&conf.connection).await?;
-
 
     if program.has_schema() {
         eprintln!("info: Creating schema...");
@@ -137,7 +140,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
     let interrupt = Arc::new(InterruptHandler::install());
     eprintln!("info: Loading data...");
     let loader = Workload::new(session.clone(), program.clone(), FnRef::new(LOAD_FN));
-    let load_count = program.load_count();
+    let load_count = session.load_cycle_count;
     let load_options = ExecutionOptions {
         duration: config::Interval::Count(load_count),
         rate: None,

@@ -1,7 +1,5 @@
 //! Partition write stress test - writes very tiny single-row partitions.
 
-pub const LOAD_COUNT = 0;
-
 const INSERT = "insert";
 
 const KEYSPACE = "latte";

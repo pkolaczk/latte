@@ -1,5 +1,4 @@
-pub const LOAD_COUNT = 0;
-pub const BLOB_SIZE = latte::param!("blob_size", 16);
+const BLOB_SIZE = latte::param!("blob_size", 16);
 
 const INSERT = "insert";
 
