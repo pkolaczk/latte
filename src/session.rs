@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use std::process::exit;
 use std::sync::Arc;
 
 use hdrhistogram::Histogram;
@@ -15,31 +14,21 @@ use scylla::{QueryResult, SessionBuilder};
 use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
 
-use crate::config::RunCommand;
+use crate::config::ConnectionConf;
 
 /// Configures connection to Cassandra.
-pub async fn connect(conf: &RunCommand) -> Result<scylla::Session, NewSessionError> {
+pub async fn connect(conf: &ConnectionConf) -> Result<scylla::Session, CassError> {
     SessionBuilder::new()
         .known_nodes(&conf.addresses)
-        .pool_size(PoolSize::PerShard(conf.connections))
+        .pool_size(PoolSize::PerShard(conf.count))
         .build()
         .await
+        .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))
 }
 
-/// Connects to the cluster and returns a connected session object.
-/// On failure, displays an error message and aborts the application.
-pub async fn connect_or_abort(conf: &RunCommand) -> scylla::Session {
-    match connect(conf).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "error: Failed to connect to Cassandra at [{}]: {}",
-                conf.addresses.iter().join(", "),
-                e
-            );
-            exit(1)
-        }
-    }
+pub struct ClusterInfo {
+    pub name: String,
+    pub cassandra_version: String,
 }
 
 #[derive(Any, Debug)]
@@ -47,6 +36,7 @@ pub struct CassError(pub CassErrorKind);
 
 #[derive(Debug)]
 pub enum CassErrorKind {
+    FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
     UnsupportedType(TypeInfo),
     Overloaded(QueryError),
@@ -57,6 +47,9 @@ impl CassError {
     pub fn display(&self, buf: &mut String) -> std::fmt::Result {
         use std::fmt::Write;
         match &self.0 {
+            CassErrorKind::FailedToConnect(hosts, e) => {
+                write!(buf, "Could not connect to {}: {}", hosts.join(","), e)
+            }
             CassErrorKind::PreparedStatementNotFound(s) => {
                 write!(buf, "Prepared statement not found: {}", s)
             }
@@ -187,6 +180,25 @@ impl Session {
             prepared_statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
         }
+    }
+
+    /// Returns cluster metadata such as cluster name and cassandra version.
+    pub async fn cluster_info(&self) -> Result<Option<ClusterInfo>, CassError> {
+        let rs = self
+            .inner
+            .query("SELECT cluster_name, release_version FROM system.local", ())
+            .await?;
+        if let Some(rows) = rs.rows {
+            if let Some(row) = rows.into_iter().next() {
+                if let Ok((name, cassandra_version)) = row.into_typed() {
+                    return Ok(Some(ClusterInfo {
+                        name,
+                        cassandra_version,
+                    }));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Prepares a statement and stores it in an internal statement map for future use.

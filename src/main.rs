@@ -13,7 +13,9 @@ use tokio::runtime::Builder;
 
 use config::RunCommand;
 
-use crate::config::{AppConfig, Command, HdrCommand, Interval, ShowCommand};
+use crate::config::{
+    AppConfig, Command, ConnectionConf, HdrCommand, Interval, LoadCommand, ShowCommand,
+};
 use crate::cycle::BoundedCycleCounter;
 use crate::error::{LatteError, Result};
 use crate::exec::{par_execute, ExecutionOptions};
@@ -24,7 +26,7 @@ use crate::sampler::Sampler;
 use crate::session::*;
 use crate::session::{CassError, CassErrorKind, Session, SessionStats};
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
-use crate::workload::{FnRef, Workload, WorkloadStats, LOAD_FN, RUN_FN};
+use crate::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN, RUN_FN};
 
 mod config;
 mod cycle;
@@ -68,66 +70,50 @@ fn get_default_output_name(conf: &RunCommand) -> PathBuf {
     components.extend(conf.rate.map(|r| format!("r{}", r)));
     components.push(format!("p{}", conf.concurrency));
     components.push(format!("t{}", conf.threads));
-    components.push(format!("c{}", conf.connections));
+    components.push(format!("c{}", conf.connection.count));
     let params = conf.params.iter().map(|(k, v)| format!("{}{}", k, v));
     components.extend(params);
     components.push(chrono::Local::now().format("%Y%m%d.%H%M%S").to_string());
     PathBuf::from(format!("{}.json", components.join(".")))
 }
 
-async fn run(conf: RunCommand) -> Result<()> {
-    let mut conf = conf.set_timestamp_if_empty();
-    let compare = conf.baseline.as_ref().map(|p| load_report_or_abort(p));
-    eprintln!(
-        "info: Loading workload script {}...",
-        conf.workload.display()
-    );
-    let script = Source::from_path(&conf.workload)
-        .map_err(|e| LatteError::ScriptRead(conf.workload.clone(), e))?;
+/// Reads the workload script from a file and compiles it.
+fn load_workload_script(workload: &Path, params: &[(String, String)]) -> Result<Program> {
+    eprintln!("info: Loading workload script {}...", workload.display());
+    let src = Source::from_path(workload)
+        .map_err(|e| LatteError::ScriptRead(PathBuf::from(workload), e))?;
+    workload::Program::new(src, params.iter().cloned().collect())
+}
 
-    let mut program = workload::Program::new(script, conf.params.iter().cloned().collect())?;
-
-    if !program.has_run() {
-        eprintln!("error: Function `run` not found in the workload script.");
-        exit(255);
-    }
-
+/// Connects to the server and returns the session
+async fn connect(conf: &ConnectionConf) -> Result<(Session, Option<ClusterInfo>)> {
     eprintln!("info: Connecting to {:?}... ", conf.addresses);
-    let session = connect_or_abort(&conf).await;
-    let cluster_info = session
-        .query("SELECT cluster_name, release_version FROM system.local", ())
-        .await;
-    if let Ok(rs) = cluster_info {
-        if let Some(rows) = rs.rows {
-            if let Some(row) = rows.into_iter().next() {
-                if let Ok((cluster_name, cass_version)) = row.into_typed() {
-                    conf.cluster_name = Some(cluster_name);
-                    conf.cass_version = Some(cass_version);
-                }
-            }
-        }
-    }
-
+    let session = session::connect(conf).await?;
+    let session = Session::new(session);
+    let cluster_info = session.cluster_info().await?;
     eprintln!(
         "info: Connected to {} running Cassandra version {}",
-        conf.cluster_name.as_deref().unwrap_or("unknown"),
-        conf.cass_version.as_deref().unwrap_or("unknown")
+        cluster_info.as_ref().map(|c| c.name.as_str()).unwrap_or("unknown"),
+        cluster_info.as_ref()
+            .map(|c| c.cassandra_version.as_str())
+            .unwrap_or("unknown")
     );
+    Ok((session, cluster_info))
+}
 
-    let mut session = Session::new(session);
+async fn load(conf: LoadCommand) -> Result<()> {
+    let mut program = load_workload_script(&conf.workload, &conf.params)?;
+    if !program.has_load() {
+        eprintln!("error: Function `load` not found in the workload script.");
+        exit(255);
+    }
+    let (mut session, _) = connect(&conf.connection).await?;
+
 
     if program.has_schema() {
         eprintln!("info: Creating schema...");
         if let Err(e) = program.schema(&mut session).await {
             eprintln!("error: Failed to create schema: {}", e);
-            exit(255);
-        }
-    }
-
-    if program.has_erase() && !conf.no_load {
-        eprintln!("info: Erasing data...");
-        if let Err(e) = program.erase(&mut session).await {
-            eprintln!("error: Failed to erase: {}", e);
             exit(255);
         }
     }
@@ -140,37 +126,78 @@ async fn run(conf: RunCommand) -> Result<()> {
         }
     }
 
-    let loader = Workload::new(session.clone(), program.clone(), FnRef::new(LOAD_FN));
-    let runner = Workload::new(session.clone(), program.clone(), FnRef::new(RUN_FN));
-
-    let interrupt = Arc::new(InterruptHandler::install());
-
-    if !conf.no_load {
-        let load_count = program.load_count();
-        if load_count > 0 && program.has_load() {
-            eprintln!("info: Loading data...");
-            let load_options = ExecutionOptions {
-                duration: config::Interval::Count(load_count),
-                rate: None,
-                threads: conf.threads,
-                concurrency: conf.load_concurrency,
-            };
-            par_execute(
-                "Loading...",
-                &load_options,
-                config::Interval::Unbounded,
-                loader,
-                interrupt.clone(),
-                !conf.quiet,
-            )
-            .await?;
+    if program.has_erase() {
+        eprintln!("info: Erasing data...");
+        if let Err(e) = program.erase(&mut session).await {
+            eprintln!("error: Failed to erase: {}", e);
+            exit(255);
         }
     }
 
-    if interrupt.is_interrupted() {
-        return Err(LatteError::Interrupted);
+    let interrupt = Arc::new(InterruptHandler::install());
+    eprintln!("info: Loading data...");
+    let loader = Workload::new(session.clone(), program.clone(), FnRef::new(LOAD_FN));
+    let load_count = program.load_count();
+    let load_options = ExecutionOptions {
+        duration: config::Interval::Count(load_count),
+        rate: None,
+        threads: conf.threads,
+        concurrency: conf.concurrency,
+    };
+    let result = par_execute(
+        "Loading...",
+        &load_options,
+        config::Interval::Unbounded,
+        loader,
+        interrupt.clone(),
+        !conf.quiet,
+    )
+    .await?;
+
+    if result.error_count > 0 {
+        for e in result.errors {
+            eprintln!("error: {}", e);
+        }
+        eprintln!("error: Errors encountered when loading data. Some data might be missing.");
+        exit(255)
+    }
+    Ok(())
+}
+
+async fn run(conf: RunCommand) -> Result<()> {
+    let mut conf = conf.set_timestamp_if_empty();
+    let compare = conf.baseline.as_ref().map(|p| load_report_or_abort(p));
+
+    let mut program = load_workload_script(&conf.workload, &conf.params)?;
+    if !program.has_run() {
+        eprintln!("error: Function `run` not found in the workload script.");
+        exit(255);
     }
 
+    let (mut session, cluster_info) = connect(&conf.connection).await?;
+    if let Some(cluster_info) = cluster_info {
+        conf.cluster_name = Some(cluster_info.name);
+        conf.cass_version = Some(cluster_info.cassandra_version);
+    }
+
+    if program.has_schema() {
+        eprintln!("info: Creating schema...");
+        if let Err(e) = program.schema(&mut session).await {
+            eprintln!("error: Failed to create schema: {}", e);
+            exit(255);
+        }
+    }
+
+    if program.has_prepare() {
+        eprintln!("info: Preparing...");
+        if let Err(e) = program.prepare(&mut session).await {
+            eprintln!("error: Failed to prepare: {}", e);
+            exit(255);
+        }
+    }
+
+    let runner = Workload::new(session.clone(), program.clone(), FnRef::new(RUN_FN));
+    let interrupt = Arc::new(InterruptHandler::install());
     if conf.warmup_duration.is_not_zero() {
         eprintln!("info: Warming up...");
         let warmup_options = ExecutionOptions {
@@ -310,6 +337,7 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
 
 async fn async_main(command: Command) -> Result<()> {
     match command {
+        Command::Load(config) => load(config).await?,
         Command::Run(config) => run(config).await?,
         Command::Show(config) => show(config).await?,
         Command::Hdr(config) => export_hdr_log(config).await?,

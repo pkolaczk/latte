@@ -491,7 +491,7 @@ impl<'a> Display for RunConfigCmp<'a> {
 
         let lines: Vec<Box<dyn Display>> = vec![
             self.line("Threads", "", |conf| Quantity::from(conf.threads)),
-            self.line("Connections", "", |conf| Quantity::from(conf.connections)),
+            self.line("Connections", "", |conf| Quantity::from(conf.connection.count)),
             self.line("Concurrency", "req", |conf| {
                 Quantity::from(conf.concurrency)
             }),

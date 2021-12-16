@@ -81,6 +81,49 @@ impl FromStr for Interval {
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize)]
+pub struct ConnectionConf {
+    /// Number of connections per Cassandra node / Scylla shard.
+    #[clap(short('c'), long("connections"), default_value = "1", value_name = "COUNT")]
+    pub count: NonZeroUsize,
+
+    /// List of Cassandra addresses to connect to.
+    #[clap(name = "addresses", default_value = "localhost")]
+    pub addresses: Vec<String>,
+}
+
+#[derive(Parser, Debug, Serialize, Deserialize)]
+#[clap(
+    setting(AppSettings::NextLineHelp),
+    setting(AppSettings::DeriveDisplayOrder)
+)]
+pub struct LoadCommand {
+    /// Number of worker threads used by the driver.
+    #[clap(short('t'), long, default_value = "1", value_name = "COUNT")]
+    pub threads: NonZeroUsize,
+
+    /// Max number of concurrent async requests per thread during data loading phase.
+    #[clap(long, default_value = "512", value_name = "COUNT")]
+    pub concurrency: NonZeroUsize,
+
+    /// Parameter values passed to the workload, accessible through param! macro.
+    #[clap(short('P'), parse(try_from_str = parse_key_val),
+    number_of_values = 1, multiple_occurrences = true)]
+    pub params: Vec<(String, String)>,
+
+    /// Don't display the progress bar.
+    #[clap(short, long)]
+    pub quiet: bool,
+
+    /// Path to the workload definition file.
+    #[clap(name = "workload", required = true, value_name = "PATH")]
+    pub workload: PathBuf,
+
+    // Cassandra connection settings.
+    #[clap(flatten)]
+    pub connection: ConnectionConf,
+}
+
+#[derive(Parser, Debug, Serialize, Deserialize)]
 #[clap(
     setting(AppSettings::NextLineHelp),
     setting(AppSettings::DeriveDisplayOrder)
@@ -91,7 +134,7 @@ pub struct RunCommand {
     #[clap(short('r'), long, value_name = "COUNT")]
     pub rate: Option<f64>,
 
-    /// Number of cycles or duration of the warmup phase
+    /// Number of cycles or duration of the warmup phase.
     #[clap(
         short('w'),
         long("warmup"),
@@ -100,7 +143,7 @@ pub struct RunCommand {
     )]
     pub warmup_duration: Interval,
 
-    /// Number of cycles or duration of the main benchmark phase
+    /// Number of cycles or duration of the main benchmark phase.
     #[clap(
         short('d'),
         long("duration"),
@@ -109,23 +152,15 @@ pub struct RunCommand {
     )]
     pub run_duration: Interval,
 
-    /// Number of worker threads used by the driver
+    /// Number of worker threads used by the driver.
     #[clap(short('t'), long, default_value = "1", value_name = "COUNT")]
     pub threads: NonZeroUsize,
 
-    /// Number of connections per Cassandra node / Scylla shard
-    #[clap(short('c'), long, default_value = "1", value_name = "COUNT")]
-    pub connections: NonZeroUsize,
-
-    /// Max number of concurrent async requests per thread during data loading phase
-    #[clap(long, default_value = "128", value_name = "COUNT")]
-    pub load_concurrency: NonZeroUsize,
-
-    /// Max number of concurrent async requests per thread during the main benchmark phase
+    /// Max number of concurrent async requests per thread during the main benchmark phase.
     #[clap(short('p'), long, default_value = "128", value_name = "COUNT")]
     pub concurrency: NonZeroUsize,
 
-    /// Throughput sampling period, in seconds
+    /// Throughput sampling period, in seconds.
     #[clap(
         short('s'),
         long("sampling"),
@@ -147,11 +182,7 @@ pub struct RunCommand {
     #[clap(short('b'), long, value_name = "PATH")]
     pub baseline: Option<PathBuf>,
 
-    /// Skips erasing and loading data before running the benchmark.
-    #[clap(long)]
-    pub no_load: bool,
-
-    /// Path to the workload definition file
+    /// Path to the workload definition file.
     #[clap(name = "workload", required = true, value_name = "PATH")]
     pub workload: PathBuf,
 
@@ -164,9 +195,9 @@ pub struct RunCommand {
     #[clap(short, long)]
     pub quiet: bool,
 
-    /// List of Cassandra addresses to connect to
-    #[clap(name = "addresses", default_value = "localhost")]
-    pub addresses: Vec<String>,
+    // Cassandra connection settings.
+    #[clap(flatten)]
+    pub connection: ConnectionConf,
 
     /// Seconds since 1970-01-01T00:00:00Z
     #[clap(hidden(true), long)]
@@ -231,6 +262,9 @@ pub struct HdrCommand {
 #[derive(Parser, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
+    /// Generates the data needed for the benchmark (typically needed by read benchmarks).
+    Load(LoadCommand),
+
     /// Runs the benchmark.
     ///
     /// Prints nicely formatted statistics to the standard output.
