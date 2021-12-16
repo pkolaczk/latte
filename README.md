@@ -85,7 +85,8 @@ Latte is still early stage software under intensive development.
 Start a Cassandra cluster somewhere (can be a local node). Then run:
 
 ```shell
-latte run <workload.rn> [<node address>] 
+latte load <workload.rn> [<node address>]   # populate the database with data
+latte run <workload.rn> [<node address>]    # execute the workload and measure the performance 
  ```
 
 You can find a few example workload files in the `workloads` folder.
@@ -155,8 +156,9 @@ pub async fn run(ctx, i) {
 
 ### Populating the database
 
-Read queries are more interesting when they return non-empty result sets. To load data into tables before each run of
-the benchmark, define the `load` function and the `LOAD_COUNT` constant that will tell Latte the number of times `load`
+Read queries are more interesting when they return non-empty result sets. To be able to 
+load data into tables with `latte load`, define the `load` function and 
+the `LOAD_COUNT` constant that will tell Latte the number of times `load`
 must be called:
 
 ```rust
@@ -167,16 +169,14 @@ pub async fn load(ctx, i) {
 }
 ```
 
-We also recommend defining the `erase` function to erase the data before loading so that each benchmark run starts from
-the same initial state:
+We also recommend defining the `erase` function to erase the data before loading so that you always get the same
+dataset regardless of the data that were present in the database before:
 
 ```rust
 pub async fn erase(ctx) {
   ctx.execute("TRUNCATE TABLE test.test").await
 }
 ```
-
-If needed, you can skip the loading phase by passing `--no-load` command line flag.
 
 ### Generating data
 
