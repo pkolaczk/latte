@@ -83,7 +83,12 @@ impl FromStr for Interval {
 #[derive(Parser, Debug, Serialize, Deserialize)]
 pub struct ConnectionConf {
     /// Number of connections per Cassandra node / Scylla shard.
-    #[clap(short('c'), long("connections"), default_value = "1", value_name = "COUNT")]
+    #[clap(
+        short('c'),
+        long("connections"),
+        default_value = "1",
+        value_name = "COUNT"
+    )]
     pub count: NonZeroUsize,
 
     /// List of Cassandra addresses to connect to.

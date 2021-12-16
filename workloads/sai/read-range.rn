@@ -1,10 +1,7 @@
-use common::{KEYSPACE, TABLE};
+use common::{KEYSPACE, TABLE, ROW_COUNT, READ_SIZE};
 use latte::*;
 
 mod common;
-
-const LOAD_COUNT = latte::param!("rows", 100000);
-const READ_SIZE = latte::param!("read_size", 10) * 1000;
 
 const READ = "read";
 
@@ -26,6 +23,6 @@ pub async fn load(db, i) {
 }
 
 pub async fn run(db, i) {
-    let point = hash_range(i, LOAD_COUNT - READ_SIZE);
+    let point = hash_range(i, ROW_COUNT - READ_SIZE);
     db.execute_prepared(READ, (point, point + READ_SIZE)).await?;
 }

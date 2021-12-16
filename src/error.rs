@@ -1,4 +1,4 @@
-use crate::session::CassError;
+use crate::context::CassError;
 use err_derive::*;
 use hdrhistogram::serialization::interval_log::IntervalLogWriterError;
 use hdrhistogram::serialization::V2DeflateSerializeError;

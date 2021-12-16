@@ -156,13 +156,15 @@ pub async fn run(ctx, i) {
 
 ### Populating the database
 
-Read queries are more interesting when they return non-empty result sets. To be able to 
-load data into tables with `latte load`, define the `load` function and 
-the `LOAD_COUNT` constant that will tell Latte the number of times `load`
-must be called:
+Read queries are more interesting when they return non-empty result sets. 
+
+To be able to load data into tables with `latte load`, you need to set the number of load cycles on the context object 
+and define the `load` function:
 
 ```rust
-pub const LOAD_COUNT = 1000; // invoke load for i in 0..1000
+pub async fn prepare(ctx) {
+  ctx.load_cycle_count = 1000000;
+}
 
 pub async fn load(ctx, i) {
   ctx.execute_prepared(INSERT, [i, "Lorem ipsum dolor sit amet"]).await
@@ -177,6 +179,7 @@ pub async fn erase(ctx) {
   ctx.execute("TRUNCATE TABLE test.test").await
 }
 ```
+
 
 ### Generating data
 
@@ -196,16 +199,17 @@ Workloads can be parameterized by parameters given from the command line invocat
 Use `latte::param!(param_name, default_value)` macro to initialize script constants from command line parameters:
 
 ```rust
-pub const LOAD_COUNT = latte::param!("row_count", 100);
+const ROW_COUNT = latte::param!("row_count", 1000000);
+
+pub async fn prepare(ctx) {
+  ctx.load_cycle_count = ROW_COUNT;
+} 
 ```
 
 Then you can set the parameter by using `-P`:
-
 ```
 latte run <workload> -P row_count=200
 ```
-
-Presently, only integer parameters are supported, but this limitation will be removed in the future.
 
 ### Error handling
 

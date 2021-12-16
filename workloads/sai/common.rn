@@ -3,12 +3,21 @@ use latte::*;
 pub const KEYSPACE = latte::param!("keyspace", "latte");
 pub const TABLE = latte::param!("table", "sai_main");
 
+// Total number of rows in the table:
 pub const ROW_COUNT = latte::param!("rows", 100000);
+
+// Total number of partitions in the table:
 pub const PAR_COUNT = latte::param!("partitions", ROW_COUNT);
-pub const TIME_DELTA = latte::param!("time_delta", 1000);
+
+// Column cardinalities:
 pub const LC = latte::param!("lc", 10);
 pub const MC = latte::param!("hc", 100);
 pub const HC = latte::param!("hc", 1000);
+
+pub const TIME_DELTA = latte::param!("time_delta", 1000);
+
+// Limit on the number of rows to fetch in a single query:
+pub const READ_SIZE = latte::param!("read_size", 10);
 
 const WRITE = "write";
 
@@ -44,6 +53,7 @@ pub async fn erase(db) {
 }
 
 pub async fn prepare(db) {
+    db.load_cycle_count = ROW_COUNT;
     db.prepare(WRITE,
         `INSERT INTO ${KEYSPACE}.${TABLE}(par_id, row_id, time1, time2, hc, mc, lc, tag)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).await?;

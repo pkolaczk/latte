@@ -1,4 +1,3 @@
-use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -12,17 +11,17 @@ use rune::{Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
 use try_lock::TryLock;
 
 use crate::error::LatteError;
-use crate::{CassError, CassErrorKind, Session, SessionStats};
+use crate::{CassError, CassErrorKind, Context, SessionStats};
 
 /// Wraps a reference to Session that can be converted to a Rune `Value`
 /// and passed as one of `Args` arguments to a function.
 struct SessionRef<'a> {
-    session: &'a Session,
+    context: &'a Context,
 }
 
 impl SessionRef<'_> {
-    pub fn new(session: &Session) -> SessionRef {
-        SessionRef { session }
+    pub fn new(context: &Context) -> SessionRef {
+        SessionRef { context }
     }
 }
 
@@ -36,27 +35,27 @@ impl SessionRef<'_> {
 /// The receiver of a `Value` must ensure that it is dropped before `Session`!
 impl<'a> ToValue for SessionRef<'a> {
     fn to_value(self) -> Result<Value, VmError> {
-        let obj = unsafe { AnyObj::from_ref(self.session) };
+        let obj = unsafe { AnyObj::from_ref(self.context) };
         Ok(Value::from(Shared::new(obj)))
     }
 }
 
 /// Wraps a mutable reference to Session that can be converted to a Rune `Value` and passed
 /// as one of `Args` arguments to a function.
-struct SessionRefMut<'a> {
-    session: &'a mut Session,
+struct ContextRefMut<'a> {
+    context: &'a mut Context,
 }
 
-impl SessionRefMut<'_> {
-    pub fn new(session: &mut Session) -> SessionRefMut {
-        SessionRefMut { session }
+impl ContextRefMut<'_> {
+    pub fn new(context: &mut Context) -> ContextRefMut {
+        ContextRefMut { context }
     }
 }
 
 /// Caution! See `impl ToValue for SessionRef`.
-impl<'a> ToValue for SessionRefMut<'a> {
+impl<'a> ToValue for ContextRefMut<'a> {
     fn to_value(self) -> Result<Value, VmError> {
-        let obj = unsafe { AnyObj::from_mut(self.session) };
+        let obj = unsafe { AnyObj::from_mut(self.context) };
         Ok(Value::from(Shared::new(obj)))
     }
 }
@@ -100,16 +99,16 @@ impl Program {
     /// - `script`: source code in Rune language
     /// - `params`: parameter values that will be exposed to the script by the `params!` macro
     pub fn new(source: Source, params: HashMap<String, String>) -> Result<Program, LatteError> {
-        let mut session_module = Module::default();
-        session_module.ty::<Session>().unwrap();
-        session_module
-            .async_inst_fn("execute", Session::execute)
+        let mut context_module = Module::default();
+        context_module.ty::<Context>().unwrap();
+        context_module
+            .async_inst_fn("execute", Context::execute)
             .unwrap();
-        session_module
-            .async_inst_fn("prepare", Session::prepare)
+        context_module
+            .async_inst_fn("prepare", Context::prepare)
             .unwrap();
-        session_module
-            .async_inst_fn("execute_prepared", Session::execute_prepared)
+        context_module
+            .async_inst_fn("execute_prepared", Context::execute_prepared)
             .unwrap();
 
         let mut err_module = Module::default();
@@ -119,30 +118,30 @@ impl Program {
             .unwrap();
 
         let mut uuid_module = Module::default();
-        uuid_module.ty::<context::Uuid>().unwrap();
+        uuid_module.ty::<globals::Uuid>().unwrap();
         uuid_module
             .inst_fn(
                 rune::runtime::Protocol::STRING_DISPLAY,
-                context::Uuid::display,
+                globals::Uuid::display,
             )
             .unwrap();
 
         let mut latte_module = Module::with_crate("latte");
-        latte_module.function(&["blob"], context::blob).unwrap();
-        latte_module.function(&["hash"], context::hash).unwrap();
-        latte_module.function(&["hash2"], context::hash2).unwrap();
+        latte_module.function(&["blob"], globals::blob).unwrap();
+        latte_module.function(&["hash"], globals::hash).unwrap();
+        latte_module.function(&["hash2"], globals::hash2).unwrap();
         latte_module
-            .function(&["hash_range"], context::hash_range)
+            .function(&["hash_range"], globals::hash_range)
             .unwrap();
         latte_module
-            .function(&["uuid"], context::Uuid::new)
+            .function(&["uuid"], globals::Uuid::new)
             .unwrap();
         latte_module
-            .macro_(&["param"], move |ctx, ts| context::param(ctx, &params, ts))
+            .macro_(&["param"], move |ctx, ts| globals::param(ctx, &params, ts))
             .unwrap();
 
         let mut context = rune::Context::with_default_modules().unwrap();
-        context.install(&session_module).unwrap();
+        context.install(&context_module).unwrap();
         context.install(&err_module).unwrap();
         context.install(&uuid_module).unwrap();
         context.install(&latte_module).unwrap();
@@ -272,35 +271,26 @@ impl Program {
     /// Calls the script's `init` function.
     /// Called once at the beginning of the benchmark.
     /// Typically used to prepare statements.
-    pub async fn prepare(&mut self, session: &mut Session) -> Result<(), LatteError> {
-        let session = SessionRefMut::new(session);
-        self.async_call(FnRef::new(PREPARE_FN), (session,)).await?;
+    pub async fn prepare(&mut self, context: &mut Context) -> Result<(), LatteError> {
+        let context = ContextRefMut::new(context);
+        self.async_call(FnRef::new(PREPARE_FN), (context,)).await?;
         Ok(())
     }
 
     /// Calls the script's `schema` function.
     /// Typically used to create database schema.
-    pub async fn schema(&mut self, session: &mut Session) -> Result<(), LatteError> {
-        let session = SessionRefMut::new(session);
-        self.async_call(FnRef::new(SCHEMA_FN), (session,)).await?;
+    pub async fn schema(&mut self, context: &mut Context) -> Result<(), LatteError> {
+        let context = ContextRefMut::new(context);
+        self.async_call(FnRef::new(SCHEMA_FN), (context,)).await?;
         Ok(())
     }
 
     /// Calls the script's `erase` function.
     /// Typically used to remove the data from the database before running the benchmark.
-    pub async fn erase(&mut self, session: &mut Session) -> Result<(), LatteError> {
-        let session = SessionRefMut::new(session);
-        self.async_call(FnRef::new(ERASE_FN), (session,)).await?;
+    pub async fn erase(&mut self, context: &mut Context) -> Result<(), LatteError> {
+        let context = ContextRefMut::new(context);
+        self.async_call(FnRef::new(ERASE_FN), (context,)).await?;
         Ok(())
-    }
-
-    /// Returns the preferred number of `load` invocations, determined by `LOAD_COUNT`
-    /// constant of the script. If the constant is missing or incorrect type, returns 0.
-    pub fn load_count(&self) -> u64 {
-        match self.unit.constant(rune::Hash::type_hash(&["LOAD_COUNT"])) {
-            Some(cv) => max(0, cv.clone().into_value().into_integer().unwrap_or(0)) as u64,
-            None => 0,
-        }
     }
 }
 
@@ -353,7 +343,7 @@ impl Default for WorkloadState {
 }
 
 pub struct Workload {
-    session: Session,
+    context: Context,
     program: Program,
     function: FnRef,
     state: TryLock<WorkloadState>,
@@ -362,7 +352,7 @@ pub struct Workload {
 impl Clone for Workload {
     fn clone(&self) -> Self {
         Workload {
-            session: self.session.clone(),
+            context: self.context.clone(),
             // make a deep copy to avoid congestion on Arc ref counts used heavily by Rune
             program: self.program.unshare(),
             function: self.function,
@@ -372,9 +362,9 @@ impl Clone for Workload {
 }
 
 impl Workload {
-    pub fn new(session: Session, program: Program, function: FnRef) -> Workload {
+    pub fn new(context: Context, program: Program, function: FnRef) -> Workload {
         Workload {
-            session,
+            context,
             program,
             function,
             state: TryLock::new(WorkloadState::default()),
@@ -387,10 +377,10 @@ impl Workload {
     /// Returns the cycle number and the end time of the query.
     pub async fn run(&self, cycle: u64) -> Result<(u64, Instant), LatteError> {
         let start_time = Instant::now();
-        let session = SessionRef::new(&self.session);
+        let context = SessionRef::new(&self.context);
         let result = self
             .program
-            .async_call(self.function, (session, cycle as i64))
+            .async_call(self.function, (context, cycle as i64))
             .await
             .map(|_| ()); // erase Value, because Value is !Send
         let end_time = Instant::now();
@@ -400,17 +390,17 @@ impl Workload {
             Ok(_) => Ok((cycle, end_time)),
             Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_)))) => {
                 // don't stop on overload errors;
-                // they are being counted by the session stats anyways
+                // they are being counted by the context stats anyways
                 Ok((cycle, end_time))
             }
             Err(e) => Err(e),
         }
     }
 
-    /// Returns the reference to the contained session.
-    /// Allows to e.g. access session stats.
-    pub fn session(&self) -> &Session {
-        &self.session
+    /// Returns the reference to the contained context.
+    /// Allows to e.g. access context stats.
+    pub fn context(&self) -> &Context {
+        &self.context
     }
 
     /// Sets the workload start time and resets the counters.
@@ -420,7 +410,7 @@ impl Workload {
         let mut state = self.state.try_lock().unwrap();
         state.fn_stats = FnStats::default();
         state.start_time = start_time;
-        self.session.reset_stats();
+        self.context.reset_session_stats();
     }
 
     /// Returns statistics of the operations invoked by this workload so far.
@@ -431,7 +421,7 @@ impl Workload {
             start_time: state.start_time,
             end_time,
             function_stats: state.fn_stats.clone(),
-            session_stats: self.session().take_stats(),
+            session_stats: self.context().take_session_stats(),
         };
         state.start_time = end_time;
         state.fn_stats = FnStats::default();
@@ -439,7 +429,7 @@ impl Workload {
     }
 }
 
-pub mod context {
+pub mod globals {
     use std::collections::HashMap;
     use std::hash::{Hash, Hasher};
 
