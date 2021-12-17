@@ -127,9 +127,6 @@ impl Program {
             .unwrap();
 
         let mut latte_module = Module::with_crate("latte");
-        latte_module.function(&["i32"], context::to_i32).unwrap();
-        latte_module.function(&["i16"], context::to_i16).unwrap();
-        latte_module.function(&["i8"], context::to_i8).unwrap();
         latte_module.function(&["blob"], context::blob).unwrap();
         latte_module.function(&["hash"], context::hash).unwrap();
         latte_module.function(&["hash2"], context::hash2).unwrap();
@@ -139,9 +136,23 @@ impl Program {
         latte_module
             .function(&["uuid"], context::Uuid::new)
             .unwrap();
+        latte_module.function(&["normal"], context::normal).unwrap();
         latte_module
             .macro_(&["param"], move |ctx, ts| context::param(ctx, &params, ts))
             .unwrap();
+
+        latte_module.inst_fn("to_i32", context::int_to_i32).unwrap();
+        latte_module
+            .inst_fn("to_i32", context::float_to_i32)
+            .unwrap();
+        latte_module.inst_fn("to_i16", context::int_to_i16).unwrap();
+        latte_module
+            .inst_fn("to_i16", context::float_to_i16)
+            .unwrap();
+        latte_module.inst_fn("to_i8", context::int_to_i8).unwrap();
+        latte_module.inst_fn("to_i8", context::float_to_i8).unwrap();
+        latte_module.inst_fn("clamp", context::clamp_float).unwrap();
+        latte_module.inst_fn("clamp", context::clamp_int).unwrap();
 
         let mut context = rune::Context::with_default_modules().unwrap();
         context.install(&context_module).unwrap();

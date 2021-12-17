@@ -48,8 +48,8 @@ pub async fn prepare(db) {
 pub async fn load(db, i) {
     let id = uuid(i);
     let time = i * 1000;
-    let value = i32(i);
-    let lc = i32(hash2(i, 3) % 1000);
+    let value = normal(i, 125.0, 25.0).clamp(0.0, 200.0).to_i32();
+    let lc = normal(i, 2.2, 2.5).clamp(0.0, 5.0).to_i32();
     let tag = "text text text";
     db.execute_prepared(WRITE, [id, time, value, lc, tag]).await?;
     Ok(())

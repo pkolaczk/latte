@@ -7,18 +7,20 @@ use anyhow::anyhow;
 use hdrhistogram::Histogram;
 use itertools::Itertools;
 use metrohash::{MetroHash128, MetroHash64};
+use rand::distributions::Distribution;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rune::ast;
 use rune::ast::Kind;
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
-use rune::runtime::TypeInfo;
+use rune::runtime::{TypeInfo, VmError};
 use rune::{Any, Value};
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
 use scylla::{QueryResult, SessionBuilder};
+use statrs::distribution::Normal;
 use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
 use uuid::{Variant, Version};
@@ -403,18 +405,30 @@ pub fn param(
 }
 
 /// Converts a Rune integer to i8 (Cassandra tinyint)
-pub fn to_i8(value: i64) -> Option<Int8> {
+pub fn int_to_i8(value: i64) -> Option<Int8> {
     Some(Int8(value.try_into().ok()?))
 }
 
+pub fn float_to_i8(value: f64) -> Option<Int8> {
+    int_to_i8(value as i64)
+}
+
 /// Converts a Rune integer to i16 (Cassandra smallint)
-pub fn to_i16(value: i64) -> Option<Int16> {
+pub fn int_to_i16(value: i64) -> Option<Int16> {
     Some(Int16(value.try_into().ok()?))
 }
 
+pub fn float_to_i16(value: f64) -> Option<Int16> {
+    int_to_i16(value as i64)
+}
+
 /// Converts a Rune integer to i32 (Cassandra int)
-pub fn to_i32(value: i64) -> Option<Int32> {
+pub fn int_to_i32(value: i64) -> Option<Int32> {
     Some(Int32(value.try_into().ok()?))
+}
+
+pub fn float_to_i32(value: f64) -> Option<Int32> {
+    int_to_i32(value as i64)
 }
 
 /// Computes a hash of an integer value `i`.
@@ -437,6 +451,23 @@ pub fn hash2(a: i64, b: i64) -> i64 {
 /// Returns a value in range `0..max`.
 pub fn hash_range(i: i64, max: i64) -> i64 {
     hash(i) % max
+}
+
+/// Generates a floating point value with normal distribution
+pub fn normal(i: i64, mean: f64, std_dev: f64) -> Result<f64, VmError> {
+    let mut rng = StdRng::seed_from_u64(i as u64);
+    let distribution = Normal::new(mean, std_dev).map_err(|e| VmError::panic(format!("{}", e)))?;
+    Ok(distribution.sample(&mut rng))
+}
+
+/// Restricts a value to a certain interval unless it is NaN.
+pub fn clamp_float(value: f64, min: f64, max: f64) -> f64 {
+    value.clamp(min, max)
+}
+
+/// Restricts a value to a certain interval.
+pub fn clamp_int(value: i64, min: i64, max: i64) -> i64 {
+    value.clamp(min, max)
 }
 
 /// Generates random blob of data of given length.
