@@ -11,7 +11,7 @@ use rune::{Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
 use try_lock::TryLock;
 
 use crate::error::LatteError;
-use crate::{CassError, CassErrorKind, Context, SessionStats};
+use crate::{context, CassError, CassErrorKind, Context, SessionStats};
 
 /// Wraps a reference to Session that can be converted to a Rune `Value`
 /// and passed as one of `Args` arguments to a function.
@@ -118,29 +118,29 @@ impl Program {
             .unwrap();
 
         let mut uuid_module = Module::default();
-        uuid_module.ty::<globals::Uuid>().unwrap();
+        uuid_module.ty::<context::Uuid>().unwrap();
         uuid_module
             .inst_fn(
                 rune::runtime::Protocol::STRING_DISPLAY,
-                globals::Uuid::display,
+                context::Uuid::display,
             )
             .unwrap();
 
         let mut latte_module = Module::with_crate("latte");
-        latte_module.function(&["i32"], globals::to_i32).unwrap();
-        latte_module.function(&["i16"], globals::to_i16).unwrap();
-        latte_module.function(&["i8"], globals::to_i8).unwrap();
-        latte_module.function(&["blob"], globals::blob).unwrap();
-        latte_module.function(&["hash"], globals::hash).unwrap();
-        latte_module.function(&["hash2"], globals::hash2).unwrap();
+        latte_module.function(&["i32"], context::to_i32).unwrap();
+        latte_module.function(&["i16"], context::to_i16).unwrap();
+        latte_module.function(&["i8"], context::to_i8).unwrap();
+        latte_module.function(&["blob"], context::blob).unwrap();
+        latte_module.function(&["hash"], context::hash).unwrap();
+        latte_module.function(&["hash2"], context::hash2).unwrap();
         latte_module
-            .function(&["hash_range"], globals::hash_range)
+            .function(&["hash_range"], context::hash_range)
             .unwrap();
         latte_module
-            .function(&["uuid"], globals::Uuid::new)
+            .function(&["uuid"], context::Uuid::new)
             .unwrap();
         latte_module
-            .macro_(&["param"], move |ctx, ts| globals::param(ctx, &params, ts))
+            .macro_(&["param"], move |ctx, ts| context::param(ctx, &params, ts))
             .unwrap();
 
         let mut context = rune::Context::with_default_modules().unwrap();
@@ -429,126 +429,5 @@ impl Workload {
         state.start_time = end_time;
         state.fn_stats = FnStats::default();
         result
-    }
-}
-
-pub mod globals {
-    use std::collections::HashMap;
-    use std::hash::{Hash, Hasher};
-
-    use anyhow::anyhow;
-    use itertools::Itertools;
-    use metrohash::{MetroHash128, MetroHash64};
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
-    use rune::ast::Kind;
-    use rune::macros::{quote, MacroContext, TokenStream};
-    use rune::parse::Parser;
-    use rune::{ast, Any};
-    use uuid::{Variant, Version};
-
-    #[derive(Clone, Debug, Any)]
-    pub struct Uuid(pub uuid::Uuid);
-
-    impl Uuid {
-        pub fn new(i: i64) -> Uuid {
-            let mut hash = MetroHash128::new();
-            i.hash(&mut hash);
-            let (h1, h2) = hash.finish128();
-            let h = ((h1 as u128) << 64) | (h2 as u128);
-            Uuid(
-                uuid::Builder::from_u128(h)
-                    .set_variant(Variant::RFC4122)
-                    .set_version(Version::Random)
-                    .build(),
-            )
-        }
-
-        pub fn display(&self, buf: &mut String) -> std::fmt::Result {
-            use std::fmt::Write;
-            write!(buf, "{}", self.0)
-        }
-    }
-
-    #[derive(Clone, Debug, Any)]
-    pub struct Int8(pub i8);
-
-    #[derive(Clone, Debug, Any)]
-    pub struct Int16(pub i16);
-
-    #[derive(Clone, Debug, Any)]
-    pub struct Int32(pub i32);
-
-
-    /// Returns the literal value stored in the `params` map under the key given as the first
-    /// macro arg, and if not found, returns the expression from the second arg.
-    pub fn param(
-        ctx: &mut MacroContext,
-        params: &HashMap<String, String>,
-        ts: &TokenStream,
-    ) -> rune::Result<TokenStream> {
-        let mut parser = Parser::from_token_stream(ts, ctx.macro_span());
-        let name = parser.parse::<ast::LitStr>()?;
-        let name = ctx.resolve(name)?.to_string();
-        let sep = parser.next()?;
-        if sep.kind != Kind::Comma {
-            return Err(anyhow!("Expected comma"));
-        }
-        let expr = parser.parse::<ast::Expr>()?;
-        let rhs = match params.get(&name) {
-            Some(value) => {
-                let src_id = ctx.insert_source(&name, value);
-                let value = ctx.parse_source::<ast::Expr>(src_id)?;
-                quote!(#value)
-            }
-            None => quote!(#expr),
-        };
-        Ok(rhs.into_token_stream(ctx))
-    }
-
-
-    /// Converts a Rune integer to i8 (Cassandra tinyint)
-    pub fn to_i8(value: i64) -> Option<Int8> {
-        Some(Int8(value.try_into().ok()?))
-    }
-
-    /// Converts a Rune integer to i16 (Cassandra smallint)
-    pub fn to_i16(value: i64) -> Option<Int16> {
-        Some(Int16(value.try_into().ok()?))
-    }
-
-    /// Converts a Rune integer to i32 (Cassandra int)
-    pub fn to_i32(value: i64) -> Option<Int32> {
-        Some(Int32(value.try_into().ok()?))
-    }
-
-    /// Computes a hash of an integer value `i`.
-    /// Returns a value in range `0..i64::MAX`.
-    pub fn hash(i: i64) -> i64 {
-        let mut hash = MetroHash64::new();
-        i.hash(&mut hash);
-        (hash.finish() & 0x7FFFFFFFFFFFFFFF) as i64
-    }
-
-    /// Computes hash of two integer values.
-    pub fn hash2(a: i64, b: i64) -> i64 {
-        let mut hash = MetroHash64::new();
-        a.hash(&mut hash);
-        b.hash(&mut hash);
-        (hash.finish() & 0x7FFFFFFFFFFFFFFF) as i64
-    }
-
-    /// Computes a hash of an integer value `i`.
-    /// Returns a value in range `0..max`.
-    pub fn hash_range(i: i64, max: i64) -> i64 {
-        hash(i) % max
-    }
-
-    /// Generates random blob of data of given length.
-    /// Parameter `seed` is used to seed the RNG.
-    pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
-        let mut rng = StdRng::seed_from_u64(seed as u64);
-        let v = (0..len).map(|_| rng.gen()).collect_vec();
-        rune::runtime::Bytes::from_vec(v)
     }
 }
