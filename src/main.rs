@@ -9,7 +9,7 @@ use clap::Parser;
 use hdrhistogram::serialization::interval_log::Tag;
 use hdrhistogram::serialization::{interval_log, V2DeflateSerializer};
 use rune::Source;
-use tokio::runtime::Builder;
+use tokio::runtime::{Builder, Runtime};
 
 use config::RunCommand;
 
@@ -141,6 +141,8 @@ async fn load(conf: LoadCommand) -> Result<()> {
     eprintln!("info: Loading data...");
     let loader = Workload::new(session.clone()?, program.clone(), FnRef::new(LOAD_FN));
     let load_count = session.load_cycle_count;
+
+    println!("Thread count {}", conf.threads);
     let load_options = ExecutionOptions {
         duration: config::Interval::Count(load_count),
         rate: None,
@@ -348,15 +350,25 @@ async fn async_main(command: Command) -> Result<()> {
     Ok(())
 }
 
+fn init_runtime(thread_count: usize) -> std::io::Result<Runtime> {
+    if thread_count == 1 {
+        Builder::new_current_thread().enable_all().build()
+    } else {
+        Builder::new_multi_thread()
+            .worker_threads(thread_count)
+            .enable_all()
+            .build()
+    }
+}
+
 fn main() {
     let command = AppConfig::parse().command;
-    let runtime = match &command {
-        Command::Run(cmd) if cmd.threads.get() >= 1 => Builder::new_multi_thread()
-            .worker_threads(cmd.threads.get())
-            .enable_all()
-            .build(),
-        _ => Builder::new_current_thread().enable_all().build(),
+    let thread_count = match &command {
+        Command::Run(cmd) => cmd.threads.get(),
+        Command::Load(cmd) => cmd.threads.get(),
+        _ => 1,
     };
+    let runtime = init_runtime(thread_count);
     if let Err(e) = runtime.unwrap().block_on(async_main(command)) {
         eprintln!("error: {}", e);
         exit(128);
