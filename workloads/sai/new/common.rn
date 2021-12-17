@@ -1,7 +1,7 @@
 use latte::*;
 
 pub const KEYSPACE = latte::param!("keyspace", "latte");
-pub const TABLE = latte::param!("table", "sai_main");
+pub const TABLE = latte::param!("table", "sai_new");
 
 // Total number of rows in the table:
 pub const ROW_COUNT = latte::param!("rows", 100000);
