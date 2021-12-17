@@ -6,6 +6,12 @@ use std::path::PathBuf;
 
 #[derive(Debug, Error)]
 pub enum LatteError {
+    #[error(display = "Context data could not be serialized: {}", _0)]
+    ContextDataEncode(#[source] rmp_serde::encode::Error),
+
+    #[error(display = "Context data could not be deserialized: {}", _0)]
+    ContextDataDecode(#[source] rmp_serde::decode::Error),
+
     #[error(display = "Cassandra error: {}", _0)]
     Cassandra(#[source] CassError),
 

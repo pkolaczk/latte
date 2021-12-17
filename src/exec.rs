@@ -194,7 +194,7 @@ pub async fn par_execute(
             concurrency,
             rate.map(|r| r / (thread_count as f64)),
             sampling,
-            workload.clone(),
+            workload.clone()?,
             deadline.share(),
             signals.clone(),
             progress.clone(),

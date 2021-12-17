@@ -139,7 +139,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
 
     let interrupt = Arc::new(InterruptHandler::install());
     eprintln!("info: Loading data...");
-    let loader = Workload::new(session.clone(), program.clone(), FnRef::new(LOAD_FN));
+    let loader = Workload::new(session.clone()?, program.clone(), FnRef::new(LOAD_FN));
     let load_count = session.load_cycle_count;
     let load_options = ExecutionOptions {
         duration: config::Interval::Count(load_count),
@@ -199,7 +199,7 @@ async fn run(conf: RunCommand) -> Result<()> {
         }
     }
 
-    let runner = Workload::new(session.clone(), program.clone(), FnRef::new(RUN_FN));
+    let runner = Workload::new(session.clone()?, program.clone(), FnRef::new(RUN_FN));
     let interrupt = Arc::new(InterruptHandler::install());
     if conf.warmup_duration.is_not_zero() {
         eprintln!("info: Warming up...");
@@ -213,7 +213,7 @@ async fn run(conf: RunCommand) -> Result<()> {
             "Warming up...",
             &warmup_options,
             Interval::Unbounded,
-            runner.clone(),
+            runner.clone()?,
             interrupt.clone(),
             !conf.quiet,
         )
