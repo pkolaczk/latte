@@ -134,6 +134,9 @@ impl Program {
             .function(&["hash_range"], context::hash_range)
             .unwrap();
         latte_module
+            .function(&["hash_select"], context::hash_select)
+            .unwrap();
+        latte_module
             .function(&["uuid"], context::Uuid::new)
             .unwrap();
         latte_module.function(&["normal"], context::normal).unwrap();
@@ -154,11 +157,26 @@ impl Program {
         latte_module.inst_fn("clamp", context::clamp_float).unwrap();
         latte_module.inst_fn("clamp", context::clamp_int).unwrap();
 
+        let mut fs_module = Module::with_crate("fs");
+        fs_module
+            .function(&["read_lines"], context::read_lines)
+            .unwrap();
+        fs_module
+            .function(
+                &["read_resource_to_string"],
+                context::read_resource_to_string,
+            )
+            .unwrap();
+        fs_module
+            .function(&["read_resource_lines"], context::read_resource_lines)
+            .unwrap();
+
         let mut context = rune::Context::with_default_modules().unwrap();
         context.install(&context_module).unwrap();
         context.install(&err_module).unwrap();
         context.install(&uuid_module).unwrap();
         context.install(&latte_module).unwrap();
+        context.install(&fs_module).unwrap();
 
         let mut options = rune::Options::default();
         options.debug_info(true);

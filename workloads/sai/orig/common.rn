@@ -11,11 +11,11 @@ pub const READ_SIZE = latte::param!("read_size", 10);
 
 const WRITE = "write";
 
-pub async fn schema(db) {
-    db.execute(`
+pub async fn schema(ctx) {
+    ctx.execute(`
         CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE}
             WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1 }`).await?;
-    db.execute(`
+    ctx.execute(`
         CREATE TABLE IF NOT EXISTS ${KEYSPACE}.${TABLE} (
             id uuid,
             time timestamp,
@@ -25,32 +25,31 @@ pub async fn schema(db) {
             PRIMARY KEY (id)
         )`).await?;
 
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(value) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(lc) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(tag) USING 'StorageAttachedIndex'`).await?;
+    ctx.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time) USING 'StorageAttachedIndex'`).await?;
+    ctx.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(value) USING 'StorageAttachedIndex'`).await?;
+    ctx.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(lc) USING 'StorageAttachedIndex'`).await?;
+    ctx.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(tag) USING 'StorageAttachedIndex'`).await?;
     Ok(())
 }
 
-pub async fn erase(db) {
-    db.execute(`TRUNCATE TABLE ${KEYSPACE}.${TABLE}`).await?;
+pub async fn erase(ctx) {
+    ctx.execute(`TRUNCATE TABLE ${KEYSPACE}.${TABLE}`).await?;
     Ok(())
 }
 
-pub async fn prepare(db) {
-    db.load_cycle_count = ROW_COUNT;
-    db.prepare(WRITE,
-        `INSERT INTO ${KEYSPACE}.${TABLE}(id, time, value, lc, tag)
-         VALUES (?, ?, ?, ?, ?)`).await?;
+pub async fn prepare(ctx) {
+    ctx.load_cycle_count = ROW_COUNT;
+    ctx.prepare(WRITE, `INSERT INTO ${KEYSPACE}.${TABLE}(id, time, value, lc, tag) VALUES (?, ?, ?, ?, ?)`).await?;
+    ctx.data.tags = fs::read_resource_lines("variable_words.txt")?;
     Ok(())
 }
 
-pub async fn load(db, i) {
+pub async fn load(ctx, i) {
     let id = uuid(i);
     let time = i * 1000;
     let value = normal(i, 125.0, 25.0).clamp(0.0, 200.0).to_i32();
     let lc = normal(i, 2.2, 2.5).clamp(0.0, 5.0).to_i32();
-    let tag = "text text text";
-    db.execute_prepared(WRITE, [id, time, value, lc, tag]).await?;
+    let tag = hash_select(i, ctx.data.tags);
+    ctx.execute_prepared(WRITE, [id, time, value, lc, tag]).await?;
     Ok(())
 }

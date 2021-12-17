@@ -1,6 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io;
+use std::io::{BufRead, BufReader, ErrorKind};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -16,6 +20,7 @@ use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
 use rune::runtime::{Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
+use rust_embed::RustEmbed;
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
@@ -363,6 +368,10 @@ mod bind {
     }
 }
 
+#[derive(RustEmbed)]
+#[folder = "resources/"]
+struct Resources;
+
 #[derive(Clone, Debug, Any)]
 pub struct Uuid(pub uuid::Uuid);
 
@@ -493,4 +502,41 @@ pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
     let mut rng = StdRng::seed_from_u64(seed as u64);
     let v = (0..len).map(|_| rng.gen()).collect_vec();
     rune::runtime::Bytes::from_vec(v)
+}
+
+/// Selects one item from the collection based on the hash of the given value.
+pub fn hash_select(i: i64, collection: &[Value]) -> &Value {
+    &collection[hash_range(i, collection.len() as i64) as usize]
+}
+
+/// Reads a file into a vector of lines.
+pub fn read_lines(path: &str) -> io::Result<Vec<String>> {
+    let mut reader = BufReader::new(File::open(PathBuf::from(path))?);
+    let mut result = Vec::new();
+    let mut line = String::new();
+    while reader.read_line(&mut line)? != 0 {
+        result.push(line.clone());
+    }
+    Ok(result)
+}
+
+/// Reads a resource file as a string.
+pub fn read_resource_to_string(path: &str) -> io::Result<String> {
+    let resource = Resources::get(path).ok_or_else(|| {
+        io::Error::new(ErrorKind::NotFound, format!("Resource not found: {}", path))
+    })?;
+    let contents = std::str::from_utf8(resource.data.as_ref()).map_err(|e| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!("Invalid UTF8 string: {}", e),
+        )
+    })?;
+    Ok(contents.to_string())
+}
+
+pub fn read_resource_lines(path: &str) -> io::Result<Vec<String>> {
+    Ok(read_resource_to_string(path)?
+        .split('\n')
+        .map(|s| s.to_string())
+        .collect_vec())
 }
