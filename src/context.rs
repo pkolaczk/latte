@@ -1,18 +1,27 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use hdrhistogram::Histogram;
 use itertools::Itertools;
+use metrohash::{MetroHash128, MetroHash64};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use rune::ast;
+use rune::ast::Kind;
+use rune::macros::{quote, MacroContext, TokenStream};
+use rune::parse::Parser;
 use rune::runtime::TypeInfo;
 use rune::{Any, Value};
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
 use scylla::{QueryResult, SessionBuilder};
-
 use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
+use uuid::{Variant, Version};
 
 use crate::config::ConnectionConf;
 
@@ -258,11 +267,8 @@ impl Context {
 
 /// Functions for binding rune values to CQL parameters
 mod bind {
-    use scylla::frame::response::result::CqlValue;
-
-    use crate::workload::globals;
-    use crate::workload::globals::{Int16, Int32, Int8, Uuid};
     use crate::CassErrorKind;
+    use scylla::frame::response::result::CqlValue;
 
     use super::*;
 
@@ -288,7 +294,7 @@ mod bind {
                 let obj = obj.borrow_ref().unwrap();
                 let h = obj.type_hash();
                 if h == Uuid::type_hash() {
-                    let uuid: &globals::Uuid = obj.downcast_borrow_ref().unwrap();
+                    let uuid: &Uuid = obj.downcast_borrow_ref().unwrap();
                     Ok(CqlValue::Uuid(uuid.0))
                 } else if h == Int32::type_hash() {
                     let int32: &Int32 = obj.downcast_borrow_ref().unwrap();
@@ -336,4 +342,107 @@ mod bind {
         }
         Ok(values)
     }
+}
+
+#[derive(Clone, Debug, Any)]
+pub struct Uuid(pub uuid::Uuid);
+
+impl Uuid {
+    pub fn new(i: i64) -> Uuid {
+        let mut hash = MetroHash128::new();
+        i.hash(&mut hash);
+        let (h1, h2) = hash.finish128();
+        let h = ((h1 as u128) << 64) | (h2 as u128);
+        Uuid(
+            uuid::Builder::from_u128(h)
+                .set_variant(Variant::RFC4122)
+                .set_version(Version::Random)
+                .build(),
+        )
+    }
+
+    pub fn display(&self, buf: &mut String) -> std::fmt::Result {
+        use std::fmt::Write;
+        write!(buf, "{}", self.0)
+    }
+}
+
+#[derive(Clone, Debug, Any)]
+pub struct Int8(pub i8);
+
+#[derive(Clone, Debug, Any)]
+pub struct Int16(pub i16);
+
+#[derive(Clone, Debug, Any)]
+pub struct Int32(pub i32);
+
+/// Returns the literal value stored in the `params` map under the key given as the first
+/// macro arg, and if not found, returns the expression from the second arg.
+pub fn param(
+    ctx: &mut MacroContext,
+    params: &HashMap<String, String>,
+    ts: &TokenStream,
+) -> rune::Result<TokenStream> {
+    let mut parser = Parser::from_token_stream(ts, ctx.macro_span());
+    let name = parser.parse::<ast::LitStr>()?;
+    let name = ctx.resolve(name)?.to_string();
+    let sep = parser.next()?;
+    if sep.kind != Kind::Comma {
+        return Err(anyhow!("Expected comma"));
+    }
+    let expr = parser.parse::<ast::Expr>()?;
+    let rhs = match params.get(&name) {
+        Some(value) => {
+            let src_id = ctx.insert_source(&name, value);
+            let value = ctx.parse_source::<ast::Expr>(src_id)?;
+            quote!(#value)
+        }
+        None => quote!(#expr),
+    };
+    Ok(rhs.into_token_stream(ctx))
+}
+
+/// Converts a Rune integer to i8 (Cassandra tinyint)
+pub fn to_i8(value: i64) -> Option<Int8> {
+    Some(Int8(value.try_into().ok()?))
+}
+
+/// Converts a Rune integer to i16 (Cassandra smallint)
+pub fn to_i16(value: i64) -> Option<Int16> {
+    Some(Int16(value.try_into().ok()?))
+}
+
+/// Converts a Rune integer to i32 (Cassandra int)
+pub fn to_i32(value: i64) -> Option<Int32> {
+    Some(Int32(value.try_into().ok()?))
+}
+
+/// Computes a hash of an integer value `i`.
+/// Returns a value in range `0..i64::MAX`.
+pub fn hash(i: i64) -> i64 {
+    let mut hash = MetroHash64::new();
+    i.hash(&mut hash);
+    (hash.finish() & 0x7FFFFFFFFFFFFFFF) as i64
+}
+
+/// Computes hash of two integer values.
+pub fn hash2(a: i64, b: i64) -> i64 {
+    let mut hash = MetroHash64::new();
+    a.hash(&mut hash);
+    b.hash(&mut hash);
+    (hash.finish() & 0x7FFFFFFFFFFFFFFF) as i64
+}
+
+/// Computes a hash of an integer value `i`.
+/// Returns a value in range `0..max`.
+pub fn hash_range(i: i64, max: i64) -> i64 {
+    hash(i) % max
+}
+
+/// Generates random blob of data of given length.
+/// Parameter `seed` is used to seed the RNG.
+pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
+    let mut rng = StdRng::seed_from_u64(seed as u64);
+    let v = (0..len).map(|_| rng.gen()).collect_vec();
+    rune::runtime::Bytes::from_vec(v)
 }
