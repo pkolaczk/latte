@@ -1,0 +1,56 @@
+use latte::*;
+
+pub const KEYSPACE = latte::param!("keyspace", "latte");
+pub const TABLE = latte::param!("table", "sai_orig");
+
+// Total number of rows in the table:
+pub const ROW_COUNT = latte::param!("rows", 100000);
+
+// Limit on the number of rows to fetch in a single query:
+pub const READ_SIZE = latte::param!("read_size", 10);
+
+const WRITE = "write";
+
+pub async fn schema(db) {
+    db.execute(`
+        CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE}
+            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1 }`).await?;
+    db.execute(`
+        CREATE TABLE IF NOT EXISTS ${KEYSPACE}.${TABLE} (
+            id uuid,
+            time timestamp,
+            value int,
+            lc int,
+            tag text,
+            PRIMARY KEY (id)
+        )`).await?;
+
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(value) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(lc) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(tag) USING 'StorageAttachedIndex'`).await?;
+    Ok(())
+}
+
+pub async fn erase(db) {
+    db.execute(`TRUNCATE TABLE ${KEYSPACE}.${TABLE}`).await?;
+    Ok(())
+}
+
+pub async fn prepare(db) {
+    db.load_cycle_count = ROW_COUNT;
+    db.prepare(WRITE,
+        `INSERT INTO ${KEYSPACE}.${TABLE}(id, time, value, lc, tag)
+         VALUES (?, ?, ?, ?, ?)`).await?;
+    Ok(())
+}
+
+pub async fn load(db, i) {
+    let id = uuid(i);
+    let time = i * 1000;
+    let value = i32(i);
+    let lc = i32(hash2(i, 3) % 1000);
+    let tag = "text text text";
+    db.execute_prepared(WRITE, [id, time, value, lc, tag]).await?;
+    Ok(())
+}
