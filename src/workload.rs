@@ -363,18 +363,6 @@ pub struct Workload {
     state: TryLock<WorkloadState>,
 }
 
-impl Clone for Workload {
-    fn clone(&self) -> Self {
-        Workload {
-            context: self.context.clone(),
-            // make a deep copy to avoid congestion on Arc ref counts used heavily by Rune
-            program: self.program.unshare(),
-            function: self.function,
-            state: TryLock::new(WorkloadState::default()),
-        }
-    }
-}
-
 impl Workload {
     pub fn new(context: Context, program: Program, function: FnRef) -> Workload {
         Workload {
@@ -383,6 +371,16 @@ impl Workload {
             function,
             state: TryLock::new(WorkloadState::default()),
         }
+    }
+
+    pub fn clone(&self) -> Result<Self, LatteError> {
+        Ok(Workload {
+            context: self.context.clone()?,
+            // make a deep copy to avoid congestion on Arc ref counts used heavily by Rune
+            program: self.program.unshare(),
+            function: self.function,
+            state: TryLock::new(WorkloadState::default()),
+        })
     }
 
     /// Executes a single cycle of a workload.

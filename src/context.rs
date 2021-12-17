@@ -14,7 +14,7 @@ use rune::ast;
 use rune::ast::Kind;
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
-use rune::runtime::{TypeInfo, VmError};
+use rune::runtime::{Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
@@ -26,6 +26,7 @@ use try_lock::TryLock;
 use uuid::{Variant, Version};
 
 use crate::config::ConnectionConf;
+use crate::LatteError;
 
 /// Configures connection to Cassandra.
 pub async fn connect(conf: &ConnectionConf) -> Result<scylla::Session, CassError> {
@@ -172,19 +173,18 @@ pub struct Context {
     stats: TryLock<SessionStats>,
     #[rune(get, set, add_assign, copy)]
     pub load_cycle_count: u64,
+    #[rune(get)]
+    pub data: Value,
 }
 
-impl Clone for Context {
-    /// Clones the session. The new clone gets fresh statistics.
-    fn clone(&self) -> Self {
-        Context {
-            session: self.session.clone(),
-            statements: self.statements.clone(),
-            stats: TryLock::new(SessionStats::default()),
-            load_cycle_count: self.load_cycle_count,
-        }
-    }
-}
+// Needed, because Rune `Value` is !Send, as it may contain some internal pointers.
+// Therefore it is not safe to pass a `Value` to another thread by cloning it, because
+// both objects could accidentally share some unprotected, `!Sync` data.
+// To make it safe, the same `Context` is never used by more than one thread at once and
+// we make sure in `clone` to make a deep copy of the `data` field by serializing
+// and deserializing it, so no pointers could get through.
+unsafe impl Send for Context {}
+unsafe impl Sync for Context {}
 
 impl Context {
     pub fn new(session: scylla::Session) -> Context {
@@ -193,7 +193,24 @@ impl Context {
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
             load_cycle_count: 0,
+            data: Value::Object(Shared::new(Object::new())),
         }
+    }
+
+    /// Clones the context for use by another thread.
+    /// The new clone gets fresh statistics.
+    /// The user data gets passed through serialization and deserialization to avoid
+    /// accidental data sharing.
+    pub fn clone(&self) -> Result<Self, LatteError> {
+        let serialized = rmp_serde::to_vec(&self.data)?;
+        let deserialized: Value = rmp_serde::from_slice(&serialized)?;
+        Ok(Context {
+            session: self.session.clone(),
+            statements: self.statements.clone(),
+            stats: TryLock::new(SessionStats::default()),
+            load_cycle_count: self.load_cycle_count,
+            data: deserialized,
+        })
     }
 
     /// Returns cluster metadata such as cluster name and cassandra version.
