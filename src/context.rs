@@ -261,7 +261,7 @@ mod bind {
     use scylla::frame::response::result::CqlValue;
 
     use crate::workload::globals;
-    use crate::workload::globals::Uuid;
+    use crate::workload::globals::{Int16, Int32, Int8, Uuid};
     use crate::CassErrorKind;
 
     use super::*;
@@ -286,9 +286,19 @@ mod bind {
             }
             Value::Any(obj) => {
                 let obj = obj.borrow_ref().unwrap();
-                if obj.type_hash() == Uuid::type_hash() {
+                let h = obj.type_hash();
+                if h == Uuid::type_hash() {
                     let uuid: &globals::Uuid = obj.downcast_borrow_ref().unwrap();
                     Ok(CqlValue::Uuid(uuid.0))
+                } else if h == Int32::type_hash() {
+                    let int32: &Int32 = obj.downcast_borrow_ref().unwrap();
+                    Ok(CqlValue::Int(int32.0))
+                } else if h == Int16::type_hash() {
+                    let int16: &Int16 = obj.downcast_borrow_ref().unwrap();
+                    Ok(CqlValue::SmallInt(int16.0))
+                } else if h == Int8::type_hash() {
+                    let int8: &Int8 = obj.downcast_borrow_ref().unwrap();
+                    Ok(CqlValue::TinyInt(int8.0))
                 } else {
                     Err(CassError(CassErrorKind::UnsupportedType(
                         v.type_info().unwrap(),

@@ -127,6 +127,9 @@ impl Program {
             .unwrap();
 
         let mut latte_module = Module::with_crate("latte");
+        latte_module.function(&["i32"], globals::to_i32).unwrap();
+        latte_module.function(&["i16"], globals::to_i16).unwrap();
+        latte_module.function(&["i8"], globals::to_i8).unwrap();
         latte_module.function(&["blob"], globals::blob).unwrap();
         latte_module.function(&["hash"], globals::hash).unwrap();
         latte_module.function(&["hash2"], globals::hash2).unwrap();
@@ -467,6 +470,16 @@ pub mod globals {
         }
     }
 
+    #[derive(Clone, Debug, Any)]
+    pub struct Int8(pub i8);
+
+    #[derive(Clone, Debug, Any)]
+    pub struct Int16(pub i16);
+
+    #[derive(Clone, Debug, Any)]
+    pub struct Int32(pub i32);
+
+
     /// Returns the literal value stored in the `params` map under the key given as the first
     /// macro arg, and if not found, returns the expression from the second arg.
     pub fn param(
@@ -491,6 +504,22 @@ pub mod globals {
             None => quote!(#expr),
         };
         Ok(rhs.into_token_stream(ctx))
+    }
+
+
+    /// Converts a Rune integer to i8 (Cassandra tinyint)
+    pub fn to_i8(value: i64) -> Option<Int8> {
+        Some(Int8(value.try_into().ok()?))
+    }
+
+    /// Converts a Rune integer to i16 (Cassandra smallint)
+    pub fn to_i16(value: i64) -> Option<Int16> {
+        Some(Int16(value.try_into().ok()?))
+    }
+
+    /// Converts a Rune integer to i32 (Cassandra int)
+    pub fn to_i32(value: i64) -> Option<Int32> {
+        Some(Int32(value.try_into().ok()?))
     }
 
     /// Computes a hash of an integer value `i`.
