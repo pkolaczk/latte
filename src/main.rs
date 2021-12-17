@@ -141,8 +141,6 @@ async fn load(conf: LoadCommand) -> Result<()> {
     eprintln!("info: Loading data...");
     let loader = Workload::new(session.clone()?, program.clone(), FnRef::new(LOAD_FN));
     let load_count = session.load_cycle_count;
-
-    println!("Thread count {}", conf.threads);
     let load_options = ExecutionOptions {
         duration: config::Interval::Count(load_count),
         rate: None,
