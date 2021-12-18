@@ -107,10 +107,6 @@ async fn connect(conf: &ConnectionConf) -> Result<(Context, Option<ClusterInfo>)
 
 async fn load(conf: LoadCommand) -> Result<()> {
     let mut program = load_workload_script(&conf.workload, &conf.params)?;
-    if !program.has_load() {
-        eprintln!("error: Function `load` not found in the workload script.");
-        exit(255);
-    }
     let (mut session, _) = connect(&conf.connection).await?;
 
     if program.has_schema() {
@@ -129,6 +125,12 @@ async fn load(conf: LoadCommand) -> Result<()> {
         }
     }
 
+    let load_count = session.load_cycle_count;
+    if load_count > 0 && !program.has_load() {
+        eprintln!("error: Function `load` not found in the workload script.");
+        exit(255);
+    }
+
     if program.has_erase() {
         eprintln!("info: Erasing data...");
         if let Err(e) = program.erase(&mut session).await {
@@ -140,7 +142,6 @@ async fn load(conf: LoadCommand) -> Result<()> {
     let interrupt = Arc::new(InterruptHandler::install());
     eprintln!("info: Loading data...");
     let loader = Workload::new(session.clone()?, program.clone(), FnRef::new(LOAD_FN));
-    let load_count = session.load_cycle_count;
     let load_options = ExecutionOptions {
         duration: config::Interval::Count(load_count),
         rate: None,

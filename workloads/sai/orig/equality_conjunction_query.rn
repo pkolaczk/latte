@@ -1,0 +1,9 @@
+pub async fn prepare(ctx) {
+    ctx.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE lc = ? AND value = ? LIMIT ${READ_SIZE}`).await?;
+}
+
+pub async fn run(ctx, i) {
+    let lc = normal(i, 2.2, 2.5).clamp(0.0, 5.0).to_i32();
+    let value = normal(i, 125.0, 25.0).clamp(0.0, 200.0).to_i32();
+    ctx.execute_prepared(READ, [lc, value]).await?;
+}

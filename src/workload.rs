@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -182,9 +183,7 @@ impl Program {
         options.debug_info(true);
 
         let mut diagnostics = Diagnostics::new();
-        let mut sources = Sources::new();
-        sources.insert(source);
-
+        let mut sources = Self::load_sources(source)?;
         let unit = rune::prepare(&mut sources)
             .with_context(&context)
             .with_diagnostics(&mut diagnostics)
@@ -201,6 +200,29 @@ impl Program {
             context: Arc::new(context.runtime()),
             unit: Arc::new(unit),
         })
+    }
+
+    fn load_sources(source: Source) -> Result<Sources, LatteError> {
+        let mut sources = Sources::new();
+        if let Some(path) = source.path() {
+            if let Some(parent) = path.parent() {
+                Self::try_insert_lib_source(parent, &mut sources)?
+            }
+        }
+        sources.insert(source);
+        Ok(sources)
+    }
+
+    // Tries to add `lib.rn` to `sources` if it exists in the same directory as the main source.
+    fn try_insert_lib_source(parent: &Path, sources: &mut Sources) -> Result<(), LatteError> {
+        let lib_src = parent.join("lib.rn");
+        if lib_src.is_file() {
+            sources.insert(
+                Source::from_path(&lib_src)
+                    .map_err(|e| LatteError::ScriptRead(lib_src.clone(), e))?,
+            );
+        }
+        Ok(())
     }
 
     /// Makes a deep copy of context and unit.

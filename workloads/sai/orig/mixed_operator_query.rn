@@ -1,0 +1,15 @@
+pub async fn prepare(ctx) {
+    ctx.data.tags = fs::read_resource_lines("variable_words.txt")?;
+    ctx.prepare(READ,
+        `SELECT * FROM ${KEYSPACE}.${TABLE}
+         WHERE time > ? AND time < ? OR lc = ? OR value = ? OR tag = ? LIMIT ${READ_SIZE}`).await?;
+}
+
+pub async fn run(ctx, i) {
+    let low = hash_range(i, ROW_COUNT) * 1000;
+    let high = low + 10000;
+    let lc = normal(i, 2.2, 2.5).clamp(0.0, 5.0).to_i32();
+    let value = normal(i, 125.0, 25.0).clamp(0.0, 200.0).to_i32();
+    let tag = hash_select(i, ctx.data.tags);
+    ctx.execute_prepared(READ, [low, high, lc, value, tag]).await?;
+}

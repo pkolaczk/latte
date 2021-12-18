@@ -1,0 +1,9 @@
+pub async fn prepare(ctx) {
+    ctx.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE tag = ? LIMIT ${READ_SIZE}`).await?;
+    ctx.data.tags = fs::read_resource_lines("variable_words.txt")?;
+}
+
+pub async fn run(ctx, i) {
+    let tag = hash_select(i, ctx.data.tags);
+    ctx.execute_prepared(READ, [tag]).await?;
+}

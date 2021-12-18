@@ -1,0 +1,9 @@
+pub async fn prepare(ctx) {
+    ctx.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE time > ? AND time < ? LIMIT ${READ_SIZE}`).await?;
+}
+
+pub async fn run(ctx, i) {
+    let low = hash_range(i, ROW_COUNT) * 1000;
+    let high = low + 10000;
+    ctx.execute_prepared(READ, [low, high]).await?;
+}

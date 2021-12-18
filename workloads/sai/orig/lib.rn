@@ -9,7 +9,11 @@ pub const ROW_COUNT = latte::param!("rows", 100000);
 // Limit on the number of rows to fetch in a single query:
 pub const READ_SIZE = latte::param!("read_size", 10);
 
-const WRITE = "write";
+
+// Helper constants for identifying prepared statements:
+pub const READ = "read";
+pub const WRITE = "write";
+
 
 pub async fn schema(ctx) {
     ctx.execute(`
@@ -37,14 +41,14 @@ pub async fn erase(ctx) {
     Ok(())
 }
 
-pub async fn prepare(ctx) {
+pub async fn prepare_write(ctx) {
     ctx.load_cycle_count = ROW_COUNT;
     ctx.prepare(WRITE, `INSERT INTO ${KEYSPACE}.${TABLE}(id, time, value, lc, tag) VALUES (?, ?, ?, ?, ?)`).await?;
     ctx.data.tags = fs::read_resource_lines("variable_words.txt")?;
     Ok(())
 }
 
-pub async fn load(ctx, i) {
+pub async fn write_row(ctx, i) {
     let id = uuid(i);
     let time = i * 1000;
     let value = normal(i, 125.0, 25.0).clamp(0.0, 200.0).to_i32();
