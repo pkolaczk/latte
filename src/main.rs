@@ -296,6 +296,12 @@ async fn show(conf: ShowCommand) -> Result<()> {
 
 /// Reads histograms from the report and dumps them to an hdr log
 async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
+    let tag_prefix = conf.tag.map(|t| t + ".").unwrap_or_else(|| "".to_string());
+    if tag_prefix.chars().any(|c| ", \n\t".contains(c)) {
+        eprintln!("error: Hdr histogram tags are not allowed to contain commas nor whitespace.");
+        exit(255);
+    }
+
     let report = load_report_or_abort(&conf.report);
     let stdout = stdout();
     let output_file: File;
@@ -327,13 +333,13 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
             &sample.cycle_time_histogram_ns.0,
             interval_start_time,
             interval_duration,
-            Tag::new("cycles"),
+            Tag::new(format!("{}cycles", tag_prefix).as_str()),
         )?;
         log_writer.write_histogram(
             &sample.resp_time_histogram_ns.0,
             interval_start_time,
             interval_duration,
-            Tag::new("requests"),
+            Tag::new(format!("{}requests", tag_prefix).as_str()),
         )?;
     }
     Ok(())
