@@ -1,0 +1,9 @@
+pub async fn prepare(ctx) {
+    prepare_write(ctx).await;
+    ctx.load_cycle_count = ROW_COUNT;
+}
+
+pub async fn load(ctx, i) {
+    write_row(ctx, i).await
+}
+
