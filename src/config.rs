@@ -262,6 +262,10 @@ pub struct HdrCommand {
     /// Output file; if not given, the hdr log gets printed to stdout
     #[clap(short('o'), long, value_name = "PATH")]
     pub output: Option<PathBuf>,
+
+    /// Optional tag prefix to add to each histogram
+    #[clap(long, value_name = "STRING")]
+    pub tag: Option<String>,
 }
 
 #[derive(Parser, Debug)]
