@@ -180,7 +180,6 @@ pub async fn erase(ctx) {
 }
 ```
 
-
 ### Generating data
 
 Latte comes with a library of data generating functions. They are accessible in the `latte` crate. Typically, those
@@ -191,7 +190,49 @@ are pure, i.e. invoking them multiple times with the same parameters yields alwa
 - `latte::hash(i)` – generates a non-negative integer hash value
 - `latte::hash2(a, b)` – generates a non-negative integer hash value of two integers
 - `latte::hash_range(i, max)` – generates an integer value in range `0..max`
+- `latte::hash_select(i, vector)` – selects an item from a vector based on a hash
 - `latte::blob(i, len)` – generates a random binary blob of length `len`
+- `latte::normal(i, mean, std_dev)` – generates a floating point number from a normal distribution
+
+#### Numeric conversions
+
+Rune represents integers as 64-bit signed values. Therefore, it is possible to directly pass a Rune integer to
+a Cassandra column of type `bigint`. However, binding a 64-bit value to smaller integer column types, like
+`int`, `smallint` or `tinyint` will result in a runtime error. As long as an integer value does not exceed the bounds,
+you can convert it to smaller signed  integer types by using the following instance functions:
+
+- `x.to_i32()` – converts a float or integer to a 32-bit signed integer, compatible with Cassandra `int` type
+- `x.to_i16()` – converts a float or integer to a 16-bit signed integer, compatible with Cassandra `smallint` type
+- `x.to_i8()` – converts a float or integer to an 8-bit signed integer, compatible with Cassandra `tinyint` type
+- `x.clamp(min, max)` – restricts the range of an integer or a float value to given range  
+
+You can also convert between floats and integers by calling `to_integer` or `to_float` instance functions.
+
+#### Text resources
+
+Text data can be loaded from files or resources with functions in the `fs` module:
+- `fs::read_to_string(file_path)` – returns file contents as a string
+- `fs::read_lines(file_path)` – reads file lines into a vector of strings
+- `fs::read_resource_to_string(resource_name)` – returns builtin resource contents as a string
+- `fs::read_resource_lines(resource_name)` – returns builtin resource lines as a vector of strings
+
+The resources are embedded in the program binary. You can find them under `resources` folder in the 
+source tree. 
+
+To reduce the cost of memory allocation, it is best to load resources in the `prepare` function only once 
+and store them in the `data` field of the context for future use in `load` and `run`: 
+
+```rust
+pub async fn prepare(ctx) {
+  ctx.data.last_names = fs::read_resource_lines("lastnames.txt")?;
+  // ... prepare queries
+}
+
+pub async fn run(ctx, i) {
+  let random_last_name = latte::hash_select(i, ctx.data.last_names);
+  // ... use random_last_name in queries
+}
+```
 
 ### Parameterizing workloads
 
