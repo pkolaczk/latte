@@ -257,7 +257,7 @@ where
     /// Unit of measurement
     pub unit: String,
     /// 1 means the more of the quantity the better, -1 means the more of it the worse, 0 is neutral
-    pub goodness: i8,
+    pub orientation: i8,
     /// First object to measure
     pub v1: V,
     /// Second object to measure
@@ -274,11 +274,11 @@ where
     V: Copy,
     F: Fn(V) -> M,
 {
-    fn new(label: String, unit: String, goodness: i8, v1: V, v2: Option<V>, f: F) -> Self {
+    fn new(label: String, unit: String, orientation: i8, v1: V, v2: Option<V>, f: F) -> Self {
         Line {
             label,
             unit,
-            goodness,
+            orientation,
             v1,
             v2,
             significance: None,
@@ -290,8 +290,8 @@ where
         Box::new(self)
     }
 
-    fn with_orientation(mut self, goodness: i8) -> Self {
-        self.goodness = goodness;
+    fn with_orientation(mut self, orientation: i8) -> Self {
+        self.orientation = orientation;
         self
     }
 
@@ -365,7 +365,7 @@ where
             unit = style(self.fmt_unit()).yellow(),
             m1 = pad_str(m1.as_str(), 30, Alignment::Left, None),
             m2 = pad_str(m2.as_str(), 30, Alignment::Left, None),
-            cmp = self.fmt_relative_change(self.goodness, is_significant),
+            cmp = self.fmt_relative_change(self.orientation, is_significant),
             signif = match &self.significance {
                 Some(s) => format!("{}", s),
                 None => "".to_owned(),
@@ -668,7 +668,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
                             .resp_time_ms
                             .as_ref()
                             .map(|rt| rt.percentiles[*p as usize]);
-                        Quantity::from(rt)
+                        Quantity::from(rt).with_precision(3)
                     })
                     .with_orientation(-1)
                     .with_significance(self.cmp_resp_time_percentile(*p));
