@@ -20,7 +20,9 @@ pub async fn schema(ctx) {
         CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE}
             WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1 }`).await?;
     ctx.execute(`
-        CREATE TABLE IF NOT EXISTS ${KEYSPACE}.${TABLE} (
+        DROP TABLE IF EXISTS ${KEYSPACE}.${TABLE}`).await?;
+    ctx.execute(`
+        CREATE TABLE ${KEYSPACE}.${TABLE} (
             id uuid,
             time timestamp,
             value int,

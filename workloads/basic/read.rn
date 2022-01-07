@@ -11,7 +11,8 @@ const TABLE = "basic";
 pub async fn schema(ctx) {
     ctx.execute(`CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE} \
                     WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }`).await?;
-    ctx.execute(`CREATE TABLE IF NOT EXISTS ${KEYSPACE}.${TABLE}(id bigint PRIMARY KEY)`).await?;
+    ctx.execute(`DROP TABLE IF EXISTS ${KEYSPACE}.${TABLE}`).await?;
+    ctx.execute(`CREATE TABLE ${KEYSPACE}.${TABLE}(id bigint PRIMARY KEY)`).await?;
 }
 
 pub async fn erase(ctx) {
