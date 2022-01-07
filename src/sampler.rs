@@ -45,8 +45,8 @@ impl<'a> Sampler<'a> {
         // Don't snapshot if we're too close to the end of the run,
         // to avoid excessively small samples:
         let far_from_the_end = match self.run_duration {
-            config::Interval::Time(d) => now < self.start_time + d - current_interval_duration / 2,
-            config::Interval::Count(count) => cycle < count - current_interval_cycle_count / 2,
+            config::Interval::Time(d) => now + current_interval_duration / 2 < self.start_time + d,
+            config::Interval::Count(count) => cycle + current_interval_cycle_count / 2 < count,
             config::Interval::Unbounded => true,
         };
 
