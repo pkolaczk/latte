@@ -39,8 +39,8 @@ impl<'a> Sampler<'a> {
     /// Should be called when a workload iteration finished.
     /// If there comes the time, it will send the stats to the output.
     pub async fn cycle_completed(&mut self, cycle: u64, now: Instant) {
-        let current_interval_duration = now - self.last_snapshot_time;
-        let current_interval_cycle_count = cycle - self.last_snapshot_cycle;
+        let current_interval_duration = now.saturating_duration_since(self.last_snapshot_time);
+        let current_interval_cycle_count = cycle.saturating_sub(self.last_snapshot_cycle);
 
         // Don't snapshot if we're too close to the end of the run,
         // to avoid excessively small samples:
