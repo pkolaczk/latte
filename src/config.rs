@@ -101,6 +101,26 @@ pub struct ConnectionConf {
     setting(AppSettings::NextLineHelp),
     setting(AppSettings::DeriveDisplayOrder)
 )]
+pub struct SchemaCommand {
+    /// Parameter values passed to the workload, accessible through param! macro.
+    #[clap(short('P'), parse(try_from_str = parse_key_val),
+    number_of_values = 1, multiple_occurrences = true)]
+    pub params: Vec<(String, String)>,
+
+    /// Path to the workload definition file.
+    #[clap(name = "workload", required = true, value_name = "PATH")]
+    pub workload: PathBuf,
+
+    // Cassandra connection settings.
+    #[clap(flatten)]
+    pub connection: ConnectionConf,
+}
+
+#[derive(Parser, Debug, Serialize, Deserialize)]
+#[clap(
+    setting(AppSettings::NextLineHelp),
+    setting(AppSettings::DeriveDisplayOrder)
+)]
 pub struct LoadCommand {
     /// Number of worker threads used by the driver.
     #[clap(short('t'), long, default_value = "1", value_name = "COUNT")]
@@ -271,7 +291,17 @@ pub struct HdrCommand {
 #[derive(Parser, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// Generates the data needed for the benchmark (typically needed by read benchmarks).
+    /// Creates the database schema by invoking the `schema` function of the workload script.
+    ///
+    /// The function should remove the old schema if present.
+    /// Calling this is likely to remove data from the database.
+    Schema(SchemaCommand),
+
+    /// Erases and generates fresh data needed for the benchmark by invoking the `erase` and `load`
+    /// functions of the workload script.
+    ///
+    /// Running this command is typically needed by read benchmarks.
+    /// You need to create the schema before.
     Load(LoadCommand),
 
     /// Runs the benchmark.
@@ -285,13 +315,11 @@ pub enum Command {
     /// Can compare two runs.
     Show(ShowCommand),
 
-    /// Exports call- and response-time histograms as a compressed HDR interval log.
+    /// Exports histograms as a compressed HDR interval log.
     ///
     /// To be used with HdrHistogram (https://github.com/HdrHistogram/HdrHistogram).
     /// Timestamps are given in seconds since Unix epoch.
     /// Response times are recorded in nanoseconds.
-    ///
-    /// Each histogram is tagged by the benchmark name, parameters and benchmark tags.
     Hdr(HdrCommand),
 }
 

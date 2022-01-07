@@ -85,6 +85,7 @@ Latte is still early stage software under intensive development.
 Start a Cassandra cluster somewhere (can be a local node). Then run:
 
 ```shell
+latte schema <workload.rn> [<node address>] # create the database schema 
 latte load <workload.rn> [<node address>]   # populate the database with data
 latte run <workload.rn> [<node address>]    # execute the workload and measure the performance 
  ```
@@ -124,13 +125,16 @@ Instance functions on `ctx` are asynchronous, so you should call `await` on them
 
 ### Schema creation
 
-You can create your own keyspaces and tables in the `schema` function:
+You can (re)create your own keyspaces and tables needed by the benchmark in the `schema` function.
+The `schema` function should also drop the old schema if present.
+The `schema` function is executed by running `latte schema` command.
 
 ```rust
 pub async fn schema(ctx) {
   ctx.execute("CREATE KEYSPACE IF NOT EXISTS test \
                  WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }").await?;
-  ctx.execute("CREATE TABLE IF NOT EXISTS test.test(id bigint, data varchar").await?;
+  ctx.execute("DROP TABLE IF NOT EXISTS test.test").await?;
+  ctx.execute("CREATE TABLE test.test(id bigint, data varchar)").await?;
 }
 ```
 

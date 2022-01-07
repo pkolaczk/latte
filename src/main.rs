@@ -14,7 +14,8 @@ use tokio::runtime::{Builder, Runtime};
 use config::RunCommand;
 
 use crate::config::{
-    AppConfig, Command, ConnectionConf, HdrCommand, Interval, LoadCommand, ShowCommand,
+    AppConfig, Command, ConnectionConf, HdrCommand, Interval, LoadCommand, SchemaCommand,
+    ShowCommand,
 };
 use crate::context::*;
 use crate::context::{CassError, CassErrorKind, Context, SessionStats};
@@ -105,17 +106,29 @@ async fn connect(conf: &ConnectionConf) -> Result<(Context, Option<ClusterInfo>)
     Ok((session, cluster_info))
 }
 
+/// Runs the `schema` function of the workload script.
+/// Exits with error if the `schema` function is not present or fails.
+async fn schema(conf: SchemaCommand) -> Result<()> {
+    let mut program = load_workload_script(&conf.workload, &conf.params)?;
+    let (mut session, _) = connect(&conf.connection).await?;
+    if !program.has_schema() {
+        eprintln!("error: Function `schema` not found in the workload script.");
+        exit(255);
+    }
+    eprintln!("info: Creating schema...");
+    if let Err(e) = program.schema(&mut session).await {
+        eprintln!("error: Failed to create schema: {}", e);
+        exit(255);
+    }
+    eprintln!("info: Schema created successfully");
+    Ok(())
+}
+
+/// Loads the data into the database.
+/// Exits with error if the `load` function is not present or fails.
 async fn load(conf: LoadCommand) -> Result<()> {
     let mut program = load_workload_script(&conf.workload, &conf.params)?;
     let (mut session, _) = connect(&conf.connection).await?;
-
-    if program.has_schema() {
-        eprintln!("info: Creating schema...");
-        if let Err(e) = program.schema(&mut session).await {
-            eprintln!("error: Failed to create schema: {}", e);
-            exit(255);
-        }
-    }
 
     if program.has_prepare() {
         eprintln!("info: Preparing...");
@@ -182,14 +195,6 @@ async fn run(conf: RunCommand) -> Result<()> {
     if let Some(cluster_info) = cluster_info {
         conf.cluster_name = Some(cluster_info.name);
         conf.cass_version = Some(cluster_info.cassandra_version);
-    }
-
-    if program.has_schema() {
-        eprintln!("info: Creating schema...");
-        if let Err(e) = program.schema(&mut session).await {
-            eprintln!("error: Failed to create schema: {}", e);
-            exit(255);
-        }
     }
 
     if program.has_prepare() {
@@ -347,6 +352,7 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
 
 async fn async_main(command: Command) -> Result<()> {
     match command {
+        Command::Schema(config) => schema(config).await?,
         Command::Load(config) => load(config).await?,
         Command::Run(config) => run(config).await?,
         Command::Show(config) => show(config).await?,
