@@ -94,6 +94,30 @@ pub struct ConnectionConf {
     /// List of Cassandra addresses to connect to.
     #[clap(name = "addresses", default_value = "localhost")]
     pub addresses: Vec<String>,
+
+    /// Cassandra user name
+    #[clap(long, env("CASSANDRA_USER"), default_value = "")]
+    pub user: String,
+
+    /// Password to use if password authentication is required by the server
+    #[clap(long, env("CASSANDRA_PASSWORD"), default_value = "")]
+    pub password: String,
+
+    /// Enable SSL
+    #[clap(long("ssl"))]
+    pub ssl: bool,
+
+    /// Path to the CA certificate file in PEM format
+    #[clap(long("ssl-ca"), value_name = "PATH")]
+    pub ssl_ca_cert_file: Option<PathBuf>,
+
+    /// Path to the client SSL certificate file in PEM format
+    #[clap(long("ssl-cert"), value_name = "PATH")]
+    pub ssl_cert_file: Option<PathBuf>,
+
+    /// Path to the client SSL private key file in PEM format
+    #[clap(long("ssl-key"), value_name = "PATH")]
+    pub ssl_key_file: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize)]

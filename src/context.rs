@@ -11,6 +11,8 @@ use anyhow::anyhow;
 use hdrhistogram::Histogram;
 use itertools::Itertools;
 use metrohash::{MetroHash128, MetroHash64};
+use openssl::error::ErrorStack;
+use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
 use rand::distributions::Distribution;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -33,11 +35,31 @@ use uuid::{Variant, Version};
 use crate::config::ConnectionConf;
 use crate::LatteError;
 
+fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
+    if conf.ssl {
+        let mut ssl = SslContextBuilder::new(SslMethod::tls())?;
+        if let Some(path) = &conf.ssl_ca_cert_file {
+            ssl.set_ca_file(path)?;
+        }
+        if let Some(path) = &conf.ssl_cert_file {
+            ssl.set_certificate_file(path, SslFiletype::PEM)?;
+        }
+        if let Some(path) = &conf.ssl_key_file {
+            ssl.set_private_key_file(path, SslFiletype::PEM)?;
+        }
+        Ok(Some(ssl.build()))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Configures connection to Cassandra.
 pub async fn connect(conf: &ConnectionConf) -> Result<scylla::Session, CassError> {
     SessionBuilder::new()
         .known_nodes(&conf.addresses)
         .pool_size(PoolSize::PerShard(conf.count))
+        .user(&conf.user, &conf.password)
+        .ssl_context(ssl_context(&conf)?)
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))
@@ -53,6 +75,7 @@ pub struct CassError(pub CassErrorKind);
 
 #[derive(Debug)]
 pub enum CassErrorKind {
+    SslConfiguration(ErrorStack),
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
     UnsupportedType(TypeInfo),
@@ -64,6 +87,9 @@ impl CassError {
     pub fn display(&self, buf: &mut String) -> std::fmt::Result {
         use std::fmt::Write;
         match &self.0 {
+            CassErrorKind::SslConfiguration(e) => {
+                write!(buf, "SSL configuration error: {}", e)
+            }
             CassErrorKind::FailedToConnect(hosts, e) => {
                 write!(buf, "Could not connect to {}: {}", hosts.join(","), e)
             }
@@ -87,6 +113,12 @@ impl Display for CassError {
     }
 }
 
+impl From<ErrorStack> for CassError {
+    fn from(e: ErrorStack) -> CassError {
+        CassError(CassErrorKind::SslConfiguration(e))
+    }
+}
+
 impl From<QueryError> for CassError {
     fn from(err: QueryError) -> Self {
         match err {
@@ -99,6 +131,7 @@ impl From<QueryError> for CassError {
         }
     }
 }
+
 
 impl std::error::Error for CassError {}
 
