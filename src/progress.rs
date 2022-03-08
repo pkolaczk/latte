@@ -64,7 +64,7 @@ impl Display for Progress {
                     "{} {:>5.1}%      {:>28}",
                     Self::bar(fill, WIDTH),
                     100.0 * ratio,
-                    format!("{}/{}", pos, count)
+                    format_args!("{}/{}", pos, count)
                 )
             }
             ProgressBound::Duration(duration) => {
@@ -76,7 +76,7 @@ impl Display for Progress {
                     "{} {:>5.1}% {:>20} {:>12}",
                     Self::bar(fill, WIDTH),
                     100.0 * ratio,
-                    format!("{:.1}/{:.0}s", elapsed_secs, duration_secs),
+                    format_args!("{:.1}/{:.0}s", elapsed_secs, duration_secs),
                     pos
                 )
             }
