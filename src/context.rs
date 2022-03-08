@@ -132,7 +132,6 @@ impl From<QueryError> for CassError {
     }
 }
 
-
 impl std::error::Error for CassError {}
 
 #[derive(Clone, Debug)]

@@ -65,7 +65,7 @@ fn load_report_or_abort(path: &Path) -> Report {
 /// Separates parameters with underscores.
 fn get_default_output_name(conf: &RunCommand) -> PathBuf {
     let mut components = vec![conf.name()];
-    components.extend(conf.cluster_name.iter().map(|x| x.replace(" ", "_")));
+    components.extend(conf.cluster_name.iter().map(|x| x.replace(' ', "_")));
     components.extend(conf.cass_version.iter().cloned());
     components.extend(conf.tags.iter().cloned());
     components.extend(conf.rate.map(|r| format!("r{}", r)));
