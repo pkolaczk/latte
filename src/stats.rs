@@ -712,7 +712,7 @@ mod test {
     }
 
     /// Traditional standard error assuming i.i.d variables
-    fn reference_err(v: &Vec<f32>) -> f64 {
+    fn reference_err(v: &[f32]) -> f64 {
         v.iter().map(|x| *x as f64).std_dev() / (v.len() as f64).sqrt()
     }
 
