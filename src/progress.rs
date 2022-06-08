@@ -49,9 +49,12 @@ impl Progress {
             " ".repeat(total_len - fill_len)
         )
     }
+
 }
 
 impl Display for Progress {
+
+    #[allow(clippy::format_in_format_args)]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         const WIDTH: usize = 60;
         let pos = self.pos.get();
@@ -64,7 +67,7 @@ impl Display for Progress {
                     "{} {:>5.1}%      {:>28}",
                     Self::bar(fill, WIDTH),
                     100.0 * ratio,
-                    format_args!("{}/{}", pos, count)
+                    format!("{}/{}", pos, count)
                 )
             }
             ProgressBound::Duration(duration) => {
@@ -76,7 +79,7 @@ impl Display for Progress {
                     "{} {:>5.1}% {:>20} {:>12}",
                     Self::bar(fill, WIDTH),
                     100.0 * ratio,
-                    format_args!("{:.1}/{:.0}s", elapsed_secs, duration_secs),
+                    format!("{:.1}/{:.0}s", elapsed_secs, duration_secs),
                     pos
                 )
             }
@@ -95,3 +98,4 @@ impl Display for Progress {
         )
     }
 }
+
