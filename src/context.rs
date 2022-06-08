@@ -413,12 +413,10 @@ impl Uuid {
         i.hash(&mut hash);
         let (h1, h2) = hash.finish128();
         let h = ((h1 as u128) << 64) | (h2 as u128);
-        Uuid(
-            uuid::Builder::from_u128(h)
-                .set_variant(Variant::RFC4122)
-                .set_version(Version::Random)
-                .build(),
-        )
+        let mut builder = uuid::Builder::from_u128(h);
+        builder.set_variant(Variant::RFC4122);
+        builder.set_version(Version::Random);
+        Uuid(builder.into_uuid())
     }
 
     pub fn display(&self, buf: &mut String) -> std::fmt::Result {
