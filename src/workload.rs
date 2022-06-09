@@ -440,7 +440,7 @@ impl Workload {
         state.fn_stats.operation_completed(end_time - start_time);
         match result {
             Ok(_) => Ok((cycle, end_time)),
-            Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_)))) => {
+            Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_, _)))) => {
                 // don't stop on overload errors;
                 // they are being counted by the context stats anyways
                 Ok((cycle, end_time))

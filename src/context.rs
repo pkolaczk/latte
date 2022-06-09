@@ -23,6 +23,7 @@ use rune::parse::Parser;
 use rune::runtime::{Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
+use scylla::frame::response::result::CqlValue;
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
@@ -73,14 +74,54 @@ pub struct ClusterInfo {
 #[derive(Any, Debug)]
 pub struct CassError(pub CassErrorKind);
 
+impl CassError {
+    fn prepare_error(cql: &str, err: QueryError) -> CassError {
+        CassError(CassErrorKind::Prepare(cql.to_string(), err))
+    }
+
+    fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
+        let query = QueryInfo {
+            cql: cql.to_string(),
+            params: params.iter().map(|v| format!("{:?}", v)).collect(),
+        };
+        let kind = match err {
+            QueryError::TimeoutError
+            | QueryError::DbError(
+                DbError::Overloaded | DbError::ReadTimeout { .. } | DbError::WriteTimeout { .. },
+                _,
+            ) => CassErrorKind::Overloaded(query, err),
+            _ => CassErrorKind::QueryExecution(query, err),
+        };
+        CassError(kind)
+    }
+}
+
+#[derive(Debug)]
+pub struct QueryInfo {
+    cql: String,
+    params: Vec<String>,
+}
+
+impl Display for QueryInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "\"{}\" with params [{}]",
+            self.cql,
+            self.params.join(", ")
+        )
+    }
+}
+
 #[derive(Debug)]
 pub enum CassErrorKind {
     SslConfiguration(ErrorStack),
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
     UnsupportedType(TypeInfo),
-    Overloaded(QueryError),
-    Other(QueryError),
+    Prepare(String, QueryError),
+    Overloaded(QueryInfo, QueryError),
+    QueryExecution(QueryInfo, QueryError),
 }
 
 impl CassError {
@@ -97,10 +138,17 @@ impl CassError {
                 write!(buf, "Prepared statement not found: {}", s)
             }
             CassErrorKind::UnsupportedType(s) => {
-                write!(buf, "Unsupported type in Cassandra query: {}", s)
+                write!(buf, "Unsupported type: {}", s)
             }
-            CassErrorKind::Overloaded(e) => write!(buf, "Overloaded: {}", e),
-            CassErrorKind::Other(e) => write!(buf, "Other error: {}", e),
+            CassErrorKind::Prepare(q, e) => {
+                write!(buf, "Failed to prepare query \"{}\": {}", q, e)
+            }
+            CassErrorKind::Overloaded(q, e) => {
+                write!(buf, "Overloaded when executing query {}: {}", q, e)
+            }
+            CassErrorKind::QueryExecution(q, e) => {
+                write!(buf, "Failed to execute query {}: {}", q, e)
+            }
         }
     }
 }
@@ -116,19 +164,6 @@ impl Display for CassError {
 impl From<ErrorStack> for CassError {
     fn from(e: ErrorStack) -> CassError {
         CassError(CassErrorKind::SslConfiguration(e))
-    }
-}
-
-impl From<QueryError> for CassError {
-    fn from(err: QueryError) -> Self {
-        match err {
-            QueryError::TimeoutError
-            | QueryError::DbError(
-                DbError::Overloaded | DbError::ReadTimeout { .. } | DbError::WriteTimeout { .. },
-                _,
-            ) => CassError(CassErrorKind::Overloaded(err)),
-            _ => CassError(CassErrorKind::Other(err)),
-        }
     }
 }
 
@@ -252,10 +287,12 @@ impl Context {
 
     /// Returns cluster metadata such as cluster name and cassandra version.
     pub async fn cluster_info(&self) -> Result<Option<ClusterInfo>, CassError> {
+        let cql = "SELECT cluster_name, release_version FROM system.local";
         let rs = self
             .session
-            .query("SELECT cluster_name, release_version FROM system.local", ())
-            .await?;
+            .query(cql, ())
+            .await
+            .map_err(|e| CassError::query_execution_error(cql, &[], e))?;
         if let Some(rows) = rs.rows {
             if let Some(row) = rows.into_iter().next() {
                 if let Ok((name, cassandra_version)) = row.into_typed() {
@@ -271,7 +308,11 @@ impl Context {
 
     /// Prepares a statement and stores it in an internal statement map for future use.
     pub async fn prepare(&mut self, key: &str, cql: &str) -> Result<(), CassError> {
-        let statement = self.session.prepare(cql).await?;
+        let statement = self
+            .session
+            .prepare(cql)
+            .await
+            .map_err(|e| CassError::prepare_error(cql, e))?;
         self.statements.insert(key.to_string(), Arc::new(statement));
         Ok(())
     }
@@ -285,7 +326,7 @@ impl Context {
             .try_lock()
             .unwrap()
             .complete_request(duration, &rs);
-        rs?;
+        rs.map_err(|e| CassError::query_execution_error(cql, &[], e))?;
         Ok(())
     }
 
@@ -297,13 +338,13 @@ impl Context {
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
         let params = bind::to_scylla_query_params(&params)?;
         let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.session.execute(statement, params).await;
+        let rs = self.session.execute(statement, params.clone()).await;
         let duration = Instant::now() - start_time;
         self.stats
             .try_lock()
             .unwrap()
             .complete_request(duration, &rs);
-        rs?;
+        rs.map_err(|e| CassError::query_execution_error(statement.get_statement(), &params, e))?;
         Ok(())
     }
 

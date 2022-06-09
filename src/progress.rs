@@ -49,11 +49,9 @@ impl Progress {
             " ".repeat(total_len - fill_len)
         )
     }
-
 }
 
 impl Display for Progress {
-
     #[allow(clippy::format_in_format_args)]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         const WIDTH: usize = 60;
@@ -98,4 +96,3 @@ impl Display for Progress {
         )
     }
 }
-
