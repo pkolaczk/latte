@@ -272,10 +272,12 @@ async fn run(conf: RunCommand) -> Result<()> {
 
     let report = Report::new(conf, stats);
     match report.save(&path) {
-        Ok(()) => {}
+        Ok(()) => {
+            eprintln!("info: Saved report to {}", path.display());
+        }
         Err(e) => {
             eprintln!("error: Failed to save report to {}: {}", path.display(), e);
-            exit(1)
+            exit(1);
         }
     }
     Ok(())
