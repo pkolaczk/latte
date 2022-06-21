@@ -1,5 +1,5 @@
 pub async fn prepare(ctx) {
-    prepare_write(ctx).await;
+    prepare_write(ctx).await?;
     ctx.load_cycle_count = ROW_COUNT;
 }
 
