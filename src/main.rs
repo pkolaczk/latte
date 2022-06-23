@@ -157,7 +157,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
     let loader = Workload::new(session.clone()?, program.clone(), FnRef::new(LOAD_FN));
     let load_options = ExecutionOptions {
         duration: config::Interval::Count(load_count),
-        rate: None,
+        rate: conf.rate,
         threads: conf.threads,
         concurrency: conf.concurrency,
     };

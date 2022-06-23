@@ -146,6 +146,11 @@ pub struct SchemaCommand {
     setting(AppSettings::DeriveDisplayOrder)
 )]
 pub struct LoadCommand {
+    /// Number of cycles per second to execute.
+    /// If not given, the load cycles will be executed as fast as possible.
+    #[clap(short('r'), long, value_name = "COUNT")]
+    pub rate: Option<f64>,
+
     /// Number of worker threads used by the driver.
     #[clap(short('t'), long, default_value = "1", value_name = "COUNT")]
     pub threads: NonZeroUsize,
