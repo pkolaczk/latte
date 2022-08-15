@@ -228,7 +228,7 @@ and store them in the `data` field of the context for future use in `load` and `
 
 ```rust
 pub async fn prepare(ctx) {
-  ctx.data.last_names = fs::read_resource_lines("lastnames.txt")?;
+  ctx.data.last_names = fs::read_lines("lastnames.txt")?;
   // ... prepare queries
 }
 
