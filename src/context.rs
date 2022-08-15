@@ -4,7 +4,6 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::{BufRead, BufReader, ErrorKind};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -581,13 +580,13 @@ pub fn hash_select(i: i64, collection: &[Value]) -> &Value {
 }
 
 /// Reads a file into a vector of lines.
-pub fn read_lines(path: &str) -> io::Result<Vec<String>> {
-    let mut reader = BufReader::new(File::open(PathBuf::from(path))?);
-    let mut result = Vec::new();
-    let mut line = String::new();
-    while reader.read_line(&mut line)? != 0 {
-        result.push(line.clone());
-    }
+pub fn read_lines(filename: &str) -> io::Result<Vec<String>> {
+    let file = File::open(filename).expect("no such file");
+    let buf = BufReader::new(file);
+    let result = buf
+        .lines()
+        .map(|l| l.expect("Could not parse line"))
+        .collect();
     Ok(result)
 }
 
