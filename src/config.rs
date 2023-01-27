@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use anyhow::anyhow;
 use chrono::Utc;
-use clap::{AppSettings, Parser};
+use clap::{AppSettings, ArgEnum, Parser};
 use serde::{Deserialize, Serialize};
 
 /// Parse a single key-value pair
@@ -118,6 +118,59 @@ pub struct ConnectionConf {
     /// Path to the client SSL private key file in PEM format
     #[clap(long("ssl-key"), value_name = "PATH")]
     pub ssl_key_file: Option<PathBuf>,
+
+    /// Default CQL query consistency level
+    #[clap(long("consistency"), required = false, default_value = "LOCAL_QUORUM")]
+    pub consistency: Consistency,
+}
+
+#[derive(ArgEnum, Clone, Copy, Default, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Consistency {
+    Any,
+    One,
+    Two,
+    Three,
+    Quorum,
+    All,
+    LocalOne,
+    #[default]
+    LocalQuorum,
+    EachQuorum,
+}
+
+impl Consistency {
+    pub fn scylla_consistency(&self) -> scylla::frame::types::Consistency {
+        match self {
+            Self::Any => scylla::frame::types::Consistency::Any,
+            Self::One => scylla::frame::types::Consistency::One,
+            Self::Two => scylla::frame::types::Consistency::Two,
+            Self::Three => scylla::frame::types::Consistency::Three,
+            Self::Quorum => scylla::frame::types::Consistency::Quorum,
+            Self::All => scylla::frame::types::Consistency::All,
+            Self::LocalOne => scylla::frame::types::Consistency::LocalOne,
+            Self::LocalQuorum => scylla::frame::types::Consistency::LocalQuorum,
+            Self::EachQuorum => scylla::frame::types::Consistency::EachQuorum,
+        }
+    }
+}
+
+impl FromStr for Consistency {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "any" => Ok(Self::Any),
+            "one" | "1" => Ok(Self::One),
+            "two" | "2" => Ok(Self::Two),
+            "three" | "3" => Ok(Self::Three),
+            "quorum" | "q" => Ok(Self::Quorum),
+            "all" => Ok(Self::All),
+            "local_one" | "localone" | "l1" => Ok(Self::LocalOne),
+            "local_quorum" | "localquorum" | "lq" => Ok(Self::LocalQuorum),
+            "each_quorum" | "eachquorum" | "eq" => Ok(Self::EachQuorum),
+            s => Err(format!("Unknown consistency level {s}")),
+        }
+    }
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize)]

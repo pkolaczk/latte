@@ -60,6 +60,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<scylla::Session, CassError
         .pool_size(PoolSize::PerShard(conf.count))
         .user(&conf.user, &conf.password)
         .ssl_context(ssl_context(&conf)?)
+        .default_consistency(conf.consistency.scylla_consistency())
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))
