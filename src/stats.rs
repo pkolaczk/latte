@@ -628,9 +628,7 @@ impl Recorder {
         let count = self.request_count + self.error_count;
 
         let cycle_throughput = self.log.call_throughput();
-        let cycle_throughput_ratio = self
-            .rate_limit
-            .map(|r| 100.0 * cycle_throughput.value as f64 / r as f64);
+        let cycle_throughput_ratio = self.rate_limit.map(|r| 100.0 * cycle_throughput.value / r);
         let req_throughput = self.log.req_throughput();
         let row_throughput = self.log.row_throughput();
         let concurrency = self.log.mean_concurrency();

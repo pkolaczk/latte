@@ -73,7 +73,7 @@ impl FnRef {
     pub fn new(name: &'static str) -> FnRef {
         FnRef {
             name,
-            hash: rune::Hash::type_hash(&[name]),
+            hash: rune::Hash::type_hash([name]),
         }
     }
 }
@@ -269,14 +269,14 @@ impl Program {
                     let e = Value::Any(e);
                     self.vm().with(|| {
                         if e.string_display(&mut msg, &mut buf).unwrap().is_err() {
-                            msg = format!("{:?}", e)
+                            msg = format!("{e:?}")
                         }
                     });
                     Err(LatteError::FunctionResult(function_name, msg))
                 }
                 Err(other) => Err(LatteError::FunctionResult(
                     function_name,
-                    format!("{:?}", other),
+                    format!("{other:?}"),
                 )),
             },
             other => Ok(other),

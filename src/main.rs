@@ -68,11 +68,11 @@ fn get_default_output_name(conf: &RunCommand) -> PathBuf {
     components.extend(conf.cluster_name.iter().map(|x| x.replace(' ', "_")));
     components.extend(conf.cass_version.iter().cloned());
     components.extend(conf.tags.iter().cloned());
-    components.extend(conf.rate.map(|r| format!("r{}", r)));
+    components.extend(conf.rate.map(|r| format!("r{r}")));
     components.push(format!("p{}", conf.concurrency));
     components.push(format!("t{}", conf.threads));
     components.push(format!("c{}", conf.connection.count));
-    let params = conf.params.iter().map(|(k, v)| format!("{}{}", k, v));
+    let params = conf.params.iter().map(|(k, v)| format!("{k}{v}"));
     components.extend(params);
     components.push(chrono::Local::now().format("%Y%m%d.%H%M%S").to_string());
     PathBuf::from(format!("{}.json", components.join(".")))
@@ -117,7 +117,7 @@ async fn schema(conf: SchemaCommand) -> Result<()> {
     }
     eprintln!("info: Creating schema...");
     if let Err(e) = program.schema(&mut session).await {
-        eprintln!("error: Failed to create schema: {}", e);
+        eprintln!("error: Failed to create schema: {e}");
         exit(255);
     }
     eprintln!("info: Schema created successfully");
@@ -133,7 +133,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
     if program.has_prepare() {
         eprintln!("info: Preparing...");
         if let Err(e) = program.prepare(&mut session).await {
-            eprintln!("error: Failed to prepare: {}", e);
+            eprintln!("error: Failed to prepare: {e}");
             exit(255);
         }
     }
@@ -147,7 +147,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
     if program.has_erase() {
         eprintln!("info: Erasing data...");
         if let Err(e) = program.erase(&mut session).await {
-            eprintln!("error: Failed to erase: {}", e);
+            eprintln!("error: Failed to erase: {e}");
             exit(255);
         }
     }
@@ -173,7 +173,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
 
     if result.error_count > 0 {
         for e in result.errors {
-            eprintln!("error: {}", e);
+            eprintln!("error: {e}");
         }
         eprintln!("error: Errors encountered when loading data. Some data might be missing.");
         exit(255)
@@ -200,7 +200,7 @@ async fn run(conf: RunCommand) -> Result<()> {
     if program.has_prepare() {
         eprintln!("info: Preparing...");
         if let Err(e) = program.prepare(&mut session).await {
-            eprintln!("error: Failed to prepare: {}", e);
+            eprintln!("error: Failed to prepare: {e}");
             exit(255);
         }
     }
@@ -291,13 +291,13 @@ async fn show(conf: ShowCommand) -> Result<()> {
         v1: &report1.conf,
         v2: report2.as_ref().map(|r| &r.conf),
     };
-    println!("{}", config_cmp);
+    println!("{config_cmp}");
 
     let results_cmp = BenchmarkCmp {
         v1: &report1.result,
         v2: report2.as_ref().map(|r| &r.result),
     };
-    println!("{}", results_cmp);
+    println!("{results_cmp}");
     Ok(())
 }
 
@@ -326,7 +326,7 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
 
     let mut serializer = V2DeflateSerializer::new();
     let mut log_writer = interval_log::IntervalLogWriterBuilder::new()
-        .add_comment(format!("[Logged with Latte {}]", VERSION).as_str())
+        .add_comment(format!("[Logged with Latte {VERSION}]").as_str())
         .with_start_time(report.result.start_time.into())
         .with_base_time(report.result.start_time.into())
         .with_max_value_divisor(1000000.0) // ms
@@ -340,13 +340,13 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
             &sample.cycle_time_histogram_ns.0,
             interval_start_time,
             interval_duration,
-            Tag::new(format!("{}cycles", tag_prefix).as_str()),
+            Tag::new(format!("{tag_prefix}cycles").as_str()),
         )?;
         log_writer.write_histogram(
             &sample.resp_time_histogram_ns.0,
             interval_start_time,
             interval_duration,
-            Tag::new(format!("{}requests", tag_prefix).as_str()),
+            Tag::new(format!("{tag_prefix}requests").as_str()),
         )?;
     }
     Ok(())
@@ -383,7 +383,7 @@ fn main() {
     };
     let runtime = init_runtime(thread_count);
     if let Err(e) = runtime.unwrap().block_on(async_main(command)) {
-        eprintln!("error: {}", e);
+        eprintln!("error: {e}");
         exit(128);
     }
 }

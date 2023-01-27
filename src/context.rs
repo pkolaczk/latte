@@ -82,7 +82,7 @@ impl CassError {
     fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
         let query = QueryInfo {
             cql: cql.to_string(),
-            params: params.iter().map(|v| format!("{:?}", v)).collect(),
+            params: params.iter().map(|v| format!("{v:?}")).collect(),
         };
         let kind = match err {
             QueryError::TimeoutError
@@ -129,25 +129,25 @@ impl CassError {
         use std::fmt::Write;
         match &self.0 {
             CassErrorKind::SslConfiguration(e) => {
-                write!(buf, "SSL configuration error: {}", e)
+                write!(buf, "SSL configuration error: {e}")
             }
             CassErrorKind::FailedToConnect(hosts, e) => {
                 write!(buf, "Could not connect to {}: {}", hosts.join(","), e)
             }
             CassErrorKind::PreparedStatementNotFound(s) => {
-                write!(buf, "Prepared statement not found: {}", s)
+                write!(buf, "Prepared statement not found: {s}")
             }
             CassErrorKind::UnsupportedType(s) => {
-                write!(buf, "Unsupported type: {}", s)
+                write!(buf, "Unsupported type: {s}")
             }
             CassErrorKind::Prepare(q, e) => {
-                write!(buf, "Failed to prepare query \"{}\": {}", q, e)
+                write!(buf, "Failed to prepare query \"{q}\": {e}")
             }
             CassErrorKind::Overloaded(q, e) => {
-                write!(buf, "Overloaded when executing query {}: {}", q, e)
+                write!(buf, "Overloaded when executing query {q}: {e}")
             }
             CassErrorKind::QueryExecution(q, e) => {
-                write!(buf, "Failed to execute query {}: {}", q, e)
+                write!(buf, "Failed to execute query {q}: {e}")
             }
         }
     }
@@ -157,7 +157,7 @@ impl Display for CassError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut buf = String::new();
         self.display(&mut buf).unwrap();
-        write!(f, "{}", buf)
+        write!(f, "{buf}")
     }
 }
 
@@ -203,7 +203,7 @@ impl SessionStats {
             Ok(rs) => self.row_count += rs.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64,
             Err(e) => {
                 self.req_error_count += 1;
-                self.req_errors.insert(format!("{}", e));
+                self.req_errors.insert(format!("{e}"));
             }
         }
     }
@@ -553,7 +553,7 @@ pub fn hash_range(i: i64, max: i64) -> i64 {
 /// Generates a floating point value with normal distribution
 pub fn normal(i: i64, mean: f64, std_dev: f64) -> Result<f64, VmError> {
     let mut rng = StdRng::seed_from_u64(i as u64);
-    let distribution = Normal::new(mean, std_dev).map_err(|e| VmError::panic(format!("{}", e)))?;
+    let distribution = Normal::new(mean, std_dev).map_err(|e| VmError::panic(format!("{e}")))?;
     Ok(distribution.sample(&mut rng))
 }
 
@@ -594,14 +594,10 @@ pub fn read_lines(filename: &str) -> io::Result<Vec<String>> {
 /// Reads a resource file as a string.
 pub fn read_resource_to_string(path: &str) -> io::Result<String> {
     let resource = Resources::get(path).ok_or_else(|| {
-        io::Error::new(ErrorKind::NotFound, format!("Resource not found: {}", path))
+        io::Error::new(ErrorKind::NotFound, format!("Resource not found: {path}"))
     })?;
-    let contents = std::str::from_utf8(resource.data.as_ref()).map_err(|e| {
-        io::Error::new(
-            ErrorKind::InvalidData,
-            format!("Invalid UTF8 string: {}", e),
-        )
-    })?;
+    let contents = std::str::from_utf8(resource.data.as_ref())
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid UTF8 string: {e}")))?;
     Ok(contents.to_string())
 }
 
