@@ -9,8 +9,8 @@ license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-anyhow = "1.0.45"
-base64 = "0.13.0"
+anyhow = "1.0"
+base64 = "0.21"
 rmp = "0.8.10"
 rmp-serde = "1.0.0-beta.2"
 chrono = { version = "0.4.18", features = ["serde"] }
@@ -22,25 +22,25 @@ err-derive = "0.3"
 futures = "0.3"
 hdrhistogram = "7.1.0"
 hytra = "0.1.2"
-itertools = "0.9"
-jemallocator = "0.3.2"
+itertools = "0.10"
+jemallocator = "0.5.0"
 lazy_static = "1.4.0"
 metrohash = "1.0"
 num_cpus = "1.13.0"
 openssl = "0.10.38"
 parse_duration = "2.1.1"
-rand = "0.7.3"
-regex = "1.5.4"
-rune = { git = "https://github.com/pkolaczk/rune/", branch = "cloneable-unit-and-context" }
+rand = "0.8"
+regex = "1.5"
+rune = "0.12" # { git = "https://github.com/pkolaczk/rune/", branch = "cloneable-unit-and-context" }
 rust-embed = "6.3.0"
-scylla = { version = "0.4", features = ["ssl"] }
+scylla = { version = "0.7", features = ["ssl"] }
 serde = { version = "1.0.116", features = ["derive"] }
 serde_json = "1.0.57"
-statrs = "0.13.0"
+statrs = "0.16"
 status-line = "0.2.0"
-strum = { version = "0.19.5", features = ["derive"] }
-strum_macros = "0.19.4"
-time = "0.1.44"
+strum = { version = "0.24", features = ["derive"] }
+strum_macros = "0.24"
+time = "0.3"
 thiserror = "1.0.26"
 tokio = { version = "1.14", features = ["rt", "rt-multi-thread", "time", "parking_lot"] }
 tokio-stream = "0.1"
