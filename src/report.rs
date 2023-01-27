@@ -333,7 +333,7 @@ where
                     format!("{}", styled)
                 })
             })
-            .unwrap_or_else(|| "".to_string())
+            .unwrap_or_default()
     }
 
     fn fmt_unit(&self) -> String {
@@ -430,11 +430,11 @@ impl RunConfigCmp<'_> {
 
     fn format_time(&self, conf: &RunCommand, format: &str) -> String {
         conf.timestamp
-            .map(|ts| {
-                let utc = NaiveDateTime::from_timestamp(ts, 0);
-                Local.from_utc_datetime(&utc).format(format).to_string()
+            .and_then(|ts| {
+                NaiveDateTime::from_timestamp_opt(ts, 0)
+                    .map(|utc| Local.from_utc_datetime(&utc).format(format).to_string())
             })
-            .unwrap_or_else(|| "".to_string())
+            .unwrap_or_default()
     }
 
     /// Returns the set union of custom user parameters in both configurations.
