@@ -215,7 +215,7 @@ pub async fn par_execute(
         let aggregate = stats.record(&partial_stats);
         if sampling.is_bounded() {
             progress.set_visible(false);
-            println!("{}", aggregate);
+            println!("{aggregate}");
             progress.set_visible(show_progress);
         }
     }

@@ -40,7 +40,7 @@ impl<'de> Visitor<'de> for HistogramVisitor {
     {
         let decoded = base64_engine::STANDARD
             .decode(v)
-            .map_err(|e| E::custom(format!("Not a valid base64 value. {}", e)))?;
+            .map_err(|e| E::custom(format!("Not a valid base64 value. {e}")))?;
         let mut cursor = Cursor::new(&decoded);
         let mut deserializer = hdrhistogram::serialization::Deserializer::new();
         Ok(SerializableHistogram(

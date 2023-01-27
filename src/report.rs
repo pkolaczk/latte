@@ -164,7 +164,7 @@ impl<T: Display> Display for OptionDisplay<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
             None => write!(f, ""),
-            Some(v) => write!(f, "{}", v),
+            Some(v) => write!(f, "{v}"),
         }
     }
 }
@@ -322,7 +322,7 @@ where
                         diff = 0.0;
                     }
                     let good = diff * direction as f32;
-                    let diff = format!("{:+7.1}%", diff);
+                    let diff = format!("{diff:+7.1}%");
                     let styled = if good == 0.0 || !significant {
                         style(diff).dim()
                     } else if good > 0.0 {
@@ -330,7 +330,7 @@ where
                     } else {
                         style(diff).bright().red()
                     };
-                    format!("{}", styled)
+                    format!("{styled}")
                 })
             })
             .unwrap_or_default()
@@ -339,7 +339,7 @@ where
     fn fmt_unit(&self) -> String {
         match self.unit.as_str() {
             "" => "".to_string(),
-            u => format!("[{}]", u),
+            u => format!("[{u}]"),
         }
     }
 }
@@ -367,7 +367,7 @@ where
             m2 = pad_str(m2.as_str(), 30, Alignment::Left, None),
             cmp = self.fmt_relative_change(self.orientation, is_significant),
             signif = match &self.significance {
-                Some(s) => format!("{}", s),
+                Some(s) => format!("{s}"),
                 None => "".to_owned(),
             }
         )
@@ -474,7 +474,7 @@ impl<'a> Display for RunConfigCmp<'a> {
         ];
 
         for l in lines {
-            writeln!(f, "{}", l)?;
+            writeln!(f, "{l}")?;
         }
 
         writeln!(f, "{}", fmt_horizontal_line()).unwrap();
@@ -482,9 +482,9 @@ impl<'a> Display for RunConfigCmp<'a> {
         let param_names = self.param_names();
         if !param_names.is_empty() {
             for k in param_names {
-                let label = format!("-P {}", k);
+                let label = format!("-P {k}");
                 let line = self.line(label.as_str(), "", |conf| Quantity::from(conf.get_param(k)));
-                writeln!(f, "{}", line).unwrap();
+                writeln!(f, "{line}").unwrap();
             }
             writeln!(f, "{}", fmt_horizontal_line()).unwrap();
         }
@@ -519,7 +519,7 @@ impl<'a> Display for RunConfigCmp<'a> {
         ];
 
         for l in lines {
-            writeln!(f, "{}", l)?;
+            writeln!(f, "{l}")?;
         }
         Ok(())
     }
@@ -637,7 +637,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
         ];
 
         for l in summary {
-            writeln!(f, "{}", l)?;
+            writeln!(f, "{l}")?;
         }
         writeln!(f)?;
 
@@ -672,7 +672,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
                     })
                     .with_orientation(-1)
                     .with_significance(self.cmp_resp_time_percentile(*p));
-                writeln!(f, "{}", l)?;
+                writeln!(f, "{l}")?;
             }
 
             writeln!(f)?;
@@ -709,7 +709,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
             writeln!(f)?;
             writeln!(f, "{}", fmt_section_header("ERRORS"))?;
             for e in self.v1.errors.iter() {
-                writeln!(f, "{}", e)?;
+                writeln!(f, "{e}")?;
             }
         }
         Ok(())
