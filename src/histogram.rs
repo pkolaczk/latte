@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose as base64_engine, Engine as _};
 use std::fmt;
 use std::io::Cursor;
 
@@ -19,7 +20,7 @@ impl Serialize for SerializableHistogram {
         V2DeflateSerializer::new()
             .serialize(&self.0, &mut serialized_histogram)
             .unwrap();
-        let encoded = base64::encode(serialized_histogram);
+        let encoded = base64_engine::STANDARD.encode(serialized_histogram);
         serializer.serialize_str(encoded.as_str())
     }
 }
@@ -37,8 +38,9 @@ impl<'de> Visitor<'de> for HistogramVisitor {
     where
         E: Error,
     {
-        let decoded =
-            base64::decode(v).map_err(|e| E::custom(format!("Not a valid base64 value. {}", e)))?;
+        let decoded = base64_engine::STANDARD
+            .decode(v)
+            .map_err(|e| E::custom(format!("Not a valid base64 value. {}", e)))?;
         let mut cursor = Cursor::new(&decoded);
         let mut deserializer = hdrhistogram::serialization::Deserializer::new();
         Ok(SerializableHistogram(

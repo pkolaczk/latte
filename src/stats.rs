@@ -7,7 +7,7 @@ use std::time::{Instant, SystemTime};
 use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
-use statrs::distribution::{StudentsT, Univariate};
+use statrs::distribution::{ContinuousCDF, StudentsT};
 use strum::EnumCount;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumCount as EnumCountM, EnumIter};
@@ -718,25 +718,25 @@ mod test {
 
     #[test]
     fn mean_err_no_auto_correlation() {
-        let run_len = 1000;
+        let run_len = 10000;
         let mean = 1.0;
         let std_dev = 1.0;
-        let weights = [1.0; 1000];
+        let weights = [1.0; 10000];
         for i in 0..10 {
             let v = random_vector(i, run_len, mean, std_dev);
             let err = super::long_run_err(mean, &v, &weights);
             let ref_err = reference_err(&v);
             assert!(err > 0.99 * ref_err);
-            assert!(err < 1.33 * ref_err);
+            assert!(err < 1.2 * ref_err);
         }
     }
 
     #[test]
     fn mean_err_with_auto_correlation() {
-        let run_len = 1000;
+        let run_len = 10000;
         let mean = 1.0;
         let std_dev = 1.0;
-        let weights = [1.0; 1000];
+        let weights = [1.0; 10000];
         for i in 0..10 {
             let mut v = random_vector(i, run_len, mean, std_dev);
             make_autocorrelated(&mut v);
