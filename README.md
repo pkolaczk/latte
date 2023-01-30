@@ -77,11 +77,16 @@ Latte is still early stage software under intensive development.
 * Backwards compatibility may be broken frequently.
 
 ## Installation
+### From deb package
+```shell
+dpkg -i latte-<version>.deb
+````
+
+## From source
 1. [Install Rust toolchain](https://rustup.rs/)
 2. Run `cargo install latte-cli`
 
 ## Usage
-
 Start a Cassandra cluster somewhere (can be a local node). Then run:
 
 ```shell
@@ -91,6 +96,9 @@ latte run <workload.rn> [<node address>]    # execute the workload and measure t
  ```
 
 You can find a few example workload files in the `workloads` folder.
+For convenience, you can place workload files under `/usr/share/latte/workloads` or `.local/share/latte/workloads`,
+so latte can find them regardless of the current working directory. You can also set up custom workload locations
+by setting `LATTE_WORKLOAD_PATH` environment variable.
 
 Latte produces text reports on stdout but also saves all data to a json file in the working directory. The name of the
 file is created automatically from the parameters of the run and a timestamp.

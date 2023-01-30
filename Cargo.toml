@@ -38,6 +38,7 @@ regex = "1.5"
 rune = "0.12"
 rust-embed = "6.3.0"
 scylla = { version = "0.7", features = ["ssl"] }
+search_path = "0.1"
 serde = { version = "1.0.116", features = ["derive"] }
 serde_json = "1.0.57"
 statrs = "0.16"
@@ -78,5 +79,8 @@ section = "utility"
 priority = "optional"
 assets = [
     ["target/release/latte", "usr/bin/", "755"],
+    ["workloads/basic/*.rn", "/usr/share/latte/workloads/basic/", "644"],
+    ["workloads/sai/new/*.rn", "/usr/share/latte/workloads/sai/new/", "644"],
+    ["workloads/sai/orig/*.rn", "/usr/share/latte/workloads/sai/orig/", "644"],
     ["README.md", "usr/share/doc/latte/README", "644"],
 ]
