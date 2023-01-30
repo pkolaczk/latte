@@ -78,7 +78,7 @@ Latte is still early stage software under intensive development.
 
 ## Installation
 1. [Install Rust toolchain](https://rustup.rs/)
-2. Run `cargo install --git https://github.com/pkolaczk/latte`
+2. Run `cargo install latte-cli`
 
 ## Usage
 
