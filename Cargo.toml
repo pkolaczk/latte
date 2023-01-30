@@ -1,11 +1,15 @@
 [package]
-name = "latte"
+name = "latte-cli"
 description = "A database benchmarking tool for Apache Cassandra"
 version = "0.19.0"
 authors = ["Piotr Kołaczkowski <pkolaczk@datastax.com>"]
 edition = "2021"
 readme = "README.md"
 license = "Apache-2.0"
+
+[[bin]]
+name = "latte"
+path = "src/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
@@ -31,7 +35,7 @@ openssl = "0.10.38"
 parse_duration = "2.1.1"
 rand = "0.8"
 regex = "1.5"
-rune = "0.12" # { git = "https://github.com/pkolaczk/rune/", branch = "cloneable-unit-and-context" }
+rune = "0.12"
 rust-embed = "6.3.0"
 scylla = { version = "0.7", features = ["ssl"] }
 serde = { version = "1.0.116", features = ["derive"] }
@@ -51,6 +55,7 @@ uuid = { version = "1.1", features = ["v4"] }
 tokio = { version = "1.11", features = ["rt", "test-util", "macros"] }
 
 [profile.release]
+codegen-units = 1
 lto = true
 panic = "abort"
 
@@ -59,6 +64,7 @@ inherits = "dev"
 opt-level = 2
 
 [package.metadata.deb]
+name = "latte"
 maintainer = "Piotr Kołaczkowski <pkolaczk@gmail.com>"
 copyright = "2020, Piotr Kołaczkowski <pkolaczk@gmail.com>"
 license-file = ["LICENSE", "4"]

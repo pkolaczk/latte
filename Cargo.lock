@@ -744,7 +744,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "latte"
+name = "latte-cli"
 version = "0.19.0"
 dependencies = [
  "anyhow",
