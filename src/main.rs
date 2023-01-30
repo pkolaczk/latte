@@ -8,7 +8,9 @@ use std::time::Duration;
 use clap::Parser;
 use hdrhistogram::serialization::interval_log::Tag;
 use hdrhistogram::serialization::{interval_log, V2DeflateSerializer};
+use itertools::Itertools;
 use rune::Source;
+use search_path::SearchPath;
 use tokio::runtime::{Builder, Runtime};
 
 use config::RunCommand;
@@ -80,10 +82,42 @@ fn get_default_output_name(conf: &RunCommand) -> PathBuf {
 
 /// Reads the workload script from a file and compiles it.
 fn load_workload_script(workload: &Path, params: &[(String, String)]) -> Result<Program> {
+    let workload = find_workload(workload)
+        .canonicalize()
+        .unwrap_or_else(|_| workload.to_path_buf());
     eprintln!("info: Loading workload script {}...", workload.display());
-    let src = Source::from_path(workload)
-        .map_err(|e| LatteError::ScriptRead(PathBuf::from(workload), e))?;
-    workload::Program::new(src, params.iter().cloned().collect())
+    let src = Source::from_path(&workload).map_err(|e| LatteError::ScriptRead(workload, e))?;
+    Program::new(src, params.iter().cloned().collect())
+}
+
+/// Locates the workload and returns an absolute path to it.
+/// If not found, returns the original path unchanged.
+/// If the workload path is relative, it is searched in the directories
+/// listed by `LATTE_WORKLOAD_PATH` environment variable.
+/// If the variable is not set, workload is searched in
+/// `.local/share/latte/workloads` and `/usr/share/latte/workloads`.
+fn find_workload(workload: &Path) -> PathBuf {
+    if workload.starts_with(".") || workload.is_absolute() {
+        return workload.to_path_buf();
+    }
+    let search_path = SearchPath::new("LATTE_WORKLOAD_PATH").unwrap_or_else(|_| {
+        let relative_to_exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .map(|p| p.join("workloads"));
+        SearchPath::from(
+            [
+                PathBuf::from(".local/share/latte/workloads"),
+                PathBuf::from("/usr/share/latte/workloads"),
+            ]
+            .into_iter()
+            .chain(relative_to_exe)
+            .collect_vec(),
+        )
+    });
+    search_path
+        .find_file(workload)
+        .unwrap_or_else(|| workload.to_path_buf())
 }
 
 /// Connects to the server and returns the session
