@@ -2,7 +2,7 @@
 name = "latte-cli"
 description = "A database benchmarking tool for Apache Cassandra"
 version = "0.20.0"
-authors = ["Piotr Kołaczkowski <pkolaczk@datastax.com>"]
+authors = ["Piotr Kołaczkowski <pkolaczk@gmail.com>"]
 edition = "2021"
 readme = "README.md"
 license = "Apache-2.0"
