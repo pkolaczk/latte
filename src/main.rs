@@ -25,6 +25,7 @@ use crate::cycle::BoundedCycleCounter;
 use crate::error::{LatteError, Result};
 use crate::exec::{par_execute, ExecutionOptions};
 use crate::interrupt::InterruptHandler;
+use crate::plot::plot_graph;
 use crate::progress::Progress;
 use crate::report::{Report, RunConfigCmp};
 use crate::sampler::Sampler;
@@ -38,6 +39,7 @@ mod error;
 mod exec;
 mod histogram;
 mod interrupt;
+mod plot;
 mod progress;
 mod report;
 mod sampler;
@@ -61,23 +63,6 @@ fn load_report_or_abort(path: &Path) -> Report {
             exit(1)
         }
     }
-}
-
-/// Constructs the output report file name from the parameters in the command.
-/// Separates parameters with underscores.
-fn get_default_output_name(conf: &RunCommand) -> PathBuf {
-    let mut components = vec![conf.name()];
-    components.extend(conf.cluster_name.iter().map(|x| x.replace(' ', "_")));
-    components.extend(conf.cass_version.iter().cloned());
-    components.extend(conf.tags.iter().cloned());
-    components.extend(conf.rate.map(|r| format!("r{r}")));
-    components.push(format!("p{}", conf.concurrency));
-    components.push(format!("t{}", conf.threads));
-    components.push(format!("c{}", conf.connection.count));
-    let params = conf.params.iter().map(|(k, v)| format!("{k}{v}"));
-    components.extend(params);
-    components.push(chrono::Local::now().format("%Y%m%d.%H%M%S").to_string());
-    PathBuf::from(format!("{}.json", components.join(".")))
 }
 
 /// Reads the workload script from a file and compiles it.
@@ -302,7 +287,7 @@ async fn run(conf: RunCommand) -> Result<()> {
     let path = conf
         .output
         .clone()
-        .unwrap_or_else(|| get_default_output_name(&conf));
+        .unwrap_or_else(|| conf.default_output_file_name("json"));
 
     let report = Report::new(conf, stats);
     match report.save(&path) {
@@ -393,6 +378,7 @@ async fn async_main(command: Command) -> Result<()> {
         Command::Run(config) => run(config).await?,
         Command::Show(config) => show(config).await?,
         Command::Hdr(config) => export_hdr_log(config).await?,
+        Command::Plot(config) => plot_graph(config).await?,
     }
     Ok(())
 }
