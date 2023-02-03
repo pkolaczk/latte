@@ -342,6 +342,22 @@ impl RunCommand {
             .to_string_lossy()
             .to_string()
     }
+
+    /// Suggested file name where to save the results of the run.
+    pub fn default_output_file_name(&self, extension: &str) -> PathBuf {
+        let mut components = vec![self.name()];
+        components.extend(self.cluster_name.iter().map(|x| x.replace(' ', "_")));
+        components.extend(self.cass_version.iter().cloned());
+        components.extend(self.tags.iter().cloned());
+        components.extend(self.rate.map(|r| format!("r{r}")));
+        components.push(format!("p{}", self.concurrency));
+        components.push(format!("t{}", self.threads));
+        components.push(format!("c{}", self.connection.count));
+        let params = self.params.iter().map(|(k, v)| format!("{k}{v}"));
+        components.extend(params);
+        components.push(chrono::Local::now().format("%Y%m%d.%H%M%S").to_string());
+        PathBuf::from(format!("{}.{extension}", components.join(".")))
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -368,6 +384,30 @@ pub struct HdrCommand {
     /// Optional tag prefix to add to each histogram
     #[clap(long, value_name = "STRING")]
     pub tag: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct PlotCommand {
+    /// Path to the input JSON report file(s)
+    #[clap(value_name = "PATH", required = true)]
+    pub reports: Vec<PathBuf>,
+
+    /// Plot given response time percentiles. Can be used multiple times.
+    #[clap(
+        short,
+        long("percentile"),
+        multiple_occurrences = true,
+        number_of_values = 1
+    )]
+    pub percentiles: Vec<f64>,
+
+    /// Plot throughput.
+    #[clap(short, long("throughput"))]
+    pub throughput: bool,
+
+    /// Write output to the given file.
+    #[clap(short('o'), long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -403,6 +443,9 @@ pub enum Command {
     /// Timestamps are given in seconds since Unix epoch.
     /// Response times are recorded in nanoseconds.
     Hdr(HdrCommand),
+
+    /// Plots recorded samples. Saves output in SVG format.
+    Plot(PlotCommand),
 }
 
 #[derive(Parser, Debug)]
