@@ -30,7 +30,7 @@ use crate::progress::Progress;
 use crate::report::{Report, RunConfigCmp};
 use crate::sampler::Sampler;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
-use crate::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN, RUN_FN};
+use crate::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN};
 
 mod config;
 mod context;
@@ -202,11 +202,15 @@ async fn load(conf: LoadCommand) -> Result<()> {
 
 async fn run(conf: RunCommand) -> Result<()> {
     let mut conf = conf.set_timestamp_if_empty();
+    let function = FnRef::new(conf.function.as_str());
     let compare = conf.baseline.as_ref().map(|p| load_report_or_abort(p));
 
     let mut program = load_workload_script(&conf.workload, &conf.params)?;
-    if !program.has_run() {
-        eprintln!("error: Function `run` not found in the workload script.");
+    if !program.has_function(&function) {
+        eprintln!(
+            "error: Function {} not found in the workload script.",
+            conf.function.as_str()
+        );
         exit(255);
     }
 
@@ -224,7 +228,7 @@ async fn run(conf: RunCommand) -> Result<()> {
         }
     }
 
-    let runner = Workload::new(session.clone()?, program.clone(), FnRef::new(RUN_FN));
+    let runner = Workload::new(session.clone()?, program.clone(), function);
     let interrupt = Arc::new(InterruptHandler::install());
     if conf.warmup_duration.is_not_zero() {
         eprintln!("info: Warming up...");

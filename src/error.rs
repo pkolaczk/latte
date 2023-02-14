@@ -22,10 +22,10 @@ pub enum LatteError {
     ScriptBuildError(#[source] rune::BuildError),
 
     #[error(display = "Failed to execute script function {}: {}", _0, _1)]
-    ScriptExecError(&'static str, rune::runtime::VmError),
+    ScriptExecError(String, rune::runtime::VmError),
 
     #[error(display = "Function {} returned error: {}", _0, _1)]
-    FunctionResult(&'static str, String),
+    FunctionResult(String, String),
 
     #[error(display = "{}", _0)]
     Diagnostics(#[source] rune::diagnostics::EmitError),

@@ -92,7 +92,7 @@ Start a Cassandra cluster somewhere (can be a local node). Then run:
 ```shell
 latte schema <workload.rn> [<node address>] # create the database schema 
 latte load <workload.rn> [<node address>]   # populate the database with data
-latte run <workload.rn> [<node address>]    # execute the workload and measure the performance 
+latte run <workload.rn> [-f <function>] [<node address>]  # execute the workload and measure the performance 
  ```
 
 You can find a few example workload files in the `workloads` folder.
@@ -130,6 +130,10 @@ pub async fn run(ctx, i) {
 }
 ```
 Instance functions on `ctx` are asynchronous, so you should call `await` on them.
+
+The workload script can provide more than one function for running the benchmark.
+In this case you can name those functions whatever you like, and then select one of them
+with `-f` / `--function` parameter.
 
 ### Schema creation
 

@@ -63,16 +63,16 @@ impl<'a> ToValue for ContextRefMut<'a> {
 
 /// Stores the name and hash together.
 /// Name is used for message formatting, hash is used for fast function lookup.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct FnRef {
-    name: &'static str,
+    name: String,
     hash: rune::Hash,
 }
 
 impl FnRef {
-    pub fn new(name: &'static str) -> FnRef {
+    pub fn new(name: &str) -> FnRef {
         FnRef {
-            name,
+            name: name.to_string(),
             hash: rune::Hash::type_hash([name]),
         }
     }
@@ -82,7 +82,6 @@ pub const SCHEMA_FN: &str = "schema";
 pub const PREPARE_FN: &str = "prepare";
 pub const ERASE_FN: &str = "erase";
 pub const LOAD_FN: &str = "load";
-pub const RUN_FN: &str = "run";
 
 /// Compiled workload program
 #[derive(Clone)]
@@ -251,11 +250,7 @@ impl Program {
     /// This is needed because execution of the function could actually run till completion just
     /// fine, but the function could return an error value, and in this case we should not
     /// ignore it.
-    fn convert_error(
-        &self,
-        function_name: &'static str,
-        result: Value,
-    ) -> Result<Value, LatteError> {
+    fn convert_error(&self, function_name: &str, result: Value) -> Result<Value, LatteError> {
         match result {
             Value::Result(result) => match result.take().unwrap() {
                 Ok(value) => Ok(value),
@@ -272,10 +267,10 @@ impl Program {
                             msg = format!("{e:?}")
                         }
                     });
-                    Err(LatteError::FunctionResult(function_name, msg))
+                    Err(LatteError::FunctionResult(function_name.to_string(), msg))
                 }
                 Err(other) => Err(LatteError::FunctionResult(
-                    function_name,
+                    function_name.to_string(),
                     format!("{other:?}"),
                 )),
             },
@@ -289,37 +284,37 @@ impl Program {
     /// an error value.
     pub async fn async_call(
         &self,
-        fun: FnRef,
+        fun: &FnRef,
         args: impl Args + Send,
     ) -> Result<Value, LatteError> {
         let handle_err = |e: VmError| {
             let mut out = StandardStream::stderr(ColorChoice::Auto);
             let _ = e.emit(&mut out, &self.sources);
-            LatteError::ScriptExecError(fun.name, e)
+            LatteError::ScriptExecError(fun.name.to_string(), e)
         };
         let execution = self.vm().send_execute(fun.hash, args).map_err(handle_err)?;
         let result = execution.async_complete().await.map_err(handle_err)?;
-        self.convert_error(fun.name, result)
+        self.convert_error(fun.name.as_str(), result)
     }
 
     pub fn has_prepare(&self) -> bool {
-        self.unit.function(FnRef::new(PREPARE_FN).hash).is_some()
+        self.has_function(&FnRef::new(PREPARE_FN))
     }
 
     pub fn has_schema(&self) -> bool {
-        self.unit.function(FnRef::new(SCHEMA_FN).hash).is_some()
+        self.has_function(&FnRef::new(SCHEMA_FN))
     }
 
     pub fn has_erase(&self) -> bool {
-        self.unit.function(FnRef::new(ERASE_FN).hash).is_some()
+        self.has_function(&FnRef::new(ERASE_FN))
     }
 
     pub fn has_load(&self) -> bool {
-        self.unit.function(FnRef::new(LOAD_FN).hash).is_some()
+        self.has_function(&FnRef::new(LOAD_FN))
     }
 
-    pub fn has_run(&self) -> bool {
-        self.unit.function(FnRef::new(RUN_FN).hash).is_some()
+    pub fn has_function(&self, function: &FnRef) -> bool {
+        self.unit.function(function.hash).is_some()
     }
 
     /// Calls the script's `init` function.
@@ -327,7 +322,7 @@ impl Program {
     /// Typically used to prepare statements.
     pub async fn prepare(&mut self, context: &mut Context) -> Result<(), LatteError> {
         let context = ContextRefMut::new(context);
-        self.async_call(FnRef::new(PREPARE_FN), (context,)).await?;
+        self.async_call(&FnRef::new(PREPARE_FN), (context,)).await?;
         Ok(())
     }
 
@@ -335,7 +330,7 @@ impl Program {
     /// Typically used to create database schema.
     pub async fn schema(&mut self, context: &mut Context) -> Result<(), LatteError> {
         let context = ContextRefMut::new(context);
-        self.async_call(FnRef::new(SCHEMA_FN), (context,)).await?;
+        self.async_call(&FnRef::new(SCHEMA_FN), (context,)).await?;
         Ok(())
     }
 
@@ -343,7 +338,7 @@ impl Program {
     /// Typically used to remove the data from the database before running the benchmark.
     pub async fn erase(&mut self, context: &mut Context) -> Result<(), LatteError> {
         let context = ContextRefMut::new(context);
-        self.async_call(FnRef::new(ERASE_FN), (context,)).await?;
+        self.async_call(&FnRef::new(ERASE_FN), (context,)).await?;
         Ok(())
     }
 }
@@ -418,7 +413,7 @@ impl Workload {
             context: self.context.clone()?,
             // make a deep copy to avoid congestion on Arc ref counts used heavily by Rune
             program: self.program.unshare(),
-            function: self.function,
+            function: self.function.clone(),
             state: TryLock::new(WorkloadState::default()),
         })
     }
@@ -432,7 +427,7 @@ impl Workload {
         let context = SessionRef::new(&self.context);
         let result = self
             .program
-            .async_call(self.function, (context, cycle as i64))
+            .async_call(&self.function, (context, cycle as i64))
             .await
             .map(|_| ()); // erase Value, because Value is !Send
         let end_time = Instant::now();
