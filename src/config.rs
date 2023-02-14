@@ -293,6 +293,10 @@ pub struct RunCommand {
     #[clap(name = "workload", required = true, value_name = "PATH")]
     pub workload: PathBuf,
 
+    /// Function of the workload to invoke.
+    #[clap(long, short('f'), required = false, default_value = "run")]
+    pub function: String,
+
     /// Parameter values passed to the workload, accessible through param! macro.
     #[clap(short('P'), parse(try_from_str = parse_key_val),
     number_of_values = 1, multiple_occurrences = true)]
