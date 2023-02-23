@@ -139,17 +139,17 @@ pub enum Consistency {
 }
 
 impl Consistency {
-    pub fn scylla_consistency(&self) -> scylla::frame::types::Consistency {
+    pub fn scylla_consistency(&self) -> scylla2::cql::Consistency {
         match self {
-            Self::Any => scylla::frame::types::Consistency::Any,
-            Self::One => scylla::frame::types::Consistency::One,
-            Self::Two => scylla::frame::types::Consistency::Two,
-            Self::Three => scylla::frame::types::Consistency::Three,
-            Self::Quorum => scylla::frame::types::Consistency::Quorum,
-            Self::All => scylla::frame::types::Consistency::All,
-            Self::LocalOne => scylla::frame::types::Consistency::LocalOne,
-            Self::LocalQuorum => scylla::frame::types::Consistency::LocalQuorum,
-            Self::EachQuorum => scylla::frame::types::Consistency::EachQuorum,
+            Self::Any => scylla2::cql::Consistency::Any,
+            Self::One => scylla2::cql::Consistency::One,
+            Self::Two => scylla2::cql::Consistency::Two,
+            Self::Three => scylla2::cql::Consistency::Three,
+            Self::Quorum => scylla2::cql::Consistency::Quorum,
+            Self::All => scylla2::cql::Consistency::All,
+            Self::LocalOne => scylla2::cql::Consistency::LocalOne,
+            Self::LocalQuorum => scylla2::cql::Consistency::LocalQuorum,
+            Self::EachQuorum => scylla2::cql::Consistency::EachQuorum,
         }
     }
 }

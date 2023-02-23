@@ -22,11 +22,12 @@ use rune::parse::Parser;
 use rune::runtime::{Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
-use scylla::frame::response::result::CqlValue;
-use scylla::prepared_statement::PreparedStatement;
-use scylla::transport::errors::{DbError, NewSessionError, QueryError};
-use scylla::transport::session::PoolSize;
-use scylla::{QueryResult, SessionBuilder};
+use scylla2::cql::error::DatabaseErrorKind;
+use scylla2::cql::value::CqlValue;
+use scylla2::error::{ExecutionError, SessionError};
+use scylla2::execution::ExecutionResult;
+use scylla2::topology::node::PoolSize;
+use scylla2::PreparedStatement;
 use statrs::distribution::Normal;
 use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
@@ -54,16 +55,24 @@ fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> 
 }
 
 /// Configures connection to Cassandra.
-pub async fn connect(conf: &ConnectionConf) -> Result<scylla::Session, CassError> {
-    SessionBuilder::new()
-        .known_nodes(&conf.addresses)
-        .pool_size(PoolSize::PerShard(conf.count))
-        .user(&conf.user, &conf.password)
-        .ssl_context(ssl_context(&conf)?)
-        .default_consistency(conf.consistency.scylla_consistency())
-        .build()
+pub async fn connect(conf: &ConnectionConf) -> Result<scylla2::Session, CassError> {
+    let mut config = scylla2::SessionConfig::new()
+        .nodes(&conf.addresses)
+        .cql_version("3.3.1")
+        .connection_pool_size(PoolSize::PerShard(conf.count))
+        .credentials(&conf.user, &conf.password)
+        .statement_consistency(conf.consistency.scylla_consistency());
+    if let Some(ssl_context) = ssl_context(&conf)? {
+        config = config.ssl_context(ssl_context);
+    }
+    let session = config
+        .connect()
         .await
-        .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))
+        .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
+    tokio::time::timeout(Duration::from_secs(5), session.wait_for_all_connections())
+        .await
+        .ok();
+    Ok(session)
 }
 
 pub struct ClusterInfo {
@@ -75,21 +84,28 @@ pub struct ClusterInfo {
 pub struct CassError(pub CassErrorKind);
 
 impl CassError {
-    fn prepare_error(cql: &str, err: QueryError) -> CassError {
+    fn prepare_error(cql: &str, err: ExecutionError) -> CassError {
         CassError(CassErrorKind::Prepare(cql.to_string(), err))
     }
 
-    fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
+    fn query_execution_error(
+        cql: &str,
+        params: &[Option<CqlValue>],
+        err: ExecutionError,
+    ) -> CassError {
         let query = QueryInfo {
             cql: cql.to_string(),
             params: params.iter().map(|v| format!("{v:?}")).collect(),
         };
-        let kind = match err {
-            QueryError::TimeoutError
-            | QueryError::DbError(
-                DbError::Overloaded | DbError::ReadTimeout { .. } | DbError::WriteTimeout { .. },
-                _,
+        let kind = match err.as_database_error_kind() {
+            Ok(
+                DatabaseErrorKind::Overloaded
+                | DatabaseErrorKind::ReadTimeout { .. }
+                | DatabaseErrorKind::WriteTimeout { .. },
             ) => CassErrorKind::Overloaded(query, err),
+            Err(ExecutionError::Io(ref e)) if e.kind() == ErrorKind::TimedOut => {
+                CassErrorKind::Overloaded(query, err)
+            }
             _ => CassErrorKind::QueryExecution(query, err),
         };
         CassError(kind)
@@ -116,12 +132,12 @@ impl Display for QueryInfo {
 #[derive(Debug)]
 pub enum CassErrorKind {
     SslConfiguration(ErrorStack),
-    FailedToConnect(Vec<String>, NewSessionError),
+    FailedToConnect(Vec<String>, SessionError),
     PreparedStatementNotFound(String),
     UnsupportedType(TypeInfo),
-    Prepare(String, QueryError),
-    Overloaded(QueryInfo, QueryError),
-    QueryExecution(QueryInfo, QueryError),
+    Prepare(String, ExecutionError),
+    Overloaded(QueryInfo, ExecutionError),
+    QueryExecution(QueryInfo, ExecutionError),
 }
 
 impl CassError {
@@ -194,13 +210,23 @@ impl SessionStats {
         Instant::now()
     }
 
-    pub fn complete_request(&mut self, duration: Duration, rs: &Result<QueryResult, QueryError>) {
+    pub fn complete_request(
+        &mut self,
+        duration: Duration,
+        rs: &Result<ExecutionResult, ExecutionError>,
+    ) {
         self.queue_length -= 1;
         let duration_ns = duration.as_nanos().clamp(1, u64::MAX as u128) as u64;
         self.resp_times_ns.record(duration_ns).unwrap();
         self.req_count += 1;
         match rs {
-            Ok(rs) => self.row_count += rs.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64,
+            Ok(rs) => {
+                self.row_count += rs
+                    .rows::<Vec<Option<CqlValue>>>()
+                    .as_ref()
+                    .map_or(0, |rows| rows.rows_count as u64)
+            }
+            // Ok(rs) => self.row_count += rs.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64,
             Err(e) => {
                 self.req_error_count += 1;
                 self.req_errors.insert(format!("{e}"));
@@ -240,7 +266,7 @@ impl Default for SessionStats {
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
 #[derive(Any)]
 pub struct Context {
-    session: Arc<scylla::Session>,
+    session: scylla2::Session,
     statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
     #[rune(get, set, add_assign, copy)]
@@ -259,9 +285,9 @@ unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    pub fn new(session: scylla::Session) -> Context {
+    pub fn new(session: scylla2::Session) -> Context {
         Context {
-            session: Arc::new(session),
+            session,
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
             load_cycle_count: 0,
@@ -290,17 +316,15 @@ impl Context {
         let cql = "SELECT cluster_name, release_version FROM system.local";
         let rs = self
             .session
-            .query(cql, ())
+            .execute(cql, ())
             .await
             .map_err(|e| CassError::query_execution_error(cql, &[], e))?;
-        if let Some(rows) = rs.rows {
-            if let Some(row) = rows.into_iter().next() {
-                if let Ok((name, cassandra_version)) = row.into_typed() {
-                    return Ok(Some(ClusterInfo {
-                        name,
-                        cassandra_version,
-                    }));
-                }
+        if let Ok(mut rows) = rs.rows() {
+            if let Some(Ok((name, cassandra_version))) = rows.next() {
+                return Ok(Some(ClusterInfo {
+                    name,
+                    cassandra_version,
+                }));
             }
         }
         Ok(None)
@@ -320,7 +344,7 @@ impl Context {
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
         let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.session.query(cql, ()).await;
+        let rs = self.session.execute(cql, ()).await;
         let duration = Instant::now() - start_time;
         self.stats
             .try_lock()
@@ -338,13 +362,13 @@ impl Context {
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
         let params = bind::to_scylla_query_params(&params)?;
         let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.session.execute(statement, params.clone()).await;
+        let rs = self.session.execute(statement, &params[..]).await;
         let duration = Instant::now() - start_time;
         self.stats
             .try_lock()
             .unwrap()
             .complete_request(duration, &rs);
-        rs.map_err(|e| CassError::query_execution_error(statement.get_statement(), &params, e))?;
+        rs.map_err(|e| CassError::query_execution_error(statement.statement(), &params, e))?;
         Ok(())
     }
 
@@ -365,43 +389,49 @@ impl Context {
 /// Functions for binding rune values to CQL parameters
 mod bind {
     use crate::CassErrorKind;
-    use scylla::frame::response::result::CqlValue;
+    use scylla2::cql::value::CqlValue;
 
     use super::*;
 
-    fn to_scylla_value(v: &Value) -> Result<CqlValue, CassError> {
+    fn to_scylla_value(v: &Value) -> Result<Option<CqlValue>, CassError> {
         match v {
-            Value::Bool(v) => Ok(CqlValue::Boolean(*v)),
-            Value::Byte(v) => Ok(CqlValue::TinyInt(*v as i8)),
-            Value::Integer(v) => Ok(CqlValue::BigInt(*v)),
-            Value::Float(v) => Ok(CqlValue::Double(*v)),
-            Value::StaticString(v) => Ok(CqlValue::Text(v.as_str().to_string())),
-            Value::String(v) => Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string())),
-            Value::Bytes(v) => Ok(CqlValue::Blob(v.borrow_ref().unwrap().to_vec())),
+            Value::Bool(v) => Ok(Some(CqlValue::Boolean(*v))),
+            Value::Byte(v) => Ok(Some(CqlValue::TinyInt(*v as i8))),
+            Value::Integer(v) => Ok(Some(CqlValue::BigInt(*v))),
+            Value::Float(v) => Ok(Some(CqlValue::Double(*v))),
+            Value::StaticString(v) => Ok(Some(CqlValue::Text(v.as_str().to_string()))),
+            Value::String(v) => Ok(Some(CqlValue::Text(
+                v.borrow_ref().unwrap().as_str().to_string(),
+            ))),
+            Value::Bytes(v) => Ok(Some(CqlValue::Blob(v.borrow_ref().unwrap().to_vec()))),
             Value::Option(v) => match v.borrow_ref().unwrap().as_ref() {
                 Some(v) => to_scylla_value(v),
-                None => Ok(CqlValue::Empty),
+                None => Ok(None),
             },
             Value::Vec(v) => {
                 let v = v.borrow_ref().unwrap();
-                let elements = v.as_ref().iter().map(to_scylla_value).try_collect()?;
-                Ok(CqlValue::List(elements))
+                let elements = v
+                    .as_ref()
+                    .iter()
+                    .map(|v| to_scylla_value(v).transpose().unwrap())
+                    .try_collect()?;
+                Ok(Some(CqlValue::List(elements)))
             }
             Value::Any(obj) => {
                 let obj = obj.borrow_ref().unwrap();
                 let h = obj.type_hash();
                 if h == Uuid::type_hash() {
                     let uuid: &Uuid = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::Uuid(uuid.0))
+                    Ok(Some(CqlValue::Uuid(uuid.0)))
                 } else if h == Int32::type_hash() {
                     let int32: &Int32 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::Int(int32.0))
+                    Ok(Some(CqlValue::Int(int32.0)))
                 } else if h == Int16::type_hash() {
                     let int16: &Int16 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::SmallInt(int16.0))
+                    Ok(Some(CqlValue::SmallInt(int16.0)))
                 } else if h == Int8::type_hash() {
                     let int8: &Int8 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::TinyInt(int8.0))
+                    Ok(Some(CqlValue::TinyInt(int8.0)))
                 } else {
                     Err(CassError(CassErrorKind::UnsupportedType(
                         v.type_info().unwrap(),
@@ -416,7 +446,7 @@ mod bind {
 
     /// Binds parameters passed as a single rune value to the arguments of the statement.
     /// The `params` value can be a tuple, a vector, a struct or an object.
-    pub fn to_scylla_query_params(params: &Value) -> Result<Vec<CqlValue>, CassError> {
+    pub fn to_scylla_query_params(params: &Value) -> Result<Vec<Option<CqlValue>>, CassError> {
         let mut values = Vec::new();
         match params {
             Value::Tuple(tuple) => {

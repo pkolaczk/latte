@@ -39,7 +39,7 @@ rand = "0.8"
 regex = "1.5"
 rune = "0.12"
 rust-embed = "6.3.0"
-scylla = { version = "0.7", features = ["ssl"] }
+scylla2 = { git = "https://github.com/wyfo/scylla2", features = ["cql_value", "ssl"] }
 search_path = "0.1"
 serde = { version = "1.0.116", features = ["derive"] }
 serde_json = "1.0.57"
