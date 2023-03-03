@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io;
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -578,6 +578,16 @@ pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
 /// Selects one item from the collection based on the hash of the given value.
 pub fn hash_select(i: i64, collection: &[Value]) -> &Value {
     &collection[hash_range(i, collection.len() as i64) as usize]
+}
+
+/// Reads a file into a string.
+pub fn read_to_string(filename: &str) -> io::Result<String> {
+    let mut file = File::open(filename).expect("no such file");
+
+    let mut buffer = String::new();
+    file.read_to_string(&mut buffer)?;
+
+    Ok(buffer)
 }
 
 /// Reads a file into a vector of lines.

@@ -159,6 +159,9 @@ impl Program {
 
         let mut fs_module = Module::with_crate("fs");
         fs_module
+            .function(&["read_to_string"], context::read_to_string)
+            .unwrap();
+        fs_module
             .function(&["read_lines"], context::read_lines)
             .unwrap();
         fs_module
