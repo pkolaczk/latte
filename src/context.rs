@@ -85,7 +85,8 @@ impl CassError {
             params: params.iter().map(|v| format!("{v:?}")).collect(),
         };
         let kind = match err {
-            QueryError::TimeoutError
+            QueryError::RequestTimeout(_)
+            | QueryError::TimeoutError
             | QueryError::DbError(
                 DbError::Overloaded | DbError::ReadTimeout { .. } | DbError::WriteTimeout { .. },
                 _,
