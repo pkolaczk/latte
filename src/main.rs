@@ -399,6 +399,7 @@ fn init_runtime(thread_count: usize) -> std::io::Result<Runtime> {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
     let command = AppConfig::parse().command;
     let thread_count = match &command {
         Command::Run(cmd) => cmd.threads.get(),
