@@ -22,12 +22,10 @@ use rune::parse::Parser;
 use rune::runtime::{Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
-use scylla2::cql::error::DatabaseErrorKind;
-use scylla2::cql::value::CqlValue;
-use scylla2::error::{ExecutionError, SessionError};
-use scylla2::execution::ExecutionResult;
+use scylla2::cql::CqlValue;
+use scylla2::error::{DatabaseErrorKind, ExecutionError, SessionError};
 use scylla2::topology::node::PoolSize;
-use scylla2::PreparedStatement;
+use scylla2::{ExecutionResult, PreparedStatement};
 use statrs::distribution::Normal;
 use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
@@ -56,15 +54,13 @@ fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> 
 
 /// Configures connection to Cassandra.
 pub async fn connect(conf: &ConnectionConf) -> Result<scylla2::Session, CassError> {
-    let mut config = scylla2::SessionConfig::new()
+    let config = scylla2::SessionConfig::new()
         .nodes(&conf.addresses)
+        .ssl_context(ssl_context(&conf)?)
+        .credentials(&conf.user, &conf.password)
         .cql_version("3.3.1")
         .connection_pool_size(PoolSize::PerShard(conf.count))
-        .credentials(&conf.user, &conf.password)
-        .statement_consistency(conf.consistency.scylla_consistency());
-    if let Some(ssl_context) = ssl_context(&conf)? {
-        config = config.ssl_context(ssl_context);
-    }
+        .consistency(conf.consistency.scylla_consistency());
     let session = config
         .connect()
         .await
@@ -334,7 +330,7 @@ impl Context {
     pub async fn prepare(&mut self, key: &str, cql: &str) -> Result<(), CassError> {
         let statement = self
             .session
-            .prepare(cql)
+            .prepare(cql, false, None)
             .await
             .map_err(|e| CassError::prepare_error(cql, e))?;
         self.statements.insert(key.to_string(), Arc::new(statement));
@@ -389,7 +385,7 @@ impl Context {
 /// Functions for binding rune values to CQL parameters
 mod bind {
     use crate::CassErrorKind;
-    use scylla2::cql::value::CqlValue;
+    use scylla2::cql::CqlValue;
 
     use super::*;
 
