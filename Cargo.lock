@@ -1800,7 +1800,7 @@ checksum = "ddccb15bcce173023b3fedd9436f882a0739b8dfb45e4f6b6002bee5929f61b2"
 [[package]]
 name = "scylla2"
 version = "0.1.0"
-source = "git+https://github.com/wyfo/scylla2#b7c78fe4af35540edcdd55f1965044e1feb70227"
+source = "git+https://github.com/wyfo/scylla2#8e4191d4903a3f0579a0de142c180a54efba8e52"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1823,7 +1823,7 @@ dependencies = [
 [[package]]
 name = "scylla2-cql"
 version = "0.1.0"
-source = "git+https://github.com/wyfo/scylla2#b7c78fe4af35540edcdd55f1965044e1feb70227"
+source = "git+https://github.com/wyfo/scylla2#8e4191d4903a3f0579a0de142c180a54efba8e52"
 dependencies = [
  "async-trait",
  "bigdecimal",
