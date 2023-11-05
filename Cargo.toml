@@ -37,7 +37,7 @@ plotters = "0.3.4"
 plotters-svg = "0.3.3"
 rand = "0.8"
 regex = "1.5"
-rune = "0.12"
+rune = "0.12.4"
 rust-embed = "6.3.0"
 scylla = { version = "0.8", features = ["ssl"] }
 search_path = "0.1"
