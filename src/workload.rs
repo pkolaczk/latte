@@ -128,6 +128,7 @@ impl Program {
 
         let mut latte_module = Module::with_crate("latte");
         latte_module.function(&["blob"], context::blob).unwrap();
+        latte_module.function(&["now_timestamp"], context::now_timestamp).unwrap();
         latte_module.function(&["hash"], context::hash).unwrap();
         latte_module.function(&["hash2"], context::hash2).unwrap();
         latte_module
