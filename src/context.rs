@@ -394,6 +394,37 @@ mod bind {
                 let elements = v.as_ref().iter().map(to_scylla_value).try_collect()?;
                 Ok(CqlValue::List(elements))
             }
+            Value::Object(v) => {
+                let borrowed = v.borrow_ref().unwrap();
+
+                // // Get value of "_keyspace" key or set default value
+                let keyspace = match borrowed.get_value::<str, String>("_keyspace") {
+                    Ok(Some(value)) => value,
+                    _ => "unknown".to_string(),
+                };
+
+                // // Get value of "_type_name" key or set default value
+                let type_name = match borrowed.get_value::<str, String>("_type_name") {
+                    Ok(Some(value)) => value,
+                    _ => "unknown".to_string(),
+                };
+
+                let keys = borrowed.keys();
+                let values: Result<Vec<Option<CqlValue>>, _> = borrowed.values()
+                    .map(|value| to_scylla_value(&value.clone())
+                    .map(Some)).collect();
+                let fields: Vec<(String, Option<CqlValue>)> = keys.into_iter()
+                    .zip(values?.into_iter())
+                    .filter(|&(key, _)| key != "_keyspace" && key != "_type_name")
+                    .map(|(key, value)| (key.to_string(), value))
+                    .collect();
+                let udt = CqlValue::UserDefinedType{
+                    keyspace: keyspace,
+                    type_name: type_name,
+                    fields: fields,
+                };
+                Ok(udt)
+            },
             Value::Any(obj) => {
                 let obj = obj.borrow_ref().unwrap();
                 let h = obj.type_hash();
