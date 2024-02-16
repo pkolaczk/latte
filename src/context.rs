@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use chrono::Utc;
 use hdrhistogram::Histogram;
 use itertools::Itertools;
 use metrohash::{MetroHash128, MetroHash64};
@@ -579,6 +580,11 @@ pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
     let mut rng = StdRng::seed_from_u64(seed as u64);
     let v = (0..len).map(|_| rng.gen()).collect_vec();
     rune::runtime::Bytes::from_vec(v)
+}
+
+/// Generates 'now' timestamp
+pub fn now_timestamp() -> i64 {
+    Utc::now().timestamp()
 }
 
 /// Selects one item from the collection based on the hash of the given value.
