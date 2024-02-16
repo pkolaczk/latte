@@ -39,7 +39,7 @@ rand = "0.8"
 regex = "1.5"
 rune = "0.12"
 rust-embed = "6.3.0"
-scylla = { version = "0.8", features = ["ssl"] }
+scylla = { version = "0.12", features = ["ssl"] }
 search_path = "0.1"
 serde = { version = "1.0.116", features = ["derive"] }
 serde_json = "1.0.57"
