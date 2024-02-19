@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use statrs::statistics::Statistics;
 use strum::IntoEnumIterator;
 
-use crate::config::RunCommand;
+use crate::config::{PRINT_RETRY_ERROR_LIMIT, RunCommand};
 use crate::stats::{
     BenchmarkCmp, BenchmarkStats, Bucket, Mean, Percentile, Sample, Significance, TimeDistribution,
 };
@@ -516,6 +516,19 @@ impl<'a> Display for RunConfigCmp<'a> {
             self.line("└─", "op", |conf| {
                 Quantity::from(conf.sampling_interval.count())
             }),
+            self.line("Request timeout", "", |conf| {
+                Quantity::from(conf.connection.request_timeout)
+            }),
+            self.line("Retries", "", |_| {Quantity::from("")}),
+            self.line("┌──────┴number", "", |conf| {
+                Quantity::from(conf.connection.retry_number)
+            }),
+            self.line("├─min interval", "ms", |conf| {
+                Quantity::from(conf.connection.retry_interval.min_ms)
+            }),
+            self.line("└─max interval", "ms", |conf| {
+                Quantity::from(conf.connection.retry_interval.max_ms)
+            }),
         ];
 
         for l in lines {
@@ -533,6 +546,24 @@ pub fn print_log_header() {
 
 impl Display for Sample {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if self.retry_error_count > 0 {
+            let mut num_of_printed_errors = 0;
+            let mut error_msg_bunch = String::new();
+            for retry_error in &self.retry_errors {
+                if num_of_printed_errors < PRINT_RETRY_ERROR_LIMIT {
+                    error_msg_bunch += &format!("{}\n", retry_error);
+                    num_of_printed_errors += 1;
+                } else { break }
+            }
+            let num_of_dropped_errors = self.retry_error_count - num_of_printed_errors;
+            if num_of_dropped_errors > 0 {
+                error_msg_bunch += &format!(
+                    "...number of dropped error messages per sampling period: {}",
+                    num_of_dropped_errors,
+                );
+            }
+            eprintln!("{}", error_msg_bunch);
+        }
         write!(
             f,
             "{:8.3} {:11.0} {:11.0}   {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3}",

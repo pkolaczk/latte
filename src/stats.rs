@@ -265,8 +265,10 @@ pub struct Sample {
     pub duration_s: f32,
     pub cycle_count: u64,
     pub request_count: u64,
-    pub error_count: u64,
+    pub retry_errors: HashSet<String>,
+    pub retry_error_count: u64,
     pub errors: HashSet<String>,
+    pub error_count: u64,
     pub row_count: u64,
     pub mean_queue_len: f32,
     pub cycle_throughput: f32,
@@ -287,6 +289,8 @@ impl Sample {
         let mut cycle_times_ns = Histogram::new(3).unwrap();
 
         let mut request_count = 0;
+        let mut retry_errors = HashSet::new();
+        let mut retry_error_count = 0;
         let mut row_count = 0;
         let mut errors = HashSet::new();
         let mut error_count = 0;
@@ -306,6 +310,8 @@ impl Sample {
                 errors.extend(ss.req_errors.iter().cloned());
             }
             error_count += ss.req_error_count;
+            retry_errors.extend(ss.retry_errors.iter().cloned());
+            retry_error_count += ss.retry_error_count;
             mean_queue_len += ss.mean_queue_length / stats.len() as f32;
             duration_s += (s.end_time - s.start_time).as_secs_f32() / stats.len() as f32;
             resp_times_ns.add(&ss.resp_times_ns).unwrap();
@@ -323,9 +329,11 @@ impl Sample {
             duration_s,
             cycle_count,
             request_count,
-            row_count,
-            error_count,
+            retry_errors,
+            retry_error_count,
             errors,
+            error_count,
+            row_count,
             mean_queue_len: not_nan_f32(mean_queue_len).unwrap_or(0.0),
             cycle_throughput: cycle_count as f32 / duration_s,
             req_throughput: request_count as f32 / duration_s,
