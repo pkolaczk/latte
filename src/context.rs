@@ -33,7 +33,7 @@ use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
 use uuid::{Variant, Version};
 
-use crate::config::ConnectionConf;
+use crate::config::{ConnectionConf, PRINT_RETRY_ERROR_LIMIT, RetryInterval};
 use crate::LatteError;
 
 fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
@@ -58,7 +58,7 @@ fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> 
 pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
     let profile = ExecutionProfile::builder()
         .consistency(conf.consistency.scylla_consistency())
-        .request_timeout(Some(Duration::from_secs(60))) // no request timeout
+        .request_timeout(Some(Duration::from_secs(conf.request_timeout.get() as u64)))
         .build();
 
     let scylla_session = SessionBuilder::new()
@@ -70,12 +70,62 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
-    Ok(Context::new(scylla_session))
+    Ok(Context::new(scylla_session, conf.retry_number, conf.retry_interval))
 }
 
 pub struct ClusterInfo {
     pub name: String,
     pub cassandra_version: String,
+}
+
+/// Transforms a CqlValue object to a string dedicated to be part of CassError message
+pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
+    let no_transformation_size_limit = 32;
+    match v {
+        // Replace big string- and bytes-alike object values with it's size labels
+        CqlValue::Text(param) if param.len() > no_transformation_size_limit => {
+            format!("Text(<size>={})", param.len())
+        },
+        CqlValue::Ascii(param) if param.len() > no_transformation_size_limit => {
+            format!("Ascii(<size>={})", param.len())
+        },
+        CqlValue::Blob(param) if param.len() > no_transformation_size_limit => {
+            format!("Blob(<size>={})", param.len())
+        },
+        CqlValue::UserDefinedType { keyspace, type_name, fields } => {
+            let mut result = format!(
+                "UDT {{ keyspace: \"{}\", type_name: \"{}\", fields: [",
+                keyspace, type_name,
+            );
+            for (field_name, field_value) in fields {
+                let field_string = match field_value {
+                    Some(field) => cql_value_obj_to_string(field),
+                    None => String::from("None"),
+                };
+                result.push_str(&format!("(\"{}\", {}), ", field_name, field_string));
+            }
+            if result.len() >= 2 {
+                result.truncate(result.len() - 2);
+            }
+            result.push_str(&format!("] }}"));
+            result
+        },
+        CqlValue::List(elements) => {
+            let mut result = String::from("List([");
+            for element in elements {
+                let element_string = cql_value_obj_to_string(element);
+                result.push_str(&element_string);
+                result.push_str(", ");
+            }
+            if result.len() >= 2 {
+                result.truncate(result.len() - 2);
+            }
+            result.push_str("])");
+            result
+        },
+        // TODO: cover 'CqlValue::Map' and 'CqlValue::Set'
+        _ => format!("{v:?}"),
+    }
 }
 
 #[derive(Any, Debug)]
@@ -89,7 +139,7 @@ impl CassError {
     fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
         let query = QueryInfo {
             cql: cql.to_string(),
-            params: params.iter().map(|v| format!("{v:?}")).collect(),
+            params: params.iter().map(|v| cql_value_obj_to_string(v)).collect(),
         };
         let kind = match err {
             QueryError::RequestTimeout(_)
@@ -101,6 +151,12 @@ impl CassError {
             _ => CassErrorKind::QueryExecution(query, err),
         };
         CassError(kind)
+    }
+
+    fn query_retries_exceeded(retry_number: u64) -> CassError {
+        CassError(CassErrorKind::QueryRetriesExceeded(
+            format!("Max retry attempts ({}) reached", retry_number)
+        ))
     }
 }
 
@@ -126,6 +182,7 @@ pub enum CassErrorKind {
     SslConfiguration(ErrorStack),
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
+    QueryRetriesExceeded(String),
     UnsupportedType(TypeInfo),
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
@@ -144,6 +201,9 @@ impl CassError {
             }
             CassErrorKind::PreparedStatementNotFound(s) => {
                 write!(buf, "Prepared statement not found: {s}")
+            }
+            CassErrorKind::QueryRetriesExceeded(s) => {
+                write!(buf, "QueryRetriesExceeded: {s}")
             }
             CassErrorKind::UnsupportedType(s) => {
                 write!(buf, "Unsupported type: {s}")
@@ -180,6 +240,8 @@ impl std::error::Error for CassError {}
 #[derive(Clone, Debug)]
 pub struct SessionStats {
     pub req_count: u64,
+    pub retry_errors: HashSet<String>,
+    pub retry_error_count: u64,
     pub req_errors: HashSet<String>,
     pub req_error_count: u64,
     pub row_count: u64,
@@ -216,12 +278,21 @@ impl SessionStats {
         }
     }
 
+    pub fn store_retry_error(&mut self, error_str: String) {
+        self.retry_error_count += 1;
+        if self.retry_error_count <= PRINT_RETRY_ERROR_LIMIT {
+            self.retry_errors.insert(error_str);
+        }
+    }
+
     /// Resets all accumulators
     pub fn reset(&mut self) {
         self.req_error_count = 0;
         self.row_count = 0;
         self.req_count = 0;
         self.mean_queue_length = 0.0;
+        self.retry_error_count = 0;
+        self.retry_errors.clear();
         self.req_errors.clear();
         self.resp_times_ns.clear();
 
@@ -234,6 +305,8 @@ impl Default for SessionStats {
     fn default() -> Self {
         SessionStats {
             req_count: 0,
+            retry_errors: HashSet::new(),
+            retry_error_count: 0,
             req_errors: HashSet::new(),
             req_error_count: 0,
             row_count: 0,
@@ -244,6 +317,44 @@ impl Default for SessionStats {
     }
 }
 
+pub fn get_expoinential_retry_interval(min_interval: u64,
+                                       max_interval: u64,
+                                       current_attempt_num: u64) -> u64 {
+    let min_interval_float: f64 = min_interval as f64;
+    let mut current_interval: f64 = min_interval_float * (
+        2u64.pow((current_attempt_num - 1).try_into().unwrap_or(0)) as f64
+    );
+
+    // Add jitter
+    current_interval += rand::thread_rng().gen::<f64>() * min_interval_float;
+    current_interval -= min_interval_float / 2.0;
+
+    std::cmp::min(current_interval as u64, max_interval as u64) as u64
+}
+
+pub async fn handle_retry_error(ctxt: &Context, current_attempt_num: u64, current_error: CassError) {
+    let current_retry_interval = get_expoinential_retry_interval(
+        ctxt.retry_interval.min_ms, ctxt.retry_interval.max_ms, current_attempt_num,
+    );
+
+    let mut next_attempt_str = String::new();
+    let is_last_attempt = current_attempt_num == ctxt.retry_number;
+    if !is_last_attempt {
+        next_attempt_str += &format!("[Retry in {}ms]", current_retry_interval);
+    }
+    let err_msg = format!(
+        "{}: [ERROR][Attempt {}/{}]{} {}",
+        Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+        current_attempt_num, ctxt.retry_number, next_attempt_str, current_error,
+    );
+    if !is_last_attempt {
+        ctxt.stats.try_lock().unwrap().store_retry_error(err_msg);
+        tokio::time::sleep(Duration::from_millis(current_retry_interval)).await;
+    } else {
+        eprintln!("{}", err_msg);
+    }
+}
+
 /// This is the main object that a workload script uses to interface with the outside world.
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
 #[derive(Any)]
@@ -251,6 +362,8 @@ pub struct Context {
     session: Arc<scylla::Session>,
     statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
+    retry_number: u64,
+    retry_interval: RetryInterval,
     #[rune(get, set, add_assign, copy)]
     pub load_cycle_count: u64,
     #[rune(get)]
@@ -267,11 +380,13 @@ unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    pub fn new(session: scylla::Session) -> Context {
+    pub fn new(session: scylla::Session, retry_number: u64, retry_interval: RetryInterval) -> Context {
         Context {
             session: Arc::new(session),
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
+            retry_number: retry_number,
+            retry_interval: retry_interval,
             load_cycle_count: 0,
             data: Value::Object(Shared::new(Object::new())),
         }
@@ -288,6 +403,8 @@ impl Context {
             session: self.session.clone(),
             statements: self.statements.clone(),
             stats: TryLock::new(SessionStats::default()),
+            retry_number: self.retry_number,
+            retry_interval: self.retry_interval,
             load_cycle_count: self.load_cycle_count,
             data: deserialized,
         })
@@ -327,15 +444,23 @@ impl Context {
 
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
-        let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.session.query(cql, ()).await;
-        let duration = Instant::now() - start_time;
-        self.stats
-            .try_lock()
-            .unwrap()
-            .complete_request(duration, &rs);
-        rs.map_err(|e| CassError::query_execution_error(cql, &[], e))?;
-        Ok(())
+        for current_attempt_num in 0..self.retry_number+1 {
+            let start_time = self.stats.try_lock().unwrap().start_request();
+            let rs = self.session.query(cql, ()).await;
+            let duration = Instant::now() - start_time;
+            match rs {
+                Ok(_) => {}
+                Err(e) => {
+                    let current_error = CassError::query_execution_error(cql, &[], e.clone());
+                    handle_retry_error(self, current_attempt_num, current_error).await;
+                    continue
+                }
+            }
+            self.stats.try_lock().unwrap().complete_request(duration, &rs);
+            rs.map_err(|e| CassError::query_execution_error(cql, &[], e.clone()))?;
+            return Ok(())
+        }
+        Err(CassError::query_retries_exceeded(self.retry_number))
     }
 
     /// Executes a statement prepared and registered earlier by a call to `prepare`.
@@ -345,15 +470,25 @@ impl Context {
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
         let params = bind::to_scylla_query_params(&params)?;
-        let start_time = self.stats.try_lock().unwrap().start_request();
-        let rs = self.session.execute(statement, params.clone()).await;
-        let duration = Instant::now() - start_time;
-        self.stats
-            .try_lock()
-            .unwrap()
-            .complete_request(duration, &rs);
-        rs.map_err(|e| CassError::query_execution_error(statement.get_statement(), &params, e))?;
-        Ok(())
+        for current_attempt_num in 0..self.retry_number+1 {
+            let start_time = self.stats.try_lock().unwrap().start_request();
+            let rs = self.session.execute(statement, params.clone()).await;
+            let duration = Instant::now() - start_time;
+            match rs {
+                Ok(_) => {}
+                Err(e) => {
+                    let current_error = CassError::query_execution_error(
+                        statement.get_statement(), &params, e.clone()
+                    );
+                    handle_retry_error(self, current_attempt_num, current_error).await;
+                    continue
+                }
+            }
+            self.stats.try_lock().unwrap().complete_request(duration, &rs);
+            rs.map_err(|e| CassError::query_execution_error(statement.get_statement(), &params, e))?;
+            return Ok(());
+        }
+        Err(CassError::query_retries_exceeded(self.retry_number))
     }
 
     /// Returns the current accumulated request stats snapshot and resets the stats.
