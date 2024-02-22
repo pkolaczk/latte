@@ -55,13 +55,13 @@ fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> 
 }
 
 /// Configures connection to Cassandra.
-pub async fn connect(conf: &ConnectionConf) -> Result<scylla::Session, CassError> {
+pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
     let profile = ExecutionProfile::builder()
         .consistency(conf.consistency.scylla_consistency())
         .request_timeout(Some(Duration::from_secs(60))) // no request timeout
         .build();
 
-    SessionBuilder::new()
+    let scylla_session = SessionBuilder::new()
         .known_nodes(&conf.addresses)
         .pool_size(PoolSize::PerShard(conf.count))
         .user(&conf.user, &conf.password)
@@ -69,7 +69,8 @@ pub async fn connect(conf: &ConnectionConf) -> Result<scylla::Session, CassError
         .default_execution_profile_handle(profile.into_handle())
         .build()
         .await
-        .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))
+        .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
+    Ok(Context::new(scylla_session))
 }
 
 pub struct ClusterInfo {

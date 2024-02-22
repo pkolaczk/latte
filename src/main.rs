@@ -109,7 +109,6 @@ fn find_workload(workload: &Path) -> PathBuf {
 async fn connect(conf: &ConnectionConf) -> Result<(Context, Option<ClusterInfo>)> {
     eprintln!("info: Connecting to {:?}... ", conf.addresses);
     let session = context::connect(conf).await?;
-    let session = Context::new(session);
     let cluster_info = session.cluster_info().await?;
     eprintln!(
         "info: Connected to {} running Cassandra version {}",
