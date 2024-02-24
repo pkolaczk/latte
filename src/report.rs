@@ -469,7 +469,7 @@ impl<'a> Display for RunConfigCmp<'a> {
                 conf.workload
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "".to_string())
+                    .unwrap_or_default()
             }),
         ];
 

@@ -326,7 +326,7 @@ async fn show(conf: ShowCommand) -> Result<()> {
 
 /// Reads histograms from the report and dumps them to an hdr log
 async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
-    let tag_prefix = conf.tag.map(|t| t + ".").unwrap_or_else(|| "".to_string());
+    let tag_prefix = conf.tag.map(|t| t + ".").unwrap_or_default();
     if tag_prefix.chars().any(|c| ", \n\t".contains(c)) {
         eprintln!("error: Hdr histogram tags are not allowed to contain commas nor whitespace.");
         exit(255);

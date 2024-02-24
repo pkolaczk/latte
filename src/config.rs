@@ -6,7 +6,8 @@ use std::str::FromStr;
 
 use anyhow::anyhow;
 use chrono::Utc;
-use clap::{AppSettings, ArgEnum, Parser};
+use clap::builder::PossibleValue;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 /// Parse a single key-value pair
@@ -124,7 +125,7 @@ pub struct ConnectionConf {
     pub consistency: Consistency,
 }
 
-#[derive(ArgEnum, Clone, Copy, Default, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Consistency {
     Any,
     One,
@@ -154,10 +155,22 @@ impl Consistency {
     }
 }
 
-impl FromStr for Consistency {
-    type Err = String;
+impl ValueEnum for Consistency {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            Self::Any,
+            Self::One,
+            Self::Two,
+            Self::Three,
+            Self::Quorum,
+            Self::All,
+            Self::LocalOne,
+            Self::LocalQuorum,
+            Self::EachQuorum,
+        ]
+    }
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str, _ignore_case: bool) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "any" => Ok(Self::Any),
             "one" | "1" => Ok(Self::One),
@@ -171,17 +184,27 @@ impl FromStr for Consistency {
             s => Err(format!("Unknown consistency level {s}")),
         }
     }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        match self {
+            Self::Any => Some(PossibleValue::new("ANY")),
+            Self::One => Some(PossibleValue::new("ONE")),
+            Self::Two => Some(PossibleValue::new("TWO")),
+            Self::Three => Some(PossibleValue::new("THREE")),
+            Self::Quorum => Some(PossibleValue::new("QUORUM")),
+            Self::All => Some(PossibleValue::new("ALL")),
+            Self::LocalOne => Some(PossibleValue::new("LOCAL_ONE")),
+            Self::LocalQuorum => Some(PossibleValue::new("LOCAL_QUORUM")),
+            Self::EachQuorum => Some(PossibleValue::new("EACH_QUORUM")),
+        }
+    }
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize)]
-#[clap(
-    setting(AppSettings::NextLineHelp),
-    setting(AppSettings::DeriveDisplayOrder)
-)]
+#[command(next_line_help = true)]
 pub struct SchemaCommand {
     /// Parameter values passed to the workload, accessible through param! macro.
-    #[clap(short('P'), parse(try_from_str = parse_key_val),
-    number_of_values = 1, multiple_occurrences = true)]
+    #[clap(short('P'), value_parser = parse_key_val::<String, String>, number_of_values = 1)]
     pub params: Vec<(String, String)>,
 
     /// Path to the workload definition file.
@@ -194,10 +217,7 @@ pub struct SchemaCommand {
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize)]
-#[clap(
-    setting(AppSettings::NextLineHelp),
-    setting(AppSettings::DeriveDisplayOrder)
-)]
+#[command(next_line_help = true)]
 pub struct LoadCommand {
     /// Number of cycles per second to execute.
     /// If not given, the load cycles will be executed as fast as possible.
@@ -213,8 +233,7 @@ pub struct LoadCommand {
     pub concurrency: NonZeroUsize,
 
     /// Parameter values passed to the workload, accessible through param! macro.
-    #[clap(short('P'), parse(try_from_str = parse_key_val),
-    number_of_values = 1, multiple_occurrences = true)]
+    #[clap(short('P'), value_parser = parse_key_val::<String, String>, number_of_values = 1)]
     pub params: Vec<(String, String)>,
 
     /// Don't display the progress bar.
@@ -231,10 +250,7 @@ pub struct LoadCommand {
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize)]
-#[clap(
-    setting(AppSettings::NextLineHelp),
-    setting(AppSettings::DeriveDisplayOrder)
-)]
+#[command(next_line_help = true)]
 pub struct RunCommand {
     /// Number of cycles per second to execute.
     /// If not given, the benchmark cycles will be executed as fast as possible.
@@ -277,7 +293,7 @@ pub struct RunCommand {
     pub sampling_interval: Interval,
 
     /// Label that will be added to the report to help identifying the test
-    #[clap(long("tag"), number_of_values = 1, multiple_occurrences = true)]
+    #[clap(long("tag"), number_of_values = 1)]
     pub tags: Vec<String>,
 
     /// Path to an output file or directory where the JSON report should be written to.
@@ -298,8 +314,7 @@ pub struct RunCommand {
     pub function: String,
 
     /// Parameter values passed to the workload, accessible through param! macro.
-    #[clap(short('P'), parse(try_from_str = parse_key_val),
-    number_of_values = 1, multiple_occurrences = true)]
+    #[clap(short('P'), value_parser = parse_key_val::<String, String>, number_of_values = 1)]
     pub params: Vec<(String, String)>,
 
     /// Don't display the progress bar.
@@ -311,7 +326,7 @@ pub struct RunCommand {
     pub connection: ConnectionConf,
 
     /// Seconds since 1970-01-01T00:00:00Z
-    #[clap(hidden(true), long)]
+    #[clap(hide = true, long)]
     pub timestamp: Option<i64>,
 
     #[clap(skip)]
@@ -397,12 +412,7 @@ pub struct PlotCommand {
     pub reports: Vec<PathBuf>,
 
     /// Plot given response time percentiles. Can be used multiple times.
-    #[clap(
-        short,
-        long("percentile"),
-        multiple_occurrences = true,
-        number_of_values = 1
-    )]
+    #[clap(short, long("percentile"), number_of_values = 1)]
     pub percentiles: Vec<f64>,
 
     /// Plot throughput.
@@ -453,7 +463,7 @@ pub enum Command {
 }
 
 #[derive(Parser, Debug)]
-#[clap(
+#[command(
 name = "Cassandra Latency and Throughput Tester",
 author = "Piotr Kołaczkowski <pkolaczk@datastax.com>",
 version = clap::crate_version ! (),
