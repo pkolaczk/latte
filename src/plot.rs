@@ -165,7 +165,7 @@ pub async fn plot_graph(conf: PlotCommand) -> Result<()> {
         .draw()
         .unwrap();
 
-    let colors = vec![&RED, &BLUE, &GREEN, &ORANGE, &MAGENTA, &BLACK];
+    let colors = [&RED, &BLUE, &GREEN, &ORANGE, &MAGENTA, &BLACK];
     const SYMBOL_SIZE: u32 = 6;
 
     for series in data {
