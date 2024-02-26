@@ -123,7 +123,32 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             result.push_str("])");
             result
         },
-        // TODO: cover 'CqlValue::Map' and 'CqlValue::Set'
+        CqlValue::Set(elements) => {
+            let mut result = String::from("Set([");
+            for element in elements {
+                let element_string = cql_value_obj_to_string(element);
+                result.push_str(&element_string);
+                result.push_str(", ");
+            }
+            if result.len() >= 2 {
+                result.truncate(result.len() - 2);
+            }
+            result.push_str("])");
+            result
+        },
+        CqlValue::Map(pairs) => {
+            let mut result = String::from("Map({");
+            for (key, value) in pairs {
+                let key_string = cql_value_obj_to_string(key);
+                let value_string = cql_value_obj_to_string(value);
+                result.push_str(&format!("({}: {}), ", key_string, value_string));
+            }
+            if result.len() >= 2 {
+                result.truncate(result.len() - 2);
+            }
+            result.push_str("})");
+            result
+        },
         _ => format!("{v:?}"),
     }
 }
@@ -176,6 +201,7 @@ pub enum CassErrorKind {
     SslConfiguration(ErrorStack),
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
+    WrongDataStructure(String),
     UnsupportedType(TypeInfo),
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
@@ -194,6 +220,9 @@ impl CassError {
             }
             CassErrorKind::PreparedStatementNotFound(s) => {
                 write!(buf, "Prepared statement not found: {s}")
+            }
+            CassErrorKind::WrongDataStructure(s) => {
+                write!(buf, "Wrong data structure: {s}")
             }
             CassErrorKind::UnsupportedType(s) => {
                 write!(buf, "Unsupported type: {s}")
@@ -510,6 +539,10 @@ mod bind {
 
     fn to_scylla_value(v: &Value) -> Result<CqlValue, CassError> {
         match v {
+            // TODO: add support for the following native CQL types:
+            //       'counter', 'date', 'decimal', 'duration', 'float', 'inet', 'time', 'timeuuid'
+            //       and 'variant'.
+            //       Also, for the 'tuple'.
             Value::Bool(v) => Ok(CqlValue::Boolean(*v)),
             Value::Byte(v) => Ok(CqlValue::TinyInt(*v as i8)),
             Value::Integer(v) => Ok(CqlValue::BigInt(*v)),
@@ -528,26 +561,128 @@ mod bind {
             }
             Value::Object(v) => {
                 let borrowed = v.borrow_ref().unwrap();
+                let set_key_name = "_set";
+                let list_key_name = "_list";
+                let map_key_name = "_map";
+                let timestamp_key_name = "_timestamp";
+                let udt_keyspace = "_keyspace";
+                let udt_key_name = "_type_name";
 
-                // // Get value of "_keyspace" key or set default value
-                let keyspace = match borrowed.get_value::<str, String>("_keyspace") {
+                // Check that we don't have a mess of different data types in scope of single object
+                let mutually_exclusive_keys = vec![
+                    set_key_name, list_key_name, map_key_name, udt_key_name, timestamp_key_name,
+                ];
+                let mut found_mutually_exclusive_keys = HashSet::new();
+                for mutually_exclusive_key in &mutually_exclusive_keys {
+                    if borrowed.contains_key(&mutually_exclusive_key as &str) {
+                        found_mutually_exclusive_keys.insert(mutually_exclusive_key);
+                    }
+                }
+                if found_mutually_exclusive_keys.len() > 1 {
+                    return Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                        "Following mutually exclusive keys were found: {:?}",
+                        found_mutually_exclusive_keys,
+                    ))));
+                } else if found_mutually_exclusive_keys.len() == 0 {
+                    return Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                        "None of the expected keys were provided: {:?}",
+                        mutually_exclusive_keys,
+                    ))));
+                }
+
+                // Check if "_timestamp" field exists and is of integer type
+                if let Some(timestamp_value) = borrowed.get(timestamp_key_name) {
+                    if let Value::Integer(timestamp) = timestamp_value {
+                        return Ok(CqlValue::Timestamp(scylla::frame::value::CqlTimestamp(*timestamp)));
+                    } else {
+                        return Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                            "Unexpected data type provided for the 'timestamp': {:?}",
+                            timestamp_value.type_info().unwrap(),
+                        ))));
+                    }
+                }
+
+                // Check if "_set" field exists and is a vector of values
+                if let Some(set_value) = borrowed.get(set_key_name) {
+                    if let Value::Vec(elements) = set_value {
+                        let elements = elements.borrow_ref().unwrap().as_ref()
+                            .iter().map(to_scylla_value).try_collect()?;
+                        return Ok(CqlValue::Set(elements));
+                    } else {
+                        return Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                            "Unexpected data type provided for the 'set': {:?}",
+                            set_value.type_info().unwrap(),
+                        ))));
+                    }
+                }
+
+                // Check for "_list" field exists and is a vector of values
+                if let Some(list_value) = borrowed.get(list_key_name) {
+                    if let Value::Vec(elements) = list_value {
+                        let elements = elements.borrow_ref().unwrap().as_ref()
+                            .iter().map(to_scylla_value).try_collect()?;
+                        return Ok(CqlValue::List(elements));
+                    } else {
+                        return Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                            "Unexpected data type provided for the 'list': {:?}",
+                            list_value.type_info().unwrap(),
+                        ))));
+                    }
+                }
+
+                // Check for "_map" field exists and is a vector of tuples
+                if let Some(map_value) = borrowed.get(map_key_name) {
+                    if let Value::Vec(vec_value) = map_value {
+                        let vec_unwrapped = vec_value.borrow_ref().unwrap();
+                        if vec_unwrapped.len() > 0 {
+                            if let Value::Tuple(first_tuple) = &vec_unwrapped[0] {
+                                if first_tuple.borrow_ref().unwrap().len() == 2 {
+                                    let map_values: Vec<(CqlValue, CqlValue)> = vec_unwrapped.iter()
+                                        .filter_map(|tuple_wrapped| {
+                                            if let Value::Tuple(tuple_wrapped) = &tuple_wrapped {
+                                                let tuple = tuple_wrapped.borrow_ref().unwrap();
+                                                let key = to_scylla_value(tuple.get(0).unwrap()).unwrap();
+                                                let value = to_scylla_value(tuple.get(1).unwrap()).unwrap();
+                                                Some((key, value))
+                                            } else { None }
+                                        }).collect();
+                                    return Ok(CqlValue::Map(map_values));
+                                } else {
+                                    return Err(CassError(CassErrorKind::WrongDataStructure(
+                                        "Vector's tuple must have exactly 2 elements".to_string(),
+                                    )))
+                                }
+                            } else {
+                                return Err(CassError(CassErrorKind::WrongDataStructure(
+                                    "'_map' is expected to contain vector of tuples only".to_string(),
+                                )))
+                            }
+                        } else {
+                            return Ok(CqlValue::Map(vec![]));
+                        }
+                    } else {
+                        return Err(CassError(CassErrorKind::WrongDataStructure(
+                            "'_map' field is expected to contain only Vector type of data".to_string(),
+                        )))
+                    }
+                }
+
+                // Handle last supported case - User Defined Type (UDT)
+                let keyspace = match borrowed.get_value::<str, String>(udt_keyspace) {
                     Ok(Some(value)) => value,
                     _ => "unknown".to_string(),
                 };
-
-                // // Get value of "_type_name" key or set default value
-                let type_name = match borrowed.get_value::<str, String>("_type_name") {
+                let type_name = match borrowed.get_value::<str, String>(udt_key_name) {
                     Ok(Some(value)) => value,
                     _ => "unknown".to_string(),
                 };
-
                 let keys = borrowed.keys();
                 let values: Result<Vec<Option<CqlValue>>, _> = borrowed.values()
                     .map(|value| to_scylla_value(&value.clone())
                     .map(Some)).collect();
                 let fields: Vec<(String, Option<CqlValue>)> = keys.into_iter()
                     .zip(values?.into_iter())
-                    .filter(|&(key, _)| key != "_keyspace" && key != "_type_name")
+                    .filter(|&(key, _)| key != udt_keyspace && key != udt_key_name)
                     .map(|(key, value)| (key.to_string(), value))
                     .collect();
                 let udt = CqlValue::UserDefinedType{
