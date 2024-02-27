@@ -613,6 +613,17 @@ pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
     rune::runtime::Bytes::from_vec(v)
 }
 
+/// Generates random string of given length.
+/// Parameter `seed` is used to seed the RNG.
+pub fn text(seed: i64, len: usize) -> rune::runtime::StaticString {
+    let mut rng = StdRng::seed_from_u64(seed as u64);
+    let s: String = (0..len).map(|_| {
+        let code_point = rng.gen_range(0x0061u32..=0x007Au32); // Unicode range for 'a-z'
+        std::char::from_u32(code_point).unwrap()
+    }).collect();
+    rune::runtime::StaticString::new(s)
+}
+
 /// Generates 'now' timestamp
 pub fn now_timestamp() -> i64 {
     Utc::now().timestamp()
