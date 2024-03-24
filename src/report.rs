@@ -483,7 +483,18 @@ impl<'a> Display for RunConfigCmp<'a> {
         if !param_names.is_empty() {
             for k in param_names {
                 let label = format!("-P {k}");
-                let line = self.line(label.as_str(), "", |conf| Quantity::from(conf.get_param(k)));
+                let line = self.line(label.as_str(), "", |conf| {
+                    match Quantity::from(conf.get_param(k)).value {
+                        Some(quantity) => quantity.to_string(),
+                        None => {
+                            let str_value = conf.params.iter()
+                                .find(|(key, _)| key == k)
+                                .map(|(_, value)| value.clone())
+                                .unwrap_or_else(|| "".to_string());
+                            str_value
+                        }
+                    }
+                });
                 writeln!(f, "{line}").unwrap();
             }
             writeln!(f, "{}", fmt_horizontal_line()).unwrap();
