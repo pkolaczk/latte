@@ -177,6 +177,12 @@ impl CassError {
         };
         CassError(kind)
     }
+
+    fn query_retries_exceeded(retry_number: u64) -> CassError {
+        CassError(CassErrorKind::QueryRetriesExceeded(
+            format!("Max retry attempts ({}) reached", retry_number)
+        ))
+    }
 }
 
 #[derive(Debug)]
@@ -201,6 +207,7 @@ pub enum CassErrorKind {
     SslConfiguration(ErrorStack),
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
+    QueryRetriesExceeded(String),
     WrongDataStructure(String),
     UnsupportedType(TypeInfo),
     Prepare(String, QueryError),
@@ -220,6 +227,9 @@ impl CassError {
             }
             CassErrorKind::PreparedStatementNotFound(s) => {
                 write!(buf, "Prepared statement not found: {s}")
+            }
+            CassErrorKind::QueryRetriesExceeded(s) => {
+                write!(buf, "QueryRetriesExceeded: {s}")
             }
             CassErrorKind::WrongDataStructure(s) => {
                 write!(buf, "Wrong data structure: {s}")
@@ -479,10 +489,7 @@ impl Context {
             rs.map_err(|e| CassError::query_execution_error(cql, &[], e.clone()))?;
             return Ok(())
         }
-        let final_error = QueryError::ProtocolError(
-            Box::leak(format!("Max retry attempts ({}) reached", self.retry_number).into_boxed_str())
-        );
-        Err(CassError::query_execution_error(cql, &[], final_error))
+        Err(CassError::query_retries_exceeded(self.retry_number))
     }
 
     /// Executes a statement prepared and registered earlier by a call to `prepare`.
@@ -510,10 +517,7 @@ impl Context {
             rs.map_err(|e| CassError::query_execution_error(statement.get_statement(), &params, e))?;
             return Ok(());
         }
-        let final_error = QueryError::ProtocolError(
-            Box::leak(format!("Max retry attempts ({}) reached", self.retry_number).into_boxed_str())
-        );
-        Err(CassError::query_execution_error(statement.get_statement(), &params, final_error))
+        Err(CassError::query_retries_exceeded(self.retry_number))
     }
 
     /// Returns the current accumulated request stats snapshot and resets the stats.
