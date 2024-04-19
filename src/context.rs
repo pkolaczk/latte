@@ -24,6 +24,7 @@ use rune::runtime::{Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
 use scylla::frame::response::result::CqlValue;
+use scylla::load_balancing::DefaultPolicy;
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
@@ -56,8 +57,14 @@ fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> 
 
 /// Configures connection to Cassandra.
 pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
+    let mut policy_builder = DefaultPolicy::builder().token_aware(true);
+    let dc = &conf.datacenter;
+    if dc.len() > 0 {
+        policy_builder = policy_builder.prefer_datacenter(dc.to_owned()).permit_dc_failover(true);
+    }
     let profile = ExecutionProfile::builder()
         .consistency(conf.consistency.scylla_consistency())
+        .load_balancing_policy(policy_builder.build())
         .request_timeout(Some(Duration::from_secs(conf.request_timeout.get() as u64)))
         .build();
 
