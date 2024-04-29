@@ -351,17 +351,26 @@ impl Sample {
 /// Collects the samples and computes aggregate statistics
 struct Log {
     samples: Vec<Sample>,
+    samples_counter: u64,
+    store_samples: bool,
 }
 
 impl Log {
-    fn new() -> Log {
+    fn new(store_samples: bool) -> Log {
         Log {
             samples: Vec::new(),
+            samples_counter: 0,
+            store_samples: store_samples,
         }
     }
 
     fn append(&mut self, sample: Sample) -> &Sample {
-        self.samples.push(sample);
+        if self.store_samples || self.samples.is_empty() {
+            self.samples.push(sample);
+        } else {
+            self.samples[0] = sample;
+        }
+        self.samples_counter += 1;
         self.samples.last().unwrap()
     }
 
@@ -473,6 +482,7 @@ pub struct BenchmarkStats {
     pub errors_ratio: Option<f64>,
     pub row_count: u64,
     pub row_count_per_req: Option<f64>,
+    pub samples_count: u64,
     pub cycle_throughput: Mean,
     pub cycle_throughput_ratio: Option<f64>,
     pub req_throughput: Mean,
@@ -570,7 +580,7 @@ impl Recorder {
     /// Creates a new recorder.
     /// The `rate_limit` and `concurrency_limit` parameters are used only as the
     /// reference levels for relative throughput and relative parallelism.
-    pub fn start(rate_limit: Option<f64>, concurrency_limit: NonZeroUsize) -> Recorder {
+    pub fn start(rate_limit: Option<f64>, concurrency_limit: NonZeroUsize, store_samples: bool) -> Recorder {
         let start_time = SystemTime::now();
         let start_instant = Instant::now();
         Recorder {
@@ -580,7 +590,7 @@ impl Recorder {
             end_instant: start_instant,
             start_cpu_time: ProcessTime::now(),
             end_cpu_time: ProcessTime::now(),
-            log: Log::new(),
+            log: Log::new(store_samples),
             rate_limit,
             concurrency_limit,
             cycle_count: 0,
@@ -663,6 +673,7 @@ impl Recorder {
             requests_per_cycle: self.request_count as f64 / self.cycle_count as f64,
             row_count: self.row_count,
             row_count_per_req: not_nan(self.row_count as f64 / self.request_count as f64),
+            samples_count: self.log.samples_counter,
             cycle_throughput,
             cycle_throughput_ratio,
             req_throughput,

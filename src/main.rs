@@ -183,6 +183,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
         "Loading...",
         &load_options,
         config::Interval::Unbounded,
+        false,
         loader,
         interrupt.clone(),
         !conf.quiet,
@@ -241,6 +242,7 @@ async fn run(conf: RunCommand) -> Result<()> {
             "Warming up...",
             &warmup_options,
             Interval::Unbounded,
+            conf.generate_report,
             runner.clone()?,
             interrupt.clone(),
             !conf.quiet,
@@ -274,6 +276,7 @@ async fn run(conf: RunCommand) -> Result<()> {
         "Running...",
         &exec_options,
         conf.sampling_interval,
+        conf.generate_report,
         runner,
         interrupt.clone(),
         !conf.quiet,
@@ -287,19 +290,21 @@ async fn run(conf: RunCommand) -> Result<()> {
     println!();
     println!("{}", &stats_cmp);
 
-    let path = conf
-        .output
-        .clone()
-        .unwrap_or_else(|| conf.default_output_file_name("json"));
+    if stats_cmp.v1.log.len() > 1 {
+        let path = conf
+            .output
+            .clone()
+            .unwrap_or_else(|| conf.default_output_file_name("json"));
 
-    let report = Report::new(conf, stats);
-    match report.save(&path) {
-        Ok(()) => {
-            eprintln!("info: Saved report to {}", path.display());
-        }
-        Err(e) => {
-            eprintln!("error: Failed to save report to {}: {}", path.display(), e);
-            exit(1);
+        let report = Report::new(conf, stats);
+        match report.save(&path) {
+            Ok(()) => {
+                eprintln!("info: Saved report to {}", path.display());
+            }
+            Err(e) => {
+                eprintln!("error: Failed to save report to {}: {}", path.display(), e);
+                exit(1);
+            }
         }
     }
     Ok(())
