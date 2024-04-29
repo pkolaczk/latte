@@ -161,6 +161,7 @@ pub async fn par_execute(
     name: &str,
     exec_options: &ExecutionOptions,
     sampling: Interval,
+    store_samples: bool,
     workload: Workload,
     show_progress: bool,
 ) -> Result<BenchmarkStats> {
@@ -179,7 +180,7 @@ pub async fn par_execute(
     let progress = Arc::new(StatusLine::with_options(progress, progress_opts));
     let deadline = BoundedCycleCounter::new(exec_options.duration);
     let mut streams = Vec::with_capacity(thread_count);
-    let mut stats = Recorder::start(rate, concurrency);
+    let mut stats = Recorder::start(rate, concurrency, store_samples);
 
     for _ in 0..thread_count {
         let s = spawn_stream(
