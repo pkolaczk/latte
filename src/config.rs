@@ -382,6 +382,12 @@ pub struct RunCommand {
     #[clap(long("tag"), number_of_values = 1)]
     pub tags: Vec<String>,
 
+    /// Wether to generate final report or not. If disabled (default) then memory consumption will
+    /// be static, otherwise it will leak linearly storing samples info for a final report
+    /// calculation.
+    #[clap(long("generate-report"), required = false)]
+    pub generate_report: bool,
+
     /// Path to an output file or directory where the JSON report should be written to.
     #[clap(short('o'), long)]
     #[serde(skip)]

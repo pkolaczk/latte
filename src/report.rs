@@ -659,7 +659,7 @@ impl<'a> Display for BenchmarkCmp<'a> {
             writeln!(f, "{}", fmt_cmp_header(true))?;
         }
 
-        let summary: Vec<Box<dyn Display>> = vec![
+        let mut summary: Vec<Box<dyn Display>> = vec![
             self.line("Elapsed time", "s", |s| {
                 Quantity::from(s.elapsed_time_s).with_precision(3)
             }),
@@ -682,58 +682,62 @@ impl<'a> Display for BenchmarkCmp<'a> {
             self.line("└─", "row/req", |s| {
                 Quantity::from(s.row_count_per_req).with_precision(1)
             }),
-            self.line("Samples", "", |s| Quantity::from(s.log.len())),
-            self.line("Mean sample size", "op", |s| {
-                Quantity::from(s.log.iter().map(|s| s.cycle_count as f64).mean()).with_precision(0)
-            }),
-            self.line("└─", "req", |s| {
-                Quantity::from(s.log.iter().map(|s| s.request_count as f64).mean())
-                    .with_precision(0)
-            }),
-            self.line("Concurrency", "req", |s| {
-                Quantity::from(s.concurrency).with_precision(0)
-            }),
-            self.line("└─", "%", |s| {
-                Quantity::from(s.concurrency_ratio).with_precision(0)
-            }),
-            self.line("Throughput", "op/s", |s| {
-                Quantity::from(s.cycle_throughput).with_precision(0)
-            })
-            .with_significance(self.cmp_cycle_throughput())
-            .with_orientation(1)
-            .into_box(),
-            self.line("├─", "req/s", |s| {
-                Quantity::from(s.req_throughput).with_precision(0)
-            })
-            .with_significance(self.cmp_req_throughput())
-            .with_orientation(1)
-            .into_box(),
-            self.line("└─", "row/s", |s| {
-                Quantity::from(s.row_throughput).with_precision(0)
-            })
-            .with_significance(self.cmp_row_throughput())
-            .with_orientation(1)
-            .into_box(),
-            self.line("Mean cycle time", "ms", |s| {
-                Quantity::from(&s.cycle_time_ms).with_precision(3)
-            })
-            .with_significance(self.cmp_mean_resp_time())
-            .with_orientation(-1)
-            .into_box(),
-            self.line("Mean resp. time", "ms", |s| {
-                Quantity::from(s.resp_time_ms.as_ref().map(|rt| rt.mean)).with_precision(3)
-            })
-            .with_significance(self.cmp_mean_resp_time())
-            .with_orientation(-1)
-            .into_box(),
+            self.line("Samples", "", |s| Quantity::from(s.samples_count)),
         ];
-
+        if self.v1.log.len() > 1 {
+            let summary_part2: Vec<Box<dyn Display>> = vec![
+                self.line("Mean sample size", "op", |s| {
+                    Quantity::from(s.log.iter().map(|s| s.cycle_count as f64).mean())
+                        .with_precision(0)
+                }),
+                self.line("└─", "req", |s| {
+                    Quantity::from(s.log.iter().map(|s| s.request_count as f64).mean())
+                        .with_precision(0)
+                }),
+                self.line("Concurrency", "req", |s| {
+                    Quantity::from(s.concurrency).with_precision(0)
+                }),
+                self.line("└─", "%", |s| {
+                    Quantity::from(s.concurrency_ratio).with_precision(0)
+                }),
+                self.line("Throughput", "op/s", |s| {
+                    Quantity::from(s.cycle_throughput).with_precision(0)
+                })
+                .with_significance(self.cmp_cycle_throughput())
+                .with_orientation(1)
+                .into_box(),
+                self.line("├─", "req/s", |s| {
+                    Quantity::from(s.req_throughput).with_precision(0)
+                })
+                .with_significance(self.cmp_req_throughput())
+                .with_orientation(1)
+                .into_box(),
+                self.line("└─", "row/s", |s| {
+                    Quantity::from(s.row_throughput).with_precision(0)
+                })
+                .with_significance(self.cmp_row_throughput())
+                .with_orientation(1)
+                .into_box(),
+                self.line("Mean cycle time", "ms", |s| {
+                    Quantity::from(&s.cycle_time_ms).with_precision(3)
+                })
+                .with_significance(self.cmp_mean_resp_time())
+                .with_orientation(-1)
+                .into_box(),
+                self.line("Mean resp. time", "ms", |s| {
+                    Quantity::from(s.resp_time_ms.as_ref().map(|rt| rt.mean)).with_precision(3)
+                })
+                .with_significance(self.cmp_mean_resp_time())
+                .with_orientation(-1)
+                .into_box(),
+            ];
+            summary.extend(summary_part2);
+        }
         for l in summary {
             writeln!(f, "{l}")?;
         }
-        writeln!(f)?;
 
-        if self.v1.request_count > 0 {
+        if self.v1.request_count > 0 && self.v1.log.len() > 1 {
             let resp_time_percentiles = [
                 Percentile::Min,
                 Percentile::P25,
