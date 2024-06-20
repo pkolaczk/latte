@@ -564,7 +564,7 @@ impl Display for Sample {
                     num_of_dropped_errors,
                 );
             }
-            eprintln!("{}", error_msg_bunch);
+            writeln!(f, "{}", error_msg_bunch)?;
         }
         write!(
             f,
