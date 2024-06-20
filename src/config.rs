@@ -97,7 +97,7 @@ impl RetryInterval {
         if values.len() > 2 {
             return None;
         }
-        let min_ms = RetryInterval::parse_time(values.get(0).unwrap_or(&""))?;
+        let min_ms = RetryInterval::parse_time(values.first().unwrap_or(&""))?;
         let max_ms = RetryInterval::parse_time(values.get(1).unwrap_or(&"")).unwrap_or(min_ms);
         if min_ms > max_ms {
             None

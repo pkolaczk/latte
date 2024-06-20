@@ -15,7 +15,7 @@ use openssl::error::ErrorStack;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
 use rand::distributions::Distribution;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{random, Rng, SeedableRng};
 use rune::ast;
 use rune::ast::Kind;
 use rune::macros::{quote, MacroContext, TokenStream};
@@ -86,7 +86,7 @@ pub struct ClusterInfo {
 pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
     let no_transformation_size_limit = 32;
     match v {
-        // Replace big string- and bytes-alike object values with it's size labels
+        // Replace big string- and bytes-alike object values with its size labels
         CqlValue::Text(param) if param.len() > no_transformation_size_limit => {
             format!("Text(<size>={})", param.len())
         }
@@ -115,7 +115,7 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             if result.len() >= 2 {
                 result.truncate(result.len() - 2);
             }
-            result.push_str(&format!("] }}"));
+            result.push_str("] }");
             result
         }
         CqlValue::List(elements) => {
@@ -147,7 +147,7 @@ impl CassError {
     fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
         let query = QueryInfo {
             cql: cql.to_string(),
-            params: params.iter().map(|v| cql_value_obj_to_string(v)).collect(),
+            params: params.iter().map(cql_value_obj_to_string).collect(),
         };
         let kind = match err {
             QueryError::RequestTimeout(_)
@@ -326,7 +326,7 @@ impl Default for SessionStats {
     }
 }
 
-pub fn get_expoinential_retry_interval(
+pub fn get_exponential_retry_interval(
     min_interval: u64,
     max_interval: u64,
     current_attempt_num: u64,
@@ -336,10 +336,10 @@ pub fn get_expoinential_retry_interval(
         min_interval_float * (2u64.pow((current_attempt_num - 1).try_into().unwrap_or(0)) as f64);
 
     // Add jitter
-    current_interval += rand::thread_rng().gen::<f64>() * min_interval_float;
+    current_interval += random::<f64>() * min_interval_float;
     current_interval -= min_interval_float / 2.0;
 
-    std::cmp::min(current_interval as u64, max_interval as u64) as u64
+    std::cmp::min(current_interval as u64, max_interval)
 }
 
 pub async fn handle_retry_error(
@@ -347,7 +347,7 @@ pub async fn handle_retry_error(
     current_attempt_num: u64,
     current_error: CassError,
 ) {
-    let current_retry_interval = get_expoinential_retry_interval(
+    let current_retry_interval = get_exponential_retry_interval(
         ctxt.retry_interval.min_ms,
         ctxt.retry_interval.max_ms,
         current_attempt_num,
@@ -356,11 +356,11 @@ pub async fn handle_retry_error(
     let mut next_attempt_str = String::new();
     let is_last_attempt = current_attempt_num == ctxt.retry_number;
     if !is_last_attempt {
-        next_attempt_str += &format!("[Retry in {}ms]", current_retry_interval);
+        next_attempt_str += &format!("[Retry in {} ms]", current_retry_interval);
     }
     let err_msg = format!(
         "{}: [ERROR][Attempt {}/{}]{} {}",
-        Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+        Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
         current_attempt_num,
         ctxt.retry_number,
         next_attempt_str,
@@ -390,9 +390,9 @@ pub struct Context {
 }
 
 // Needed, because Rune `Value` is !Send, as it may contain some internal pointers.
-// Therefore it is not safe to pass a `Value` to another thread by cloning it, because
+// Therefore, it is not safe to pass a `Value` to another thread by cloning it, because
 // both objects could accidentally share some unprotected, `!Sync` data.
-// To make it safe, the same `Context` is never used by more than one thread at once and
+// To make it safe, the same `Context` is never used by more than one thread at once, and
 // we make sure in `clone` to make a deep copy of the `data` field by serializing
 // and deserializing it, so no pointers could get through.
 unsafe impl Send for Context {}
@@ -408,8 +408,8 @@ impl Context {
             session: Arc::new(session),
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
-            retry_number: retry_number,
-            retry_interval: retry_interval,
+            retry_number,
+            retry_interval,
             load_cycle_count: 0,
             data: Value::Object(Shared::new(Object::new())),
         }
@@ -585,14 +585,14 @@ mod bind {
                     .collect();
                 let fields: Vec<(String, Option<CqlValue>)> = keys
                     .into_iter()
-                    .zip(values?.into_iter())
+                    .zip(values?)
                     .filter(|&(key, _)| key != "_keyspace" && key != "_type_name")
                     .map(|(key, value)| (key.to_string(), value))
                     .collect();
                 let udt = CqlValue::UserDefinedType {
-                    keyspace: keyspace,
-                    type_name: type_name,
-                    fields: fields,
+                    keyspace,
+                    type_name,
+                    fields,
                 };
                 Ok(udt)
             }
