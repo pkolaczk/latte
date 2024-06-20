@@ -129,7 +129,9 @@ impl Program {
         let mut latte_module = Module::with_crate("latte");
         latte_module.function(&["blob"], context::blob).unwrap();
         latte_module.function(&["text"], context::text).unwrap();
-        latte_module.function(&["now_timestamp"], context::now_timestamp).unwrap();
+        latte_module
+            .function(&["now_timestamp"], context::now_timestamp)
+            .unwrap();
         latte_module.function(&["hash"], context::hash).unwrap();
         latte_module.function(&["hash2"], context::hash2).unwrap();
         latte_module
@@ -142,6 +144,9 @@ impl Program {
             .function(&["uuid"], context::Uuid::new)
             .unwrap();
         latte_module.function(&["normal"], context::normal).unwrap();
+        latte_module
+            .function(&["uniform"], context::uniform)
+            .unwrap();
         latte_module
             .macro_(&["param"], move |ctx, ts| context::param(ctx, &params, ts))
             .unwrap();

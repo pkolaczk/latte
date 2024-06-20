@@ -1,7 +1,7 @@
 [package]
 name = "latte-cli"
 description = "A database benchmarking tool for Apache Cassandra"
-version = "0.25.0"
+version = "0.26.0"
 authors = ["Piotr Kołaczkowski <pkolaczk@gmail.com>"]
 edition = "2021"
 readme = "README.md"
@@ -14,7 +14,7 @@ path = "src/main.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 anyhow = "1.0"
-base64 = "0.21"
+base64 = "0.22"
 rmp = "0.8.10"
 rmp-serde = "1.0.0-beta.2"
 chrono = { version = "0.4.18", features = ["serde"] }
@@ -26,7 +26,7 @@ err-derive = "0.3"
 futures = "0.3"
 hdrhistogram = "7.1.0"
 hytra = "0.1.2"
-itertools = "0.12"
+itertools = "0.13"
 jemallocator = "0.5"
 lazy_static = "1.4.0"
 metrohash = "1.0"
@@ -39,11 +39,11 @@ rand = "0.8"
 regex = "1.5"
 rune = "0.12"
 rust-embed = "8"
-scylla = { version = "0.12", features = ["ssl"] }
+scylla = { version = "0.13", features = ["ssl"] }
 search_path = "0.1"
 serde = { version = "1.0.116", features = ["derive"] }
 serde_json = "1.0.57"
-statrs = "0.16"
+statrs = "0.17"
 status-line = "0.2.0"
 strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"
