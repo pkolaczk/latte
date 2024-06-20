@@ -560,7 +560,6 @@ pub struct Recorder {
     pub row_count: u64,
     pub cycle_times_ns: Histogram<u64>,
     pub resp_times_ns: Histogram<u64>,
-    pub queue_len_sum: u64,
     log: Log,
     rate_limit: Option<f64>,
     concurrency_limit: NonZeroUsize,
@@ -590,7 +589,6 @@ impl Recorder {
             error_count: 0,
             cycle_times_ns: Histogram::new(3).unwrap(),
             resp_times_ns: Histogram::new(3).unwrap(),
-            queue_len_sum: 0,
         }
     }
 

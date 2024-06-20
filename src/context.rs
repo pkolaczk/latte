@@ -28,12 +28,12 @@ use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
 use scylla::{ExecutionProfile, QueryResult, SessionBuilder};
-use statrs::distribution::Normal;
+use statrs::distribution::{Normal, Uniform};
 use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
 use uuid::{Variant, Version};
 
-use crate::config::{ConnectionConf, PRINT_RETRY_ERROR_LIMIT, RetryInterval};
+use crate::config::{ConnectionConf, RetryInterval, PRINT_RETRY_ERROR_LIMIT};
 use crate::LatteError;
 
 fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
@@ -70,7 +70,11 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
-    Ok(Context::new(scylla_session, conf.retry_number, conf.retry_interval))
+    Ok(Context::new(
+        scylla_session,
+        conf.retry_number,
+        conf.retry_interval,
+    ))
 }
 
 pub struct ClusterInfo {
@@ -85,14 +89,18 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
         // Replace big string- and bytes-alike object values with it's size labels
         CqlValue::Text(param) if param.len() > no_transformation_size_limit => {
             format!("Text(<size>={})", param.len())
-        },
+        }
         CqlValue::Ascii(param) if param.len() > no_transformation_size_limit => {
             format!("Ascii(<size>={})", param.len())
-        },
+        }
         CqlValue::Blob(param) if param.len() > no_transformation_size_limit => {
             format!("Blob(<size>={})", param.len())
-        },
-        CqlValue::UserDefinedType { keyspace, type_name, fields } => {
+        }
+        CqlValue::UserDefinedType {
+            keyspace,
+            type_name,
+            fields,
+        } => {
             let mut result = format!(
                 "UDT {{ keyspace: \"{}\", type_name: \"{}\", fields: [",
                 keyspace, type_name,
@@ -109,7 +117,7 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             }
             result.push_str(&format!("] }}"));
             result
-        },
+        }
         CqlValue::List(elements) => {
             let mut result = String::from("List([");
             for element in elements {
@@ -122,7 +130,7 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             }
             result.push_str("])");
             result
-        },
+        }
         // TODO: cover 'CqlValue::Map' and 'CqlValue::Set'
         _ => format!("{v:?}"),
     }
@@ -154,9 +162,10 @@ impl CassError {
     }
 
     fn query_retries_exceeded(retry_number: u64) -> CassError {
-        CassError(CassErrorKind::QueryRetriesExceeded(
-            format!("Max retry attempts ({}) reached", retry_number)
-        ))
+        CassError(CassErrorKind::QueryRetriesExceeded(format!(
+            "Max retry attempts ({}) reached",
+            retry_number
+        )))
     }
 }
 
@@ -317,13 +326,14 @@ impl Default for SessionStats {
     }
 }
 
-pub fn get_expoinential_retry_interval(min_interval: u64,
-                                       max_interval: u64,
-                                       current_attempt_num: u64) -> u64 {
+pub fn get_expoinential_retry_interval(
+    min_interval: u64,
+    max_interval: u64,
+    current_attempt_num: u64,
+) -> u64 {
     let min_interval_float: f64 = min_interval as f64;
-    let mut current_interval: f64 = min_interval_float * (
-        2u64.pow((current_attempt_num - 1).try_into().unwrap_or(0)) as f64
-    );
+    let mut current_interval: f64 =
+        min_interval_float * (2u64.pow((current_attempt_num - 1).try_into().unwrap_or(0)) as f64);
 
     // Add jitter
     current_interval += rand::thread_rng().gen::<f64>() * min_interval_float;
@@ -332,9 +342,15 @@ pub fn get_expoinential_retry_interval(min_interval: u64,
     std::cmp::min(current_interval as u64, max_interval as u64) as u64
 }
 
-pub async fn handle_retry_error(ctxt: &Context, current_attempt_num: u64, current_error: CassError) {
+pub async fn handle_retry_error(
+    ctxt: &Context,
+    current_attempt_num: u64,
+    current_error: CassError,
+) {
     let current_retry_interval = get_expoinential_retry_interval(
-        ctxt.retry_interval.min_ms, ctxt.retry_interval.max_ms, current_attempt_num,
+        ctxt.retry_interval.min_ms,
+        ctxt.retry_interval.max_ms,
+        current_attempt_num,
     );
 
     let mut next_attempt_str = String::new();
@@ -345,7 +361,10 @@ pub async fn handle_retry_error(ctxt: &Context, current_attempt_num: u64, curren
     let err_msg = format!(
         "{}: [ERROR][Attempt {}/{}]{} {}",
         Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-        current_attempt_num, ctxt.retry_number, next_attempt_str, current_error,
+        current_attempt_num,
+        ctxt.retry_number,
+        next_attempt_str,
+        current_error,
     );
     if !is_last_attempt {
         ctxt.stats.try_lock().unwrap().store_retry_error(err_msg);
@@ -380,7 +399,11 @@ unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    pub fn new(session: scylla::Session, retry_number: u64, retry_interval: RetryInterval) -> Context {
+    pub fn new(
+        session: scylla::Session,
+        retry_number: u64,
+        retry_interval: RetryInterval,
+    ) -> Context {
         Context {
             session: Arc::new(session),
             statements: HashMap::new(),
@@ -444,7 +467,7 @@ impl Context {
 
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
-        for current_attempt_num in 0..self.retry_number+1 {
+        for current_attempt_num in 0..self.retry_number + 1 {
             let start_time = self.stats.try_lock().unwrap().start_request();
             let rs = self.session.query(cql, ()).await;
             let duration = Instant::now() - start_time;
@@ -453,12 +476,15 @@ impl Context {
                 Err(e) => {
                     let current_error = CassError::query_execution_error(cql, &[], e.clone());
                     handle_retry_error(self, current_attempt_num, current_error).await;
-                    continue
+                    continue;
                 }
             }
-            self.stats.try_lock().unwrap().complete_request(duration, &rs);
+            self.stats
+                .try_lock()
+                .unwrap()
+                .complete_request(duration, &rs);
             rs.map_err(|e| CassError::query_execution_error(cql, &[], e.clone()))?;
-            return Ok(())
+            return Ok(());
         }
         Err(CassError::query_retries_exceeded(self.retry_number))
     }
@@ -470,7 +496,7 @@ impl Context {
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
         let params = bind::to_scylla_query_params(&params)?;
-        for current_attempt_num in 0..self.retry_number+1 {
+        for current_attempt_num in 0..self.retry_number + 1 {
             let start_time = self.stats.try_lock().unwrap().start_request();
             let rs = self.session.execute(statement, params.clone()).await;
             let duration = Instant::now() - start_time;
@@ -478,14 +504,21 @@ impl Context {
                 Ok(_) => {}
                 Err(e) => {
                     let current_error = CassError::query_execution_error(
-                        statement.get_statement(), &params, e.clone()
+                        statement.get_statement(),
+                        &params,
+                        e.clone(),
                     );
                     handle_retry_error(self, current_attempt_num, current_error).await;
-                    continue
+                    continue;
                 }
             }
-            self.stats.try_lock().unwrap().complete_request(duration, &rs);
-            rs.map_err(|e| CassError::query_execution_error(statement.get_statement(), &params, e))?;
+            self.stats
+                .try_lock()
+                .unwrap()
+                .complete_request(duration, &rs);
+            rs.map_err(|e| {
+                CassError::query_execution_error(statement.get_statement(), &params, e)
+            })?;
             return Ok(());
         }
         Err(CassError::query_retries_exceeded(self.retry_number))
@@ -546,21 +579,23 @@ mod bind {
                 };
 
                 let keys = borrowed.keys();
-                let values: Result<Vec<Option<CqlValue>>, _> = borrowed.values()
-                    .map(|value| to_scylla_value(&value.clone())
-                    .map(Some)).collect();
-                let fields: Vec<(String, Option<CqlValue>)> = keys.into_iter()
+                let values: Result<Vec<Option<CqlValue>>, _> = borrowed
+                    .values()
+                    .map(|value| to_scylla_value(&value.clone()).map(Some))
+                    .collect();
+                let fields: Vec<(String, Option<CqlValue>)> = keys
+                    .into_iter()
                     .zip(values?.into_iter())
                     .filter(|&(key, _)| key != "_keyspace" && key != "_type_name")
                     .map(|(key, value)| (key.to_string(), value))
                     .collect();
-                let udt = CqlValue::UserDefinedType{
+                let udt = CqlValue::UserDefinedType {
                     keyspace: keyspace,
                     type_name: type_name,
                     fields: fields,
                 };
                 Ok(udt)
-            },
+            }
             Value::Any(obj) => {
                 let obj = obj.borrow_ref().unwrap();
                 let h = obj.type_hash();
@@ -731,6 +766,12 @@ pub fn normal(i: i64, mean: f64, std_dev: f64) -> Result<f64, VmError> {
     Ok(distribution.sample(&mut rng))
 }
 
+pub fn uniform(i: i64, min: f64, max: f64) -> Result<f64, VmError> {
+    let mut rng = StdRng::seed_from_u64(i as u64);
+    let distribution = Uniform::new(min, max).map_err(|e| VmError::panic(format!("{e}")))?;
+    Ok(distribution.sample(&mut rng))
+}
+
 /// Restricts a value to a certain interval unless it is NaN.
 pub fn clamp_float(value: f64, min: f64, max: f64) -> f64 {
     value.clamp(min, max)
@@ -753,10 +794,12 @@ pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
 /// Parameter `seed` is used to seed the RNG.
 pub fn text(seed: i64, len: usize) -> rune::runtime::StaticString {
     let mut rng = StdRng::seed_from_u64(seed as u64);
-    let s: String = (0..len).map(|_| {
-        let code_point = rng.gen_range(0x0061u32..=0x007Au32); // Unicode range for 'a-z'
-        std::char::from_u32(code_point).unwrap()
-    }).collect();
+    let s: String = (0..len)
+        .map(|_| {
+            let code_point = rng.gen_range(0x0061u32..=0x007Au32); // Unicode range for 'a-z'
+            std::char::from_u32(code_point).unwrap()
+        })
+        .collect();
     rune::runtime::StaticString::new(s)
 }
 

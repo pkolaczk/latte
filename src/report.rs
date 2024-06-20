@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use statrs::statistics::Statistics;
 use strum::IntoEnumIterator;
 
-use crate::config::{PRINT_RETRY_ERROR_LIMIT, RunCommand};
+use crate::config::{RunCommand, PRINT_RETRY_ERROR_LIMIT};
 use crate::stats::{
     BenchmarkCmp, BenchmarkStats, Bucket, Mean, Percentile, Sample, Significance, TimeDistribution,
 };
@@ -519,7 +519,7 @@ impl<'a> Display for RunConfigCmp<'a> {
             self.line("Request timeout", "", |conf| {
                 Quantity::from(conf.connection.request_timeout)
             }),
-            self.line("Retries", "", |_| {Quantity::from("")}),
+            self.line("Retries", "", |_| Quantity::from("")),
             self.line("┌──────┴number", "", |conf| {
                 Quantity::from(conf.connection.retry_number)
             }),
@@ -553,7 +553,9 @@ impl Display for Sample {
                 if num_of_printed_errors < PRINT_RETRY_ERROR_LIMIT {
                     error_msg_bunch += &format!("{}\n", retry_error);
                     num_of_printed_errors += 1;
-                } else { break }
+                } else {
+                    break;
+                }
             }
             let num_of_dropped_errors = self.retry_error_count - num_of_printed_errors;
             if num_of_dropped_errors > 0 {

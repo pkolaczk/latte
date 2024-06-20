@@ -209,6 +209,7 @@ are pure, i.e. invoking them multiple times with the same parameters yields alwa
 - `latte::hash_select(i, vector)` – selects an item from a vector based on a hash
 - `latte::blob(i, len)` – generates a random binary blob of length `len`
 - `latte::normal(i, mean, std_dev)` – generates a floating point number from a normal distribution
+- `latte::uniform(i, min, max)` – generates a floating point number from a uniform distribution
 
 #### Numeric conversions
 
