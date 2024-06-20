@@ -144,7 +144,7 @@ pub async fn plot_graph(conf: PlotCommand) -> Result<()> {
 
     let output_path = conf
         .output
-        .unwrap_or(reports[0].conf.default_output_file_name("png"));
+        .unwrap_or(reports[0].conf.default_output_file_name("svg"));
     let root = SVGBackend::new(&output_path, (2000, 1000)).into_drawing_area();
     root.fill(&WHITE).unwrap();
 
