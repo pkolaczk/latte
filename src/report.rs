@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::{fs, io};
 
-use chrono::{Local, NaiveDateTime, TimeZone};
+use chrono::{Local, TimeZone};
 use console::{pad_str, style, Alignment};
 use err_derive::*;
 use itertools::Itertools;
@@ -438,8 +438,10 @@ impl RunConfigCmp<'_> {
     fn format_time(&self, conf: &RunCommand, format: &str) -> String {
         conf.timestamp
             .and_then(|ts| {
-                NaiveDateTime::from_timestamp_opt(ts, 0)
-                    .map(|utc| Local.from_utc_datetime(&utc).format(format).to_string())
+                Local
+                    .timestamp_opt(ts, 0)
+                    .latest()
+                    .map(|l| l.format(format).to_string())
             })
             .unwrap_or_default()
     }
