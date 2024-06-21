@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::{stdout, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
@@ -24,7 +23,6 @@ use crate::context::{CassError, CassErrorKind, Context, SessionStats};
 use crate::cycle::BoundedCycleCounter;
 use crate::error::{LatteError, Result};
 use crate::exec::{par_execute, ExecutionOptions};
-use crate::interrupt::InterruptHandler;
 use crate::plot::plot_graph;
 use crate::progress::Progress;
 use crate::report::{Report, RunConfigCmp};
@@ -38,7 +36,6 @@ mod cycle;
 mod error;
 mod exec;
 mod histogram;
-mod interrupt;
 mod plot;
 mod progress;
 mod report;
@@ -170,7 +167,6 @@ async fn load(conf: LoadCommand) -> Result<()> {
         }
     }
 
-    let interrupt = Arc::new(InterruptHandler::install());
     eprintln!("info: Loading data...");
     let loader = Workload::new(session.clone()?, program.clone(), FnRef::new(LOAD_FN));
     let load_options = ExecutionOptions {
@@ -184,7 +180,6 @@ async fn load(conf: LoadCommand) -> Result<()> {
         &load_options,
         config::Interval::Unbounded,
         loader,
-        interrupt.clone(),
         !conf.quiet,
     )
     .await?;
@@ -228,7 +223,6 @@ async fn run(conf: RunCommand) -> Result<()> {
     }
 
     let runner = Workload::new(session.clone()?, program.clone(), function);
-    let interrupt = Arc::new(InterruptHandler::install());
     if conf.warmup_duration.is_not_zero() {
         eprintln!("info: Warming up...");
         let warmup_options = ExecutionOptions {
@@ -242,14 +236,9 @@ async fn run(conf: RunCommand) -> Result<()> {
             &warmup_options,
             Interval::Unbounded,
             runner.clone()?,
-            interrupt.clone(),
             !conf.quiet,
         )
         .await?;
-    }
-
-    if interrupt.is_interrupted() {
-        return Err(LatteError::Interrupted);
     }
 
     eprintln!("info: Running benchmark...");
@@ -270,15 +259,21 @@ async fn run(conf: RunCommand) -> Result<()> {
     };
 
     report::print_log_header();
-    let stats = par_execute(
+    let stats = match par_execute(
         "Running...",
         &exec_options,
         conf.sampling_interval,
         runner,
-        interrupt.clone(),
         !conf.quiet,
     )
-    .await?;
+    .await
+    {
+        Ok(stats) => stats,
+        Err(LatteError::Interrupted(stats)) => *stats,
+        Err(e) => {
+            return Err(e);
+        }
+    };
 
     let stats_cmp = BenchmarkCmp {
         v1: &stats,

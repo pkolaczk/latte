@@ -259,7 +259,7 @@ impl Percentile {
 }
 
 /// Records basic statistics for a sample (a group) of requests
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Sample {
     pub time_s: f32,
     pub duration_s: f32,
@@ -442,7 +442,7 @@ impl Log {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Bucket {
     pub percentile: f64,
     pub duration_ms: f64,
@@ -450,7 +450,7 @@ pub struct Bucket {
     pub cumulative_count: u64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct TimeDistribution {
     pub mean: Mean,
     pub percentiles: Vec<Mean>,
@@ -458,7 +458,7 @@ pub struct TimeDistribution {
 }
 
 /// Stores the final statistics of the test run.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BenchmarkStats {
     pub start_time: DateTime<Local>,
     pub end_time: DateTime<Local>,
