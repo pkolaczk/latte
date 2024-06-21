@@ -419,8 +419,8 @@ impl RunCommand {
     }
 
     /// Returns the value of parameter under given key.
-    /// If key doesn't exist, or parameter is not an integer, returns `None`.
-    pub fn get_param(&self, key: &str) -> Option<i64> {
+    /// If key doesn't exist, or parameter is not a number, returns `None`.
+    pub fn get_param(&self, key: &str) -> Option<f64> {
         self.params
             .iter()
             .find(|(k, _)| k == key)
