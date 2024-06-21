@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// A wrapper for HDR histogram that allows us to serialize/deserialize it to/from
 /// a base64 encoded string we can store in JSON report.
+#[derive(Debug)]
 pub struct SerializableHistogram(pub Histogram<u64>);
 
 impl Serialize for SerializableHistogram {

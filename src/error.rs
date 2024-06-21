@@ -1,4 +1,5 @@
 use crate::context::CassError;
+use crate::stats::BenchmarkStats;
 use err_derive::*;
 use hdrhistogram::serialization::interval_log::IntervalLogWriterError;
 use hdrhistogram::serialization::V2DeflateSerializeError;
@@ -37,7 +38,7 @@ pub enum LatteError {
     HdrLogWrite(#[source] IntervalLogWriterError<V2DeflateSerializeError>),
 
     #[error(display = "Interrupted")]
-    Interrupted,
+    Interrupted(Box<BenchmarkStats>),
 }
 
 pub type Result<T> = std::result::Result<T, LatteError>;
