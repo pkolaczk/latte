@@ -333,7 +333,7 @@ pub fn get_exponential_retry_interval(
 ) -> u64 {
     let min_interval_float: f64 = min_interval as f64;
     let mut current_interval: f64 =
-        min_interval_float * (2u64.pow((current_attempt_num - 1).try_into().unwrap_or(0)) as f64);
+        min_interval_float * (2u64.pow(current_attempt_num.try_into().unwrap_or(0)) as f64);
 
     // Add jitter
     current_interval += random::<f64>() * min_interval_float;
