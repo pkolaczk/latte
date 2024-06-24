@@ -214,13 +214,16 @@ are pure, i.e. invoking them multiple times with the same parameters yields alwa
 #### Numeric conversions
 
 Rune represents integers as 64-bit signed values. Therefore, it is possible to directly pass a Rune integer to
-a Cassandra column of type `bigint`. However, binding a 64-bit value to smaller integer column types, like
-`int`, `smallint` or `tinyint` will result in a runtime error. As long as an integer value does not exceed the bounds,
+a Cassandra column of type `bigint`, and to pass a Rune float to a Cassandra column of type `double`. 
+However, binding a 64-bit value to smaller integer or float column types, like
+`int`, `smallint`, `tinyint` or `float` will result in a runtime error. 
+As long as an integer value does not exceed the bounds,
 you can convert it to smaller signed  integer types by using the following instance functions:
 
 - `x.to_i32()` – converts a float or integer to a 32-bit signed integer, compatible with Cassandra `int` type
 - `x.to_i16()` – converts a float or integer to a 16-bit signed integer, compatible with Cassandra `smallint` type
 - `x.to_i8()` – converts a float or integer to an 8-bit signed integer, compatible with Cassandra `tinyint` type
+- `x.to_f32()` - converts a float or integer value to a 32-bit float, compatible with Cassandra `float` type  
 - `x.clamp(min, max)` – restricts the range of an integer or a float value to given range  
 
 You can also convert between floats and integers by calling `to_integer` or `to_float` instance functions.
