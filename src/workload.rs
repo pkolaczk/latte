@@ -151,6 +151,13 @@ impl Program {
             .macro_(&["param"], move |ctx, ts| context::param(ctx, &params, ts))
             .unwrap();
 
+        latte_module
+            .inst_fn("to_string", context::int_to_string)
+            .unwrap();
+        latte_module
+            .inst_fn("to_string", context::float_to_string)
+            .unwrap();
+
         latte_module.inst_fn("to_i32", context::int_to_i32).unwrap();
         latte_module
             .inst_fn("to_i32", context::float_to_i32)
