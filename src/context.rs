@@ -23,6 +23,7 @@ use rune::parse::Parser;
 use rune::runtime::{Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
+use scylla::_macro_internal::ColumnType;
 use scylla::frame::response::result::CqlValue;
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
@@ -192,7 +193,10 @@ pub enum CassErrorKind {
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
     QueryRetriesExceeded(String),
-    UnsupportedType(TypeInfo),
+    QueryParamConversion(TypeInfo, ColumnType),
+    ValueOutOfRange(String, ColumnType),
+    InvalidNumberOfQueryParams,
+    InvalidQueryParamsObject(TypeInfo),
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
     QueryExecution(QueryInfo, QueryError),
@@ -214,8 +218,20 @@ impl CassError {
             CassErrorKind::QueryRetriesExceeded(s) => {
                 write!(buf, "QueryRetriesExceeded: {s}")
             }
-            CassErrorKind::UnsupportedType(s) => {
-                write!(buf, "Unsupported type: {s}")
+            CassErrorKind::ValueOutOfRange(v, t) => {
+                write!(buf, "Value {v} out of range for Cassandra type {t:?}")
+            }
+            CassErrorKind::QueryParamConversion(s, t) => {
+                write!(
+                    buf,
+                    "Cannot convert value of type {s} to Cassandra type {t:?}"
+                )
+            }
+            CassErrorKind::InvalidNumberOfQueryParams => {
+                write!(buf, "Incorrect number of query parameters")
+            }
+            CassErrorKind::InvalidQueryParamsObject(t) => {
+                write!(buf, "Value of type {t} cannot by used as query parameters; expected a list or object")
             }
             CassErrorKind::Prepare(q, e) => {
                 write!(buf, "Failed to prepare query \"{q}\": {e}")
@@ -496,7 +512,7 @@ impl Context {
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
 
-        let params = bind::to_scylla_query_params(&params)?;
+        let params = bind::to_scylla_query_params(&params, statement.get_variable_col_specs())?;
         for current_attempt_num in 0..self.retry_number + 1 {
             let start_time = self.stats.try_lock().unwrap().start_request();
             let rs = self.session.execute(statement, params.clone()).await;
@@ -542,110 +558,147 @@ impl Context {
 /// Functions for binding rune values to CQL parameters
 mod bind {
     use crate::CassErrorKind;
-    use scylla::frame::response::result::CqlValue;
+    use scylla::_macro_internal::ColumnType;
+    use scylla::frame::response::result::{ColumnSpec, CqlValue};
 
     use super::*;
 
-    fn to_scylla_value(v: &Value) -> Result<CqlValue, CassError> {
-        match v {
-            Value::Bool(v) => Ok(CqlValue::Boolean(*v)),
-            Value::Byte(v) => Ok(CqlValue::TinyInt(*v as i8)),
-            Value::Integer(v) => Ok(CqlValue::BigInt(*v)),
-            Value::Float(v) => Ok(CqlValue::Double(*v)),
-            Value::StaticString(v) => Ok(CqlValue::Text(v.as_str().to_string())),
-            Value::String(v) => Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string())),
-            Value::Bytes(v) => Ok(CqlValue::Blob(v.borrow_ref().unwrap().to_vec())),
-            Value::Option(v) => match v.borrow_ref().unwrap().as_ref() {
-                Some(v) => to_scylla_value(v),
+    fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
+        match (v, typ) {
+            (Value::Bool(v), ColumnType::Boolean) => Ok(CqlValue::Boolean(*v)),
+
+            (Value::Byte(v), ColumnType::TinyInt) => Ok(CqlValue::TinyInt(*v as i8)),
+            (Value::Byte(v), ColumnType::SmallInt) => Ok(CqlValue::SmallInt(*v as i16)),
+            (Value::Byte(v), ColumnType::Int) => Ok(CqlValue::Int(*v as i32)),
+            (Value::Byte(v), ColumnType::BigInt) => Ok(CqlValue::BigInt(*v as i64)),
+
+            (Value::Integer(v), ColumnType::TinyInt) => {
+                convert_int(*v, ColumnType::TinyInt, CqlValue::TinyInt)
+            }
+            (Value::Integer(v), ColumnType::SmallInt) => {
+                convert_int(*v, ColumnType::SmallInt, CqlValue::SmallInt)
+            }
+            (Value::Integer(v), ColumnType::Int) => convert_int(*v, ColumnType::Int, CqlValue::Int),
+            (Value::Integer(v), ColumnType::BigInt) => Ok(CqlValue::BigInt(*v)),
+
+            (Value::Float(v), ColumnType::Float) => Ok(CqlValue::Float(*v as f32)),
+            (Value::Float(v), ColumnType::Double) => Ok(CqlValue::Double(*v)),
+
+            (Value::StaticString(v), ColumnType::Text | ColumnType::Ascii) => {
+                Ok(CqlValue::Text(v.as_str().to_string()))
+            }
+            (Value::String(v), ColumnType::Text | ColumnType::Ascii) => {
+                Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string()))
+            }
+
+            (Value::Bytes(v), ColumnType::Blob) => {
+                Ok(CqlValue::Blob(v.borrow_ref().unwrap().to_vec()))
+            }
+            (Value::Option(v), typ) => match v.borrow_ref().unwrap().as_ref() {
+                Some(v) => to_scylla_value(v, typ),
                 None => Ok(CqlValue::Empty),
             },
-            Value::Vec(v) => {
+            (Value::Vec(v), ColumnType::List(elt)) => {
                 let v = v.borrow_ref().unwrap();
-                let elements = v.as_ref().iter().map(to_scylla_value).try_collect()?;
+                let elements = v
+                    .as_ref()
+                    .iter()
+                    .map(|v| to_scylla_value(v, elt))
+                    .try_collect()?;
                 Ok(CqlValue::List(elements))
             }
-            Value::Object(v) => {
-                let borrowed = v.borrow_ref().unwrap();
-
-                // // Get value of "_keyspace" key or set default value
-                let keyspace = match borrowed.get_value::<str, String>("_keyspace") {
-                    Ok(Some(value)) => value,
-                    _ => "unknown".to_string(),
-                };
-
-                // // Get value of "_type_name" key or set default value
-                let type_name = match borrowed.get_value::<str, String>("_type_name") {
-                    Ok(Some(value)) => value,
-                    _ => "unknown".to_string(),
-                };
-
-                let keys = borrowed.keys();
-                let values: Result<Vec<Option<CqlValue>>, _> = borrowed
-                    .values()
-                    .map(|value| to_scylla_value(&value.clone()).map(Some))
-                    .collect();
-                let fields: Vec<(String, Option<CqlValue>)> = keys
-                    .into_iter()
-                    .zip(values?)
-                    .filter(|&(key, _)| key != "_keyspace" && key != "_type_name")
-                    .map(|(key, value)| (key.to_string(), value))
-                    .collect();
-                let udt = CqlValue::UserDefinedType {
+            (Value::Vec(v), ColumnType::Set(elt)) => {
+                let v = v.borrow_ref().unwrap();
+                let elements = v
+                    .as_ref()
+                    .iter()
+                    .map(|v| to_scylla_value(v, elt))
+                    .try_collect()?;
+                Ok(CqlValue::Set(elements))
+            }
+            (
+                Value::Object(v),
+                ColumnType::UserDefinedType {
                     keyspace,
                     type_name,
+                    field_types,
+                },
+            ) => {
+                let borrowed = v.borrow_ref().unwrap();
+                let mut fields = Vec::new();
+                for (field_name, field_type) in field_types {
+                    let value = match borrowed.get_value(field_name) {
+                        Err(_) => None,
+                        Ok(None) => Some(CqlValue::Empty),
+                        Ok(Some(value)) => Some(to_scylla_value(&value, field_type)?),
+                    };
+                    fields.push((field_name.to_string(), value))
+                }
+                Ok(CqlValue::UserDefinedType {
+                    keyspace: keyspace.to_string(),
+                    type_name: type_name.to_string(),
                     fields,
-                };
-                Ok(udt)
+                })
             }
-            Value::Any(obj) => {
+            (Value::Any(obj), ColumnType::Uuid) => {
                 let obj = obj.borrow_ref().unwrap();
                 let h = obj.type_hash();
                 if h == Uuid::type_hash() {
                     let uuid: &Uuid = obj.downcast_borrow_ref().unwrap();
                     Ok(CqlValue::Uuid(uuid.0))
-                } else if h == Int32::type_hash() {
-                    let int32: &Int32 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::Int(int32.0))
-                } else if h == Int16::type_hash() {
-                    let int16: &Int16 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::SmallInt(int16.0))
-                } else if h == Int8::type_hash() {
-                    let int8: &Int8 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::TinyInt(int8.0))
-                } else if h == Float32::type_hash() {
-                    let float32: &Float32 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::Float(float32.0))
                 } else {
-                    Err(CassError(CassErrorKind::UnsupportedType(
+                    Err(CassError(CassErrorKind::QueryParamConversion(
                         v.type_info().unwrap(),
+                        ColumnType::Uuid,
                     )))
                 }
             }
-            other => Err(CassError(CassErrorKind::UnsupportedType(
-                other.type_info().unwrap(),
+            (value, typ) => Err(CassError(CassErrorKind::QueryParamConversion(
+                value.type_info().unwrap(),
+                typ.clone(),
             ))),
         }
     }
 
+    fn convert_int<T: TryFrom<i64>, R>(
+        value: i64,
+        typ: ColumnType,
+        f: impl Fn(T) -> R,
+    ) -> Result<R, CassError> {
+        let converted = value.try_into().map_err(|_| {
+            CassError(CassErrorKind::ValueOutOfRange(
+                value.to_string(),
+                typ.clone(),
+            ))
+        })?;
+        Ok(f(converted))
+    }
+
     /// Binds parameters passed as a single rune value to the arguments of the statement.
     /// The `params` value can be a tuple, a vector, a struct or an object.
-    pub fn to_scylla_query_params(params: &Value) -> Result<Vec<CqlValue>, CassError> {
+    pub fn to_scylla_query_params(
+        params: &Value,
+        types: &[ColumnSpec],
+    ) -> Result<Vec<CqlValue>, CassError> {
         let mut values = Vec::new();
         match params {
             Value::Tuple(tuple) => {
                 let tuple = tuple.borrow_ref().unwrap();
-                for v in tuple.iter() {
-                    values.push(to_scylla_value(v)?);
+                if tuple.len() != types.len() {
+                    return Err(CassError(CassErrorKind::InvalidNumberOfQueryParams));
+                }
+                for (v, t) in tuple.iter().zip(types) {
+                    values.push(to_scylla_value(v, &t.typ)?);
                 }
             }
             Value::Vec(vec) => {
                 let vec = vec.borrow_ref().unwrap();
-                for v in vec.iter() {
-                    values.push(to_scylla_value(v)?);
+                for (v, t) in vec.iter().zip(types) {
+                    values.push(to_scylla_value(v, &t.typ)?);
                 }
             }
             other => {
-                return Err(CassError(CassErrorKind::UnsupportedType(
+                return Err(CassError(CassErrorKind::InvalidQueryParamsObject(
                     other.type_info().unwrap(),
                 )));
             }
@@ -750,6 +803,14 @@ pub fn int_to_f32(value: i64) -> Option<Float32> {
 
 pub fn float_to_f32(value: f64) -> Option<Float32> {
     Some(Float32(value as f32))
+}
+
+pub fn int_to_string(value: i64) -> Option<String> {
+    Some(value.to_string())
+}
+
+pub fn float_to_string(value: f64) -> Option<String> {
+    Some(value.to_string())
 }
 
 /// Computes a hash of an integer value `i`.

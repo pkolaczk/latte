@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "latte-cli"
-version = "0.27.0"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1913,6 +1913,8 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scylla"
 version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9439d92eea9f86c07175c819c3a129ca28b02477b47df26db354a1f4ea7ee276"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1944,6 +1946,8 @@ dependencies = [
 [[package]]
 name = "scylla-cql"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64037fb9d9c59ae15137fff9a56c4d528908dfd38d09e75b5f8e56e3894966dd"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -1959,6 +1963,8 @@ dependencies = [
 [[package]]
 name = "scylla-macros"
 version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e5fe1d389adebe6a1a27bce18b81a65ff18c25d58a795de490e18b0e7a27b9f"
 dependencies = [
  "darling",
  "proc-macro2",
