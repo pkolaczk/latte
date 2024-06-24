@@ -161,6 +161,11 @@ impl Program {
             .unwrap();
         latte_module.inst_fn("to_i8", context::int_to_i8).unwrap();
         latte_module.inst_fn("to_i8", context::float_to_i8).unwrap();
+        latte_module.inst_fn("to_f32", context::int_to_f32).unwrap();
+        latte_module
+            .inst_fn("to_f32", context::float_to_f32)
+            .unwrap();
+
         latte_module.inst_fn("clamp", context::clamp_float).unwrap();
         latte_module.inst_fn("clamp", context::clamp_int).unwrap();
 

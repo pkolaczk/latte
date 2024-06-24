@@ -495,6 +495,7 @@ impl Context {
             .statements
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
+
         let params = bind::to_scylla_query_params(&params)?;
         for current_attempt_num in 0..self.retry_number + 1 {
             let start_time = self.stats.try_lock().unwrap().start_request();
@@ -611,6 +612,9 @@ mod bind {
                 } else if h == Int8::type_hash() {
                     let int8: &Int8 = obj.downcast_borrow_ref().unwrap();
                     Ok(CqlValue::TinyInt(int8.0))
+                } else if h == Float32::type_hash() {
+                    let float32: &Float32 = obj.downcast_borrow_ref().unwrap();
+                    Ok(CqlValue::Float(float32.0))
                 } else {
                     Err(CassError(CassErrorKind::UnsupportedType(
                         v.type_info().unwrap(),
@@ -684,6 +688,9 @@ pub struct Int16(pub i16);
 #[derive(Clone, Debug, Any)]
 pub struct Int32(pub i32);
 
+#[derive(Clone, Debug, Any)]
+pub struct Float32(pub f32);
+
 /// Returns the literal value stored in the `params` map under the key given as the first
 /// macro arg, and if not found, returns the expression from the second arg.
 pub fn param(
@@ -735,6 +742,14 @@ pub fn int_to_i32(value: i64) -> Option<Int32> {
 
 pub fn float_to_i32(value: f64) -> Option<Int32> {
     int_to_i32(value as i64)
+}
+
+pub fn int_to_f32(value: i64) -> Option<Float32> {
+    Some(Float32(value as f32))
+}
+
+pub fn float_to_f32(value: f64) -> Option<Float32> {
+    Some(Float32(value as f32))
 }
 
 /// Computes a hash of an integer value `i`.
