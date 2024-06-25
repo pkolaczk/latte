@@ -23,8 +23,9 @@ use rand::{random, Rng, SeedableRng};
 use rune::alloc::fmt::TryWrite;
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
-use rune::runtime::{Mut, Object, Ref, Shared, TypeInfo, VmError, VmResult};
 use rune::{ast, vm_try, vm_write};
+use rune::runtime::{Mut, Ref, VmResult};
+use rune::runtime::{Function, Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
 use scylla::_macro_internal::ColumnType;
@@ -665,6 +666,15 @@ mod bind {
                     .try_collect()?;
                 Ok(CqlValue::Set(elements))
             }
+            (Value::Vec(v), ColumnType::Vector(elt, _dim)) => {
+                let v = v.borrow_ref().unwrap();
+                let elements = v
+                    .as_ref()
+                    .iter()
+                    .map(|v| to_scylla_value(v, elt))
+                    .try_collect()?;
+                Ok(CqlValue::Vector(elements))
+            }
             (Value::Vec(v), ColumnType::Map(key_elt, value_elt)) => {
                 let v = v.borrow_ref().unwrap();
                 let mut map_vec = Vec::with_capacity(v.len());
@@ -929,10 +939,13 @@ fn hash_inner(i: i64) -> i64 {
 pub fn hash(i: i64) -> i64 {
     hash_inner(i)
 }
-
 /// Computes hash of two integer values.
 #[rune::function]
 pub fn hash2(a: i64, b: i64) -> i64 {
+    hash2_inner(a, b)
+}
+
+fn hash2_inner(a: i64, b: i64) -> i64 {
     let mut hash = MetroHash64::new();
     a.hash(&mut hash);
     b.hash(&mut hash);
@@ -960,6 +973,16 @@ pub fn uniform(i: i64, min: f64, max: f64) -> VmResult<f64> {
     let mut rng = StdRng::seed_from_u64(i as u64);
     let distribution = vm_try!(Uniform::new(min, max).map_err(|e| VmError::panic(format!("{e}"))));
     VmResult::Ok(distribution.sample(&mut rng))
+}
+
+#[rune::function]
+pub fn list(seed: i64, len: usize, generator: Function) -> VmResult<Vec<Value>> {
+    let mut result = Vec::with_capacity(len);
+    for i in 0..len {
+        let value = vm_try!(generator.call((hash2_inner(seed, i as i64),)));
+        result.push(value);
+    }
+    VmResult::Ok(result)
 }
 
 /// Generates random blob of data of given length.

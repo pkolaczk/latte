@@ -132,6 +132,7 @@ impl Program {
 
         latte_module.function_meta(context::blob).unwrap();
         latte_module.function_meta(context::text).unwrap();
+        latte_module.function_meta(context::list).unwrap();
         latte_module.function_meta(context::now_timestamp).unwrap();
         latte_module.function_meta(context::hash).unwrap();
         latte_module.function_meta(context::hash2).unwrap();
