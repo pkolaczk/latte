@@ -129,6 +129,8 @@ impl Program {
         let mut latte_module = Module::with_crate("latte");
         latte_module.function(&["blob"], context::blob).unwrap();
         latte_module.function(&["text"], context::text).unwrap();
+        latte_module.function(&["list"], context::list).unwrap();
+
         latte_module
             .function(&["now_timestamp"], context::now_timestamp)
             .unwrap();

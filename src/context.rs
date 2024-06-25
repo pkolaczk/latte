@@ -20,7 +20,7 @@ use rune::ast;
 use rune::ast::Kind;
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
-use rune::runtime::{Object, Shared, TypeInfo, VmError};
+use rune::runtime::{Function, Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
 use scylla::_macro_internal::ColumnType;
@@ -616,6 +616,15 @@ mod bind {
                     .try_collect()?;
                 Ok(CqlValue::Set(elements))
             }
+            (Value::Vec(v), ColumnType::Vector(elt, dim)) => {
+                let v = v.borrow_ref().unwrap();
+                let elements = v
+                    .as_ref()
+                    .iter()
+                    .map(|v| to_scylla_value(v, elt))
+                    .try_collect()?;
+                Ok(CqlValue::Vector(elements))
+            }
             (
                 Value::Object(v),
                 ColumnType::UserDefinedType {
@@ -856,6 +865,15 @@ pub fn clamp_float(value: f64, min: f64, max: f64) -> f64 {
 /// Restricts a value to a certain interval.
 pub fn clamp_int(value: i64, min: i64, max: i64) -> i64 {
     value.clamp(min, max)
+}
+
+pub fn list(seed: i64, len: usize, generator: Function) -> Result<Vec<Value>, VmError> {
+    let mut result = Vec::with_capacity(len);
+    for i in 0..len {
+        let value = generator.call((hash2(seed, i as i64),))?;
+        result.push(value);
+    }
+    Ok(result)
 }
 
 /// Generates random blob of data of given length.
