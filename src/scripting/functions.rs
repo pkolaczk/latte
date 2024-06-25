@@ -9,7 +9,7 @@ use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
-use rune::runtime::{Mut, Ref, VmError, VmResult};
+use rune::runtime::{Function, Mut, Ref, VmError, VmResult};
 use rune::{ast, vm_try, Value};
 use statrs::distribution::{Normal, Uniform};
 use std::collections::HashMap;
@@ -71,6 +71,10 @@ pub fn hash(i: i64) -> i64 {
 /// Computes hash of two integer values.
 #[rune::function]
 pub fn hash2(a: i64, b: i64) -> i64 {
+    hash2_inner(a, b)
+}
+
+fn hash2_inner(a: i64, b: i64) -> i64 {
     let mut hash = MetroHash64::new();
     a.hash(&mut hash);
     b.hash(&mut hash);
@@ -120,6 +124,16 @@ pub fn text(seed: i64, len: usize) -> String {
             std::char::from_u32(code_point).unwrap()
         })
         .collect()
+}
+
+#[rune::function]
+pub fn vector(len: usize, generator: Function) -> VmResult<Vec<Value>> {
+    let mut result = Vec::with_capacity(len);
+    for i in 0..len {
+        let value = vm_try!(generator.call((i,)));
+        result.push(value);
+    }
+    VmResult::Ok(result)
 }
 
 /// Generates 'now' timestamp
