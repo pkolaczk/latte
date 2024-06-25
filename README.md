@@ -170,6 +170,19 @@ pub async fn run(ctx, i) {
 }
 ```
 
+Query parameters can be bound and passed by names as well:
+```rust
+const INSERT = "my_insert";
+
+pub async fn prepare(ctx) {
+  ctx.prepare(INSERT, "INSERT INTO test.test(id, data) VALUES (:id, :data)").await?;
+}
+
+pub async fn run(ctx, i) {
+  ctx.execute_prepared(INSERT, #{id: 5, data: "foo"}).await
+}
+```
+
 ### Populating the database
 
 Read queries are more interesting when they return non-empty result sets. 

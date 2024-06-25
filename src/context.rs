@@ -624,22 +624,31 @@ mod bind {
                     field_types,
                 },
             ) => {
-                let borrowed = v.borrow_ref().unwrap();
-                let mut fields = Vec::new();
-                for (field_name, field_type) in field_types {
-                    let value = match borrowed.get_value(field_name) {
-                        Err(_) => None,
-                        Ok(None) => Some(CqlValue::Empty),
-                        Ok(Some(value)) => Some(to_scylla_value(&value, field_type)?),
-                    };
-                    fields.push((field_name.to_string(), value))
-                }
+                let obj = v.borrow_ref().unwrap();
+                let fields = read_fields(|s| obj.get(s), field_types)?;
                 Ok(CqlValue::UserDefinedType {
                     keyspace: keyspace.to_string(),
                     type_name: type_name.to_string(),
                     fields,
                 })
             }
+            (
+                Value::Struct(v),
+                ColumnType::UserDefinedType {
+                    keyspace,
+                    type_name,
+                    field_types,
+                },
+            ) => {
+                let obj = v.borrow_ref().unwrap();
+                let fields = read_fields(|s| obj.get(s), field_types)?;
+                Ok(CqlValue::UserDefinedType {
+                    keyspace: keyspace.to_string(),
+                    type_name: type_name.to_string(),
+                    fields,
+                })
+            }
+
             (Value::Any(obj), ColumnType::Uuid) => {
                 let obj = obj.borrow_ref().unwrap();
                 let h = obj.type_hash();
@@ -680,9 +689,9 @@ mod bind {
         params: &Value,
         types: &[ColumnSpec],
     ) -> Result<Vec<CqlValue>, CassError> {
-        let mut values = Vec::new();
-        match params {
+        Ok(match params {
             Value::Tuple(tuple) => {
+                let mut values = Vec::new();
                 let tuple = tuple.borrow_ref().unwrap();
                 if tuple.len() != types.len() {
                     return Err(CassError(CassErrorKind::InvalidNumberOfQueryParams));
@@ -690,18 +699,58 @@ mod bind {
                 for (v, t) in tuple.iter().zip(types) {
                     values.push(to_scylla_value(v, &t.typ)?);
                 }
+                values
             }
             Value::Vec(vec) => {
+                let mut values = Vec::new();
+
                 let vec = vec.borrow_ref().unwrap();
                 for (v, t) in vec.iter().zip(types) {
                     values.push(to_scylla_value(v, &t.typ)?);
                 }
+                values
+            }
+            Value::Object(obj) => {
+                let obj = obj.borrow_ref().unwrap();
+                read_params(|f| obj.get(f), types)?
+            }
+            Value::Struct(obj) => {
+                let obj = obj.borrow_ref().unwrap();
+                read_params(|f| obj.get(f), types)?
             }
             other => {
                 return Err(CassError(CassErrorKind::InvalidQueryParamsObject(
                     other.type_info().unwrap(),
                 )));
             }
+        })
+    }
+
+    fn read_params<'a, 'b>(
+        get_value: impl Fn(&String) -> Option<&'a Value>,
+        params: &[ColumnSpec],
+    ) -> Result<Vec<CqlValue>, CassError> {
+        let mut values = Vec::with_capacity(params.len());
+        for column in params {
+            let value = match get_value(&column.name) {
+                Some(value) => to_scylla_value(value, &column.typ)?,
+                None => CqlValue::Empty,
+            };
+            values.push(value)
+        }
+        Ok(values)
+    }
+
+    fn read_fields<'a, 'b>(
+        get_value: impl Fn(&String) -> Option<&'a Value>,
+        fields: &[(String, ColumnType)],
+    ) -> Result<Vec<(String, Option<CqlValue>)>, CassError> {
+        let mut values = Vec::with_capacity(fields.len());
+        for (field_name, field_type) in fields {
+            if let Some(value) = get_value(field_name) {
+                let value = Some(to_scylla_value(value, field_type)?);
+                values.push((field_name.to_string(), value))
+            };
         }
         Ok(values)
     }
