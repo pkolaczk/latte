@@ -34,7 +34,7 @@ num_cpus = "1.13.0"
 openssl = "0.10.38"
 parse_duration = "2.1.1"
 pin-project = "1.1"
-plotters = { version = "0.3", default-features = false, features = ["line_series", "svg_backend", "full_palette"]}
+plotters = { version = "0.3", default-features = false, features = ["line_series", "svg_backend", "full_palette"] }
 rand = { version = "0.8", default-features = false, features = ["small_rng", "std"] }
 rand_distr = "0.4"
 regex = "1.5"
@@ -53,7 +53,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "parking_l
 tokio-stream = "0.1"
 tracing = "0.1"
 tracing-appender = "0.2"
-tracing-subscriber = {  version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 try-lock = "0.2.3"
 uuid = { version = "1.1", features = ["v4"] }
 walkdir = "2"

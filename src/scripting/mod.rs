@@ -43,6 +43,7 @@ fn try_install(
 
     latte_module.function_meta(functions::blob)?;
     latte_module.function_meta(functions::text)?;
+    latte_module.function_meta(functions::vector)?;
     latte_module.function_meta(functions::now_timestamp)?;
     latte_module.function_meta(functions::hash)?;
     latte_module.function_meta(functions::hash2)?;
