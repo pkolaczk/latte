@@ -80,6 +80,15 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
                 .try_collect()?;
             Ok(CqlValue::List(elements))
         }
+        (Value::Vec(v), ColumnType::Vector(elt, _dim)) => {
+            let v = v.borrow_ref().unwrap();
+            let elements = v
+                .as_ref()
+                .iter()
+                .map(|v| to_scylla_value(v, elt))
+                .try_collect()?;
+            Ok(CqlValue::Vector(elements))
+        }
         (Value::Vec(v), ColumnType::Set(elt)) => {
             let v = v.borrow_ref().unwrap();
             let elements = v

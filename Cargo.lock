@@ -1809,6 +1809,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scylla"
 version = "0.13.0"
+source = "git+https://github.com/pkolaczk/scylla-rust-driver.git?branch=vector#ea914d446d2172d3470f1e4de5fd87d55962b51a"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1840,6 +1841,7 @@ dependencies = [
 [[package]]
 name = "scylla-cql"
 version = "0.2.0"
+source = "git+https://github.com/pkolaczk/scylla-rust-driver.git?branch=vector#ea914d446d2172d3470f1e4de5fd87d55962b51a"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -1855,6 +1857,7 @@ dependencies = [
 [[package]]
 name = "scylla-macros"
 version = "0.5.0"
+source = "git+https://github.com/pkolaczk/scylla-rust-driver.git?branch=vector#ea914d446d2172d3470f1e4de5fd87d55962b51a"
 dependencies = [
  "darling",
  "proc-macro2",

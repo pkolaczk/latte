@@ -40,7 +40,7 @@ rand_distr = "0.4"
 regex = "1.5"
 rune = "0.13"
 rust-embed = "8"
-scylla = { path = "../scylla-rust-driver/scylla", features = ["ssl"] }
+scylla = { git = "https://github.com/pkolaczk/scylla-rust-driver.git", branch = "vector", features = ["ssl"] }
 search_path = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
