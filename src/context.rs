@@ -616,7 +616,7 @@ mod bind {
                     .try_collect()?;
                 Ok(CqlValue::Set(elements))
             }
-            (Value::Vec(v), ColumnType::Vector(elt, dim)) => {
+            (Value::Vec(v), ColumnType::Vector(elt, _)) => {
                 let v = v.borrow_ref().unwrap();
                 let elements = v
                     .as_ref()
