@@ -499,6 +499,10 @@ impl<'a> Display for RunConfigCmp<'a> {
         }
 
         let lines: Vec<Box<dyn Display>> = vec![
+            self.line("Datacenter", "", |conf| {conf.connection.datacenter.clone()}),
+            self.line("Consistency", "", |conf| {
+                conf.connection.consistency.scylla_consistency().to_string()
+            }),
             self.line("Threads", "", |conf| Quantity::from(conf.threads)),
             self.line("Connections", "", |conf| {
                 Quantity::from(conf.connection.count)
