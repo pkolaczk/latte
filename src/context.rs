@@ -580,6 +580,9 @@ mod bind {
             }
             (Value::Integer(v), ColumnType::Int) => convert_int(*v, ColumnType::Int, CqlValue::Int),
             (Value::Integer(v), ColumnType::BigInt) => Ok(CqlValue::BigInt(*v)),
+            (Value::Integer(v), ColumnType::Timestamp) => {
+                Ok(CqlValue::Timestamp(scylla::frame::value::CqlTimestamp(*v)))
+            }
 
             (Value::Float(v), ColumnType::Float) => Ok(CqlValue::Float(*v as f32)),
             (Value::Float(v), ColumnType::Double) => Ok(CqlValue::Double(*v)),
