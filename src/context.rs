@@ -132,7 +132,32 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             result.push_str("])");
             result
         }
-        // TODO: cover 'CqlValue::Map' and 'CqlValue::Set'
+        CqlValue::Set(elements) => {
+            let mut result = String::from("Set([");
+            for element in elements {
+                let element_string = cql_value_obj_to_string(element);
+                result.push_str(&element_string);
+                result.push_str(", ");
+            }
+            if result.len() >= 2 {
+                result.truncate(result.len() - 2);
+            }
+            result.push_str("])");
+            result
+        }
+        CqlValue::Map(pairs) => {
+            let mut result = String::from("Map({");
+            for (key, value) in pairs {
+                let key_string = cql_value_obj_to_string(key);
+                let value_string = cql_value_obj_to_string(value);
+                result.push_str(&format!("({}: {}), ", key_string, value_string));
+            }
+            if result.len() >= 2 {
+                result.truncate(result.len() - 2);
+            }
+            result.push_str("})");
+            result
+        }
         _ => format!("{v:?}"),
     }
 }
@@ -197,6 +222,7 @@ pub enum CassErrorKind {
     ValueOutOfRange(String, ColumnType),
     InvalidNumberOfQueryParams,
     InvalidQueryParamsObject(TypeInfo),
+    WrongDataStructure(String),
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
     QueryExecution(QueryInfo, QueryError),
@@ -232,6 +258,9 @@ impl CassError {
             }
             CassErrorKind::InvalidQueryParamsObject(t) => {
                 write!(buf, "Value of type {t} cannot by used as query parameters; expected a list or object")
+            }
+            CassErrorKind::WrongDataStructure(s) => {
+                write!(buf, "Wrong data structure: {s}")
             }
             CassErrorKind::Prepare(q, e) => {
                 write!(buf, "Failed to prepare query \"{q}\": {e}")
@@ -564,6 +593,10 @@ mod bind {
     use super::*;
 
     fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
+        // TODO: add support for the following native CQL types:
+        //       'counter', 'date', 'decimal', 'duration', 'inet', 'time',
+        //       'timestamp', 'timeuuid' and 'variant'.
+        //       Also, for the 'tuple'.
         match (v, typ) {
             (Value::Bool(v), ColumnType::Boolean) => Ok(CqlValue::Boolean(*v)),
 
@@ -597,7 +630,7 @@ mod bind {
             (Value::Option(v), typ) => match v.borrow_ref().unwrap().as_ref() {
                 Some(v) => to_scylla_value(v, typ),
                 None => Ok(CqlValue::Empty),
-            },
+            }
             (Value::Vec(v), ColumnType::List(elt)) => {
                 let v = v.borrow_ref().unwrap();
                 let elements = v
@@ -615,6 +648,39 @@ mod bind {
                     .map(|v| to_scylla_value(v, elt))
                     .try_collect()?;
                 Ok(CqlValue::Set(elements))
+            }
+            (Value::Vec(v), ColumnType::Map(key_elt, value_elt)) => {
+                let v = v.borrow_ref().unwrap();
+                if v.len() > 0 {
+                    if let Value::Tuple(first_tuple) = &v[0] {
+                        if first_tuple.borrow_ref().unwrap().len() == 2 {
+                            let map_values: Vec<(CqlValue, CqlValue)> = v
+                                .iter()
+                                .filter_map(|tuple_wrapped| {
+                                    if let Value::Tuple(tuple_wrapped) = &tuple_wrapped {
+                                        let tuple = tuple_wrapped.borrow_ref().unwrap();
+                                        let key = to_scylla_value(tuple.get(0).unwrap(), key_elt).unwrap();
+                                        let value = to_scylla_value(tuple.get(1).unwrap(), value_elt).unwrap();
+                                        Some((key, value))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            Ok(CqlValue::Map(map_values))
+                        } else {
+                            Err(CassError(CassErrorKind::WrongDataStructure(
+                                "Vector's tuple must have exactly 2 elements".to_string(),
+                            )))
+                        }
+                    } else {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            "ColumnType::Map expects only vector of tuples".to_string(),
+                        )))
+                    }
+                } else {
+                    Ok(CqlValue::Map(vec![]))
+                }
             }
             (
                 Value::Object(v),
