@@ -4,6 +4,8 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -197,6 +199,7 @@ pub enum CassErrorKind {
     ValueOutOfRange(String, ColumnType),
     InvalidNumberOfQueryParams,
     InvalidQueryParamsObject(TypeInfo),
+    WrongDataStructure(String),
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
     QueryExecution(QueryInfo, QueryError),
@@ -232,6 +235,9 @@ impl CassError {
             }
             CassErrorKind::InvalidQueryParamsObject(t) => {
                 write!(buf, "Value of type {t} cannot by used as query parameters; expected a list or object")
+            }
+            CassErrorKind::WrongDataStructure(s) => {
+                write!(buf, "Wrong data structure: {s}")
             }
             CassErrorKind::Prepare(q, e) => {
                 write!(buf, "Failed to prepare query \"{q}\": {e}")
@@ -589,6 +595,29 @@ mod bind {
             }
             (Value::String(v), ColumnType::Text | ColumnType::Ascii) => {
                 Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string()))
+            }
+            (Value::StaticString(v), ColumnType::Inet) => {
+                let ipaddr = IpAddr::from_str(v);
+                match ipaddr {
+                    Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
+                    Err(e) => {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            format!("Failed to parse '{}' StaticString as IP address: {}", v.as_str(), e),
+                        )))
+                    }
+                }
+            }
+            (Value::String(v), ColumnType::Inet) => {
+                let ipaddr_str = v.borrow_ref().unwrap();
+                let ipaddr = IpAddr::from_str(ipaddr_str.as_str());
+                match ipaddr {
+                    Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
+                    Err(e) => {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            format!("Failed to parse '{}' String as IP address: {}", ipaddr_str.as_str(), e),
+                        )))
+                    }
+                }
             }
 
             (Value::Bytes(v), ColumnType::Blob) => {
