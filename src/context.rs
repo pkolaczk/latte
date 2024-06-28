@@ -27,6 +27,7 @@ use rune::{Any, Value};
 use rust_embed::RustEmbed;
 use scylla::_macro_internal::ColumnType;
 use scylla::frame::response::result::CqlValue;
+use scylla::frame::value::CqlTimeuuid;
 use scylla::load_balancing::DefaultPolicy;
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
@@ -631,6 +632,29 @@ mod bind {
             (Value::Float(v), ColumnType::Float) => Ok(CqlValue::Float(*v as f32)),
             (Value::Float(v), ColumnType::Double) => Ok(CqlValue::Double(*v)),
 
+            (Value::StaticString(v), ColumnType::Timeuuid) => {
+                let timeuuid = CqlTimeuuid::from_str(v);
+                match timeuuid {
+                    Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
+                    Err(e) => Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                        "Failed to parse '{}' StaticString as Timeuuid: {}",
+                        v.as_str(),
+                        e
+                    )))),
+                }
+            }
+            (Value::String(v), ColumnType::Timeuuid) => {
+                let timeuuid_str = v.borrow_ref().unwrap();
+                let timeuuid = CqlTimeuuid::from_str(timeuuid_str.as_str());
+                match timeuuid {
+                    Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
+                    Err(e) => Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                        "Failed to parse '{}' String as Timeuuid: {}",
+                        timeuuid_str.as_str(),
+                        e
+                    )))),
+                }
+            }
             (Value::StaticString(v), ColumnType::Text | ColumnType::Ascii) => {
                 Ok(CqlValue::Text(v.as_str().to_string()))
             }
@@ -641,11 +665,11 @@ mod bind {
                 let ipaddr = IpAddr::from_str(v);
                 match ipaddr {
                     Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
-                    Err(e) => {
-                        Err(CassError(CassErrorKind::WrongDataStructure(
-                            format!("Failed to parse '{}' StaticString as IP address: {}", v.as_str(), e),
-                        )))
-                    }
+                    Err(e) => Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                        "Failed to parse '{}' StaticString as IP address: {}",
+                        v.as_str(),
+                        e
+                    )))),
                 }
             }
             (Value::String(v), ColumnType::Inet) => {
@@ -653,11 +677,11 @@ mod bind {
                 let ipaddr = IpAddr::from_str(ipaddr_str.as_str());
                 match ipaddr {
                     Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
-                    Err(e) => {
-                        Err(CassError(CassErrorKind::WrongDataStructure(
-                            format!("Failed to parse '{}' String as IP address: {}", ipaddr_str.as_str(), e),
-                        )))
-                    }
+                    Err(e) => Err(CassError(CassErrorKind::WrongDataStructure(format!(
+                        "Failed to parse '{}' String as IP address: {}",
+                        ipaddr_str.as_str(),
+                        e
+                    )))),
                 }
             }
 
@@ -667,7 +691,7 @@ mod bind {
             (Value::Option(v), typ) => match v.borrow_ref().unwrap().as_ref() {
                 Some(v) => to_scylla_value(v, typ),
                 None => Ok(CqlValue::Empty),
-            }
+            },
             (Value::Vec(v), ColumnType::List(elt)) => {
                 let v = v.borrow_ref().unwrap();
                 let elements = v
@@ -696,8 +720,11 @@ mod bind {
                                 .filter_map(|tuple_wrapped| {
                                     if let Value::Tuple(tuple_wrapped) = &tuple_wrapped {
                                         let tuple = tuple_wrapped.borrow_ref().unwrap();
-                                        let key = to_scylla_value(tuple.get(0).unwrap(), key_elt).unwrap();
-                                        let value = to_scylla_value(tuple.get(1).unwrap(), value_elt).unwrap();
+                                        let key = to_scylla_value(tuple.get(0).unwrap(), key_elt)
+                                            .unwrap();
+                                        let value =
+                                            to_scylla_value(tuple.get(1).unwrap(), value_elt)
+                                                .unwrap();
                                         Some((key, value))
                                     } else {
                                         None
