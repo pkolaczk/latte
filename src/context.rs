@@ -25,6 +25,7 @@ use rune::{Any, Value};
 use rust_embed::RustEmbed;
 use scylla::_macro_internal::ColumnType;
 use scylla::frame::response::result::CqlValue;
+use scylla::frame::value::CqlTimeuuid;
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
@@ -197,6 +198,7 @@ pub enum CassErrorKind {
     ValueOutOfRange(String, ColumnType),
     InvalidNumberOfQueryParams,
     InvalidQueryParamsObject(TypeInfo),
+    WrongDataStructure(String),
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
     QueryExecution(QueryInfo, QueryError),
@@ -232,6 +234,9 @@ impl CassError {
             }
             CassErrorKind::InvalidQueryParamsObject(t) => {
                 write!(buf, "Value of type {t} cannot by used as query parameters; expected a list or object")
+            }
+            CassErrorKind::WrongDataStructure(s) => {
+                write!(buf, "Wrong data structure: {s}")
             }
             CassErrorKind::Prepare(q, e) => {
                 write!(buf, "Failed to prepare query \"{q}\": {e}")
@@ -584,6 +589,29 @@ mod bind {
             (Value::Float(v), ColumnType::Float) => Ok(CqlValue::Float(*v as f32)),
             (Value::Float(v), ColumnType::Double) => Ok(CqlValue::Double(*v)),
 
+            (Value::StaticString(v), ColumnType::Timeuuid) => {
+                let timeuuid = CqlTimeuuid::from_str(v);
+                match timeuuid {
+                    Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
+                    Err(e) => {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            format!("Failed to parse '{}' StaticString as Timeuuid: {}", v.as_str(), e),
+                        )))
+                    }
+                }
+            }
+            (Value::String(v), ColumnType::Timeuuid) => {
+                let timeuuid_str = v.borrow_ref().unwrap();
+                let timeuuid = CqlTimeuuid::from_str(timeuuid_str.as_str());
+                match timeuuid {
+                    Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
+                    Err(e) => {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            format!("Failed to parse '{}' String as Timeuuid: {}", timeuuid_str.as_str(), e),
+                        )))
+                    }
+                }
+            }
             (Value::StaticString(v), ColumnType::Text | ColumnType::Ascii) => {
                 Ok(CqlValue::Text(v.as_str().to_string()))
             }
