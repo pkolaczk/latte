@@ -604,8 +604,7 @@ mod bind {
 
     fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
         // TODO: add support for the following native CQL types:
-        //       'counter', 'date', 'decimal', 'duration', 'inet', 'time',
-        //       'timestamp', 'timeuuid' and 'variant'.
+        //       'counter', 'date', 'decimal', 'duration', 'time' and 'variant'.
         //       Also, for the 'tuple'.
         match (v, typ) {
             (Value::Bool(v), ColumnType::Boolean) => Ok(CqlValue::Boolean(*v)),
