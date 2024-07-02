@@ -170,6 +170,19 @@ pub async fn run(ctx, i) {
 }
 ```
 
+Query parameters can be bound and passed by names as well:
+```rust
+const INSERT = "my_insert";
+
+pub async fn prepare(ctx) {
+  ctx.prepare(INSERT, "INSERT INTO test.test(id, data) VALUES (:id, :data)").await?;
+}
+
+pub async fn run(ctx, i) {
+  ctx.execute_prepared(INSERT, #{id: 5, data: "foo"}).await
+}
+```
+
 ### Populating the database
 
 Read queries are more interesting when they return non-empty result sets. 
@@ -209,18 +222,20 @@ are pure, i.e. invoking them multiple times with the same parameters yields alwa
 - `latte::hash_select(i, vector)` – selects an item from a vector based on a hash
 - `latte::blob(i, len)` – generates a random binary blob of length `len`
 - `latte::normal(i, mean, std_dev)` – generates a floating point number from a normal distribution
+- `latte::uniform(i, min, max)` – generates a floating point number from a uniform distribution
 
-#### Numeric conversions
+#### Type conversions
+Rune uses 64-bit representation for integers and floats. 
+Since version 0.28 Rune numbers are automatically converted to proper target query parameter type,
+therefore you don't need to do explicit conversions. E.g. you can pass an integer as a parameter
+of Cassandra type `smallint`. If the number is too big to fit into the range allowed by the target
+type, a runtime error will be signalled.
 
-Rune represents integers as 64-bit signed values. Therefore, it is possible to directly pass a Rune integer to
-a Cassandra column of type `bigint`. However, binding a 64-bit value to smaller integer column types, like
-`int`, `smallint` or `tinyint` will result in a runtime error. As long as an integer value does not exceed the bounds,
-you can convert it to smaller signed  integer types by using the following instance functions:
-
-- `x.to_i32()` – converts a float or integer to a 32-bit signed integer, compatible with Cassandra `int` type
-- `x.to_i16()` – converts a float or integer to a 16-bit signed integer, compatible with Cassandra `smallint` type
-- `x.to_i8()` – converts a float or integer to an 8-bit signed integer, compatible with Cassandra `tinyint` type
-- `x.clamp(min, max)` – restricts the range of an integer or a float value to given range  
+The following methods are available:
+- `x.to_integer()` – converts a float to an integer
+- `x.to_float()` – converts an integer to a float
+- `x.to_string()` – converts a float or integer to a string
+- `x.clamp(min, max)` – restricts the range of an integer or a float value to given range 
 
 You can also convert between floats and integers by calling `to_integer` or `to_float` instance functions.
 

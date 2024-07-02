@@ -4,6 +4,8 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -15,7 +17,7 @@ use openssl::error::ErrorStack;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
 use rand::distributions::Distribution;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{random, Rng, SeedableRng};
 use rune::ast;
 use rune::ast::Kind;
 use rune::macros::{quote, MacroContext, TokenStream};
@@ -23,18 +25,20 @@ use rune::parse::Parser;
 use rune::runtime::{Object, Shared, TypeInfo, VmError};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
+use scylla::_macro_internal::ColumnType;
 use scylla::frame::response::result::CqlValue;
+use scylla::frame::value::CqlTimeuuid;
 use scylla::load_balancing::DefaultPolicy;
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
 use scylla::{ExecutionProfile, QueryResult, SessionBuilder};
-use statrs::distribution::Normal;
+use statrs::distribution::{Normal, Uniform};
 use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
 use uuid::{Variant, Version};
 
-use crate::config::{ConnectionConf, PRINT_RETRY_ERROR_LIMIT, RetryInterval};
+use crate::config::{ConnectionConf, RetryInterval, PRINT_RETRY_ERROR_LIMIT};
 use crate::LatteError;
 
 fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
@@ -59,7 +63,7 @@ fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> 
 pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
     let mut policy_builder = DefaultPolicy::builder().token_aware(true);
     let dc = &conf.datacenter;
-    if dc.len() > 0 {
+    if !dc.is_empty() {
         policy_builder = policy_builder.prefer_datacenter(dc.to_owned()).permit_dc_failover(true);
     }
     let profile = ExecutionProfile::builder()
@@ -77,7 +81,11 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
-    Ok(Context::new(scylla_session, conf.retry_number, conf.retry_interval))
+    Ok(Context::new(
+        scylla_session,
+        conf.retry_number,
+        conf.retry_interval,
+    ))
 }
 
 pub struct ClusterInfo {
@@ -89,17 +97,21 @@ pub struct ClusterInfo {
 pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
     let no_transformation_size_limit = 32;
     match v {
-        // Replace big string- and bytes-alike object values with it's size labels
+        // Replace big string- and bytes-alike object values with its size labels
         CqlValue::Text(param) if param.len() > no_transformation_size_limit => {
             format!("Text(<size>={})", param.len())
-        },
+        }
         CqlValue::Ascii(param) if param.len() > no_transformation_size_limit => {
             format!("Ascii(<size>={})", param.len())
-        },
+        }
         CqlValue::Blob(param) if param.len() > no_transformation_size_limit => {
             format!("Blob(<size>={})", param.len())
-        },
-        CqlValue::UserDefinedType { keyspace, type_name, fields } => {
+        }
+        CqlValue::UserDefinedType {
+            keyspace,
+            type_name,
+            fields,
+        } => {
             let mut result = format!(
                 "UDT {{ keyspace: \"{}\", type_name: \"{}\", fields: [",
                 keyspace, type_name,
@@ -114,9 +126,9 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             if result.len() >= 2 {
                 result.truncate(result.len() - 2);
             }
-            result.push_str(&format!("] }}"));
+            result.push_str("] }");
             result
-        },
+        }
         CqlValue::List(elements) => {
             let mut result = String::from("List([");
             for element in elements {
@@ -129,7 +141,7 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             }
             result.push_str("])");
             result
-        },
+        }
         CqlValue::Set(elements) => {
             let mut result = String::from("Set([");
             for element in elements {
@@ -142,7 +154,7 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             }
             result.push_str("])");
             result
-        },
+        }
         CqlValue::Map(pairs) => {
             let mut result = String::from("Map({");
             for (key, value) in pairs {
@@ -155,7 +167,7 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
             }
             result.push_str("})");
             result
-        },
+        }
         _ => format!("{v:?}"),
     }
 }
@@ -171,7 +183,7 @@ impl CassError {
     fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
         let query = QueryInfo {
             cql: cql.to_string(),
-            params: params.iter().map(|v| cql_value_obj_to_string(v)).collect(),
+            params: params.iter().map(cql_value_obj_to_string).collect(),
         };
         let kind = match err {
             QueryError::RequestTimeout(_)
@@ -186,9 +198,10 @@ impl CassError {
     }
 
     fn query_retries_exceeded(retry_number: u64) -> CassError {
-        CassError(CassErrorKind::QueryRetriesExceeded(
-            format!("Max retry attempts ({}) reached", retry_number)
-        ))
+        CassError(CassErrorKind::QueryRetriesExceeded(format!(
+            "Max retry attempts ({}) reached",
+            retry_number
+        )))
     }
 }
 
@@ -215,8 +228,11 @@ pub enum CassErrorKind {
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
     QueryRetriesExceeded(String),
+    QueryParamConversion(TypeInfo, ColumnType),
+    ValueOutOfRange(String, ColumnType),
+    InvalidNumberOfQueryParams,
+    InvalidQueryParamsObject(TypeInfo),
     WrongDataStructure(String),
-    UnsupportedType(TypeInfo),
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
     QueryExecution(QueryInfo, QueryError),
@@ -238,11 +254,23 @@ impl CassError {
             CassErrorKind::QueryRetriesExceeded(s) => {
                 write!(buf, "QueryRetriesExceeded: {s}")
             }
+            CassErrorKind::ValueOutOfRange(v, t) => {
+                write!(buf, "Value {v} out of range for Cassandra type {t:?}")
+            }
+            CassErrorKind::QueryParamConversion(s, t) => {
+                write!(
+                    buf,
+                    "Cannot convert value of type {s} to Cassandra type {t:?}"
+                )
+            }
+            CassErrorKind::InvalidNumberOfQueryParams => {
+                write!(buf, "Incorrect number of query parameters")
+            }
+            CassErrorKind::InvalidQueryParamsObject(t) => {
+                write!(buf, "Value of type {t} cannot by used as query parameters; expected a list or object")
+            }
             CassErrorKind::WrongDataStructure(s) => {
                 write!(buf, "Wrong data structure: {s}")
-            }
-            CassErrorKind::UnsupportedType(s) => {
-                write!(buf, "Unsupported type: {s}")
             }
             CassErrorKind::Prepare(q, e) => {
                 write!(buf, "Failed to prepare query \"{q}\": {e}")
@@ -353,35 +381,45 @@ impl Default for SessionStats {
     }
 }
 
-pub fn get_expoinential_retry_interval(min_interval: u64,
-                                       max_interval: u64,
-                                       current_attempt_num: u64) -> u64 {
+pub fn get_exponential_retry_interval(
+    min_interval: u64,
+    max_interval: u64,
+    current_attempt_num: u64,
+) -> u64 {
     let min_interval_float: f64 = min_interval as f64;
-    let mut current_interval: f64 = min_interval_float * (
-        2u64.pow((current_attempt_num - 1).try_into().unwrap_or(0)) as f64
-    );
+    let mut current_interval: f64 =
+        min_interval_float * (2u64.pow(current_attempt_num.try_into().unwrap_or(0)) as f64);
 
     // Add jitter
-    current_interval += rand::thread_rng().gen::<f64>() * min_interval_float;
+    current_interval += random::<f64>() * min_interval_float;
     current_interval -= min_interval_float / 2.0;
 
-    std::cmp::min(current_interval as u64, max_interval as u64) as u64
+    std::cmp::min(current_interval as u64, max_interval)
 }
 
-pub async fn handle_retry_error(ctxt: &Context, current_attempt_num: u64, current_error: CassError) {
-    let current_retry_interval = get_expoinential_retry_interval(
-        ctxt.retry_interval.min_ms, ctxt.retry_interval.max_ms, current_attempt_num,
+pub async fn handle_retry_error(
+    ctxt: &Context,
+    current_attempt_num: u64,
+    current_error: CassError,
+) {
+    let current_retry_interval = get_exponential_retry_interval(
+        ctxt.retry_interval.min_ms,
+        ctxt.retry_interval.max_ms,
+        current_attempt_num,
     );
 
     let mut next_attempt_str = String::new();
     let is_last_attempt = current_attempt_num == ctxt.retry_number;
     if !is_last_attempt {
-        next_attempt_str += &format!("[Retry in {}ms]", current_retry_interval);
+        next_attempt_str += &format!("[Retry in {} ms]", current_retry_interval);
     }
     let err_msg = format!(
         "{}: [ERROR][Attempt {}/{}]{} {}",
-        Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-        current_attempt_num, ctxt.retry_number, next_attempt_str, current_error,
+        Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+        current_attempt_num,
+        ctxt.retry_number,
+        next_attempt_str,
+        current_error,
     );
     if !is_last_attempt {
         ctxt.stats.try_lock().unwrap().store_retry_error(err_msg);
@@ -407,22 +445,26 @@ pub struct Context {
 }
 
 // Needed, because Rune `Value` is !Send, as it may contain some internal pointers.
-// Therefore it is not safe to pass a `Value` to another thread by cloning it, because
+// Therefore, it is not safe to pass a `Value` to another thread by cloning it, because
 // both objects could accidentally share some unprotected, `!Sync` data.
-// To make it safe, the same `Context` is never used by more than one thread at once and
+// To make it safe, the same `Context` is never used by more than one thread at once, and
 // we make sure in `clone` to make a deep copy of the `data` field by serializing
 // and deserializing it, so no pointers could get through.
 unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    pub fn new(session: scylla::Session, retry_number: u64, retry_interval: RetryInterval) -> Context {
+    pub fn new(
+        session: scylla::Session,
+        retry_number: u64,
+        retry_interval: RetryInterval,
+    ) -> Context {
         Context {
             session: Arc::new(session),
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
-            retry_number: retry_number,
-            retry_interval: retry_interval,
+            retry_number,
+            retry_interval,
             load_cycle_count: 0,
             data: Value::Object(Shared::new(Object::new())),
         }
@@ -480,7 +522,7 @@ impl Context {
 
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
-        for current_attempt_num in 0..self.retry_number+1 {
+        for current_attempt_num in 0..self.retry_number + 1 {
             let start_time = self.stats.try_lock().unwrap().start_request();
             let rs = self.session.query(cql, ()).await;
             let duration = Instant::now() - start_time;
@@ -489,12 +531,15 @@ impl Context {
                 Err(e) => {
                     let current_error = CassError::query_execution_error(cql, &[], e.clone());
                     handle_retry_error(self, current_attempt_num, current_error).await;
-                    continue
+                    continue;
                 }
             }
-            self.stats.try_lock().unwrap().complete_request(duration, &rs);
+            self.stats
+                .try_lock()
+                .unwrap()
+                .complete_request(duration, &rs);
             rs.map_err(|e| CassError::query_execution_error(cql, &[], e.clone()))?;
-            return Ok(())
+            return Ok(());
         }
         Err(CassError::query_retries_exceeded(self.retry_number))
     }
@@ -505,8 +550,9 @@ impl Context {
             .statements
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
-        let params = bind::to_scylla_query_params(&params)?;
-        for current_attempt_num in 0..self.retry_number+1 {
+
+        let params = bind::to_scylla_query_params(&params, statement.get_variable_col_specs())?;
+        for current_attempt_num in 0..self.retry_number + 1 {
             let start_time = self.stats.try_lock().unwrap().start_request();
             let rs = self.session.execute(statement, params.clone()).await;
             let duration = Instant::now() - start_time;
@@ -514,14 +560,21 @@ impl Context {
                 Ok(_) => {}
                 Err(e) => {
                     let current_error = CassError::query_execution_error(
-                        statement.get_statement(), &params, e.clone()
+                        statement.get_statement(),
+                        &params,
+                        e.clone(),
                     );
                     handle_retry_error(self, current_attempt_num, current_error).await;
-                    continue
+                    continue;
                 }
             }
-            self.stats.try_lock().unwrap().complete_request(duration, &rs);
-            rs.map_err(|e| CassError::query_execution_error(statement.get_statement(), &params, e))?;
+            self.stats
+                .try_lock()
+                .unwrap()
+                .complete_request(duration, &rs);
+            rs.map_err(|e| {
+                CassError::query_execution_error(statement.get_statement(), &params, e)
+            })?;
             return Ok(());
         }
         Err(CassError::query_retries_exceeded(self.retry_number))
@@ -544,214 +597,284 @@ impl Context {
 /// Functions for binding rune values to CQL parameters
 mod bind {
     use crate::CassErrorKind;
-    use scylla::frame::response::result::CqlValue;
+    use scylla::_macro_internal::ColumnType;
+    use scylla::frame::response::result::{ColumnSpec, CqlValue};
 
     use super::*;
 
-    fn to_scylla_value(v: &Value) -> Result<CqlValue, CassError> {
-        match v {
-            // TODO: add support for the following native CQL types:
-            //       'counter', 'date', 'decimal', 'duration', 'float', 'inet', 'time', 'timeuuid'
-            //       and 'variant'.
-            //       Also, for the 'tuple'.
-            Value::Bool(v) => Ok(CqlValue::Boolean(*v)),
-            Value::Byte(v) => Ok(CqlValue::TinyInt(*v as i8)),
-            Value::Integer(v) => Ok(CqlValue::BigInt(*v)),
-            Value::Float(v) => Ok(CqlValue::Double(*v)),
-            Value::StaticString(v) => Ok(CqlValue::Text(v.as_str().to_string())),
-            Value::String(v) => Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string())),
-            Value::Bytes(v) => Ok(CqlValue::Blob(v.borrow_ref().unwrap().to_vec())),
-            Value::Option(v) => match v.borrow_ref().unwrap().as_ref() {
-                Some(v) => to_scylla_value(v),
-                None => Ok(CqlValue::Empty),
-            },
-            Value::Vec(v) => {
-                let v = v.borrow_ref().unwrap();
-                let elements = v.as_ref().iter().map(to_scylla_value).try_collect()?;
-                Ok(CqlValue::List(elements))
+    fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
+        // TODO: add support for the following native CQL types:
+        //       'counter', 'date', 'decimal', 'duration', 'time' and 'variant'.
+        //       Also, for the 'tuple'.
+        match (v, typ) {
+            (Value::Bool(v), ColumnType::Boolean) => Ok(CqlValue::Boolean(*v)),
+
+            (Value::Byte(v), ColumnType::TinyInt) => Ok(CqlValue::TinyInt(*v as i8)),
+            (Value::Byte(v), ColumnType::SmallInt) => Ok(CqlValue::SmallInt(*v as i16)),
+            (Value::Byte(v), ColumnType::Int) => Ok(CqlValue::Int(*v as i32)),
+            (Value::Byte(v), ColumnType::BigInt) => Ok(CqlValue::BigInt(*v as i64)),
+
+            (Value::Integer(v), ColumnType::TinyInt) => {
+                convert_int(*v, ColumnType::TinyInt, CqlValue::TinyInt)
             }
-            Value::Object(v) => {
-                let borrowed = v.borrow_ref().unwrap();
-                let set_key_name = "_set";
-                let list_key_name = "_list";
-                let map_key_name = "_map";
-                let timestamp_key_name = "_timestamp";
-                let udt_keyspace = "_keyspace";
-                let udt_key_name = "_type_name";
+            (Value::Integer(v), ColumnType::SmallInt) => {
+                convert_int(*v, ColumnType::SmallInt, CqlValue::SmallInt)
+            }
+            (Value::Integer(v), ColumnType::Int) => convert_int(*v, ColumnType::Int, CqlValue::Int),
+            (Value::Integer(v), ColumnType::BigInt) => Ok(CqlValue::BigInt(*v)),
+            (Value::Integer(v), ColumnType::Timestamp) => {
+                Ok(CqlValue::Timestamp(scylla::frame::value::CqlTimestamp(*v)))
+            }
 
-                // Check that we don't have a mess of different data types in scope of single object
-                let mutually_exclusive_keys = vec![
-                    set_key_name, list_key_name, map_key_name, udt_key_name, timestamp_key_name,
-                ];
-                let mut found_mutually_exclusive_keys = HashSet::new();
-                for mutually_exclusive_key in &mutually_exclusive_keys {
-                    if borrowed.contains_key(&mutually_exclusive_key as &str) {
-                        found_mutually_exclusive_keys.insert(mutually_exclusive_key);
-                    }
-                }
-                if found_mutually_exclusive_keys.len() > 1 {
-                    return Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                        "Following mutually exclusive keys were found: {:?}",
-                        found_mutually_exclusive_keys,
-                    ))));
-                } else if found_mutually_exclusive_keys.len() == 0 {
-                    return Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                        "None of the expected keys were provided: {:?}",
-                        mutually_exclusive_keys,
-                    ))));
-                }
+            (Value::Float(v), ColumnType::Float) => Ok(CqlValue::Float(*v as f32)),
+            (Value::Float(v), ColumnType::Double) => Ok(CqlValue::Double(*v)),
 
-                // Check if "_timestamp" field exists and is of integer type
-                if let Some(timestamp_value) = borrowed.get(timestamp_key_name) {
-                    if let Value::Integer(timestamp) = timestamp_value {
-                        return Ok(CqlValue::Timestamp(scylla::frame::value::CqlTimestamp(*timestamp)));
-                    } else {
-                        return Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                            "Unexpected data type provided for the 'timestamp': {:?}",
-                            timestamp_value.type_info().unwrap(),
-                        ))));
-                    }
-                }
-
-                // Check if "_set" field exists and is a vector of values
-                if let Some(set_value) = borrowed.get(set_key_name) {
-                    if let Value::Vec(elements) = set_value {
-                        let elements = elements.borrow_ref().unwrap().as_ref()
-                            .iter().map(to_scylla_value).try_collect()?;
-                        return Ok(CqlValue::Set(elements));
-                    } else {
-                        return Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                            "Unexpected data type provided for the 'set': {:?}",
-                            set_value.type_info().unwrap(),
-                        ))));
-                    }
-                }
-
-                // Check for "_list" field exists and is a vector of values
-                if let Some(list_value) = borrowed.get(list_key_name) {
-                    if let Value::Vec(elements) = list_value {
-                        let elements = elements.borrow_ref().unwrap().as_ref()
-                            .iter().map(to_scylla_value).try_collect()?;
-                        return Ok(CqlValue::List(elements));
-                    } else {
-                        return Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                            "Unexpected data type provided for the 'list': {:?}",
-                            list_value.type_info().unwrap(),
-                        ))));
-                    }
-                }
-
-                // Check for "_map" field exists and is a vector of tuples
-                if let Some(map_value) = borrowed.get(map_key_name) {
-                    if let Value::Vec(vec_value) = map_value {
-                        let vec_unwrapped = vec_value.borrow_ref().unwrap();
-                        if vec_unwrapped.len() > 0 {
-                            if let Value::Tuple(first_tuple) = &vec_unwrapped[0] {
-                                if first_tuple.borrow_ref().unwrap().len() == 2 {
-                                    let map_values: Vec<(CqlValue, CqlValue)> = vec_unwrapped.iter()
-                                        .filter_map(|tuple_wrapped| {
-                                            if let Value::Tuple(tuple_wrapped) = &tuple_wrapped {
-                                                let tuple = tuple_wrapped.borrow_ref().unwrap();
-                                                let key = to_scylla_value(tuple.get(0).unwrap()).unwrap();
-                                                let value = to_scylla_value(tuple.get(1).unwrap()).unwrap();
-                                                Some((key, value))
-                                            } else { None }
-                                        }).collect();
-                                    return Ok(CqlValue::Map(map_values));
-                                } else {
-                                    return Err(CassError(CassErrorKind::WrongDataStructure(
-                                        "Vector's tuple must have exactly 2 elements".to_string(),
-                                    )))
-                                }
-                            } else {
-                                return Err(CassError(CassErrorKind::WrongDataStructure(
-                                    "'_map' is expected to contain vector of tuples only".to_string(),
-                                )))
-                            }
-                        } else {
-                            return Ok(CqlValue::Map(vec![]));
-                        }
-                    } else {
-                        return Err(CassError(CassErrorKind::WrongDataStructure(
-                            "'_map' field is expected to contain only Vector type of data".to_string(),
+            (Value::StaticString(v), ColumnType::Timeuuid) => {
+                let timeuuid = CqlTimeuuid::from_str(v);
+                match timeuuid {
+                    Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
+                    Err(e) => {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            format!("Failed to parse '{}' StaticString as Timeuuid: {}", v.as_str(), e),
                         )))
                     }
                 }
+            }
+            (Value::String(v), ColumnType::Timeuuid) => {
+                let timeuuid_str = v.borrow_ref().unwrap();
+                let timeuuid = CqlTimeuuid::from_str(timeuuid_str.as_str());
+                match timeuuid {
+                    Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
+                    Err(e) => {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            format!("Failed to parse '{}' String as Timeuuid: {}", timeuuid_str.as_str(), e),
+                        )))
+                    }
+                }
+            }
+            (Value::StaticString(v), ColumnType::Text | ColumnType::Ascii) => {
+                Ok(CqlValue::Text(v.as_str().to_string()))
+            }
+            (Value::String(v), ColumnType::Text | ColumnType::Ascii) => {
+                Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string()))
+            }
+            (Value::StaticString(v), ColumnType::Inet) => {
+                let ipaddr = IpAddr::from_str(v);
+                match ipaddr {
+                    Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
+                    Err(e) => {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            format!("Failed to parse '{}' StaticString as IP address: {}", v.as_str(), e),
+                        )))
+                    }
+                }
+            }
+            (Value::String(v), ColumnType::Inet) => {
+                let ipaddr_str = v.borrow_ref().unwrap();
+                let ipaddr = IpAddr::from_str(ipaddr_str.as_str());
+                match ipaddr {
+                    Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
+                    Err(e) => {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            format!("Failed to parse '{}' String as IP address: {}", ipaddr_str.as_str(), e),
+                        )))
+                    }
+                }
+            }
 
-                // Handle last supported case - User Defined Type (UDT)
-                let keyspace = match borrowed.get_value::<str, String>(udt_keyspace) {
-                    Ok(Some(value)) => value,
-                    _ => "unknown".to_string(),
-                };
-                let type_name = match borrowed.get_value::<str, String>(udt_key_name) {
-                    Ok(Some(value)) => value,
-                    _ => "unknown".to_string(),
-                };
-                let keys = borrowed.keys();
-                let values: Result<Vec<Option<CqlValue>>, _> = borrowed.values()
-                    .map(|value| to_scylla_value(&value.clone())
-                    .map(Some)).collect();
-                let fields: Vec<(String, Option<CqlValue>)> = keys.into_iter()
-                    .zip(values?.into_iter())
-                    .filter(|&(key, _)| key != udt_keyspace && key != udt_key_name)
-                    .map(|(key, value)| (key.to_string(), value))
-                    .collect();
-                let udt = CqlValue::UserDefinedType{
-                    keyspace: keyspace,
-                    type_name: type_name,
-                    fields: fields,
-                };
-                Ok(udt)
-            },
-            Value::Any(obj) => {
+            (Value::Bytes(v), ColumnType::Blob) => {
+                Ok(CqlValue::Blob(v.borrow_ref().unwrap().to_vec()))
+            }
+            (Value::Option(v), typ) => match v.borrow_ref().unwrap().as_ref() {
+                Some(v) => to_scylla_value(v, typ),
+                None => Ok(CqlValue::Empty),
+            }
+            (Value::Vec(v), ColumnType::List(elt)) => {
+                let v = v.borrow_ref().unwrap();
+                let elements = v
+                    .as_ref()
+                    .iter()
+                    .map(|v| to_scylla_value(v, elt))
+                    .try_collect()?;
+                Ok(CqlValue::List(elements))
+            }
+            (Value::Vec(v), ColumnType::Set(elt)) => {
+                let v = v.borrow_ref().unwrap();
+                let elements = v
+                    .as_ref()
+                    .iter()
+                    .map(|v| to_scylla_value(v, elt))
+                    .try_collect()?;
+                Ok(CqlValue::Set(elements))
+            }
+            (Value::Vec(v), ColumnType::Map(key_elt, value_elt)) => {
+                let v = v.borrow_ref().unwrap();
+                if v.len() > 0 {
+                    if let Value::Tuple(first_tuple) = &v[0] {
+                        if first_tuple.borrow_ref().unwrap().len() == 2 {
+                            let map_values: Vec<(CqlValue, CqlValue)> = v
+                                .iter()
+                                .filter_map(|tuple_wrapped| {
+                                    if let Value::Tuple(tuple_wrapped) = &tuple_wrapped {
+                                        let tuple = tuple_wrapped.borrow_ref().unwrap();
+                                        let key = to_scylla_value(tuple.get(0).unwrap(), key_elt).unwrap();
+                                        let value = to_scylla_value(tuple.get(1).unwrap(), value_elt).unwrap();
+                                        Some((key, value))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            Ok(CqlValue::Map(map_values))
+                        } else {
+                            Err(CassError(CassErrorKind::WrongDataStructure(
+                                "Vector's tuple must have exactly 2 elements".to_string(),
+                            )))
+                        }
+                    } else {
+                        Err(CassError(CassErrorKind::WrongDataStructure(
+                            "ColumnType::Map expects only vector of tuples".to_string(),
+                        )))
+                    }
+                } else {
+                    Ok(CqlValue::Map(vec![]))
+                }
+            }
+            (
+                Value::Object(v),
+                ColumnType::UserDefinedType {
+                    keyspace,
+                    type_name,
+                    field_types,
+                },
+            ) => {
+                let obj = v.borrow_ref().unwrap();
+                let fields = read_fields(|s| obj.get(s), field_types)?;
+                Ok(CqlValue::UserDefinedType {
+                    keyspace: keyspace.to_string(),
+                    type_name: type_name.to_string(),
+                    fields,
+                })
+            }
+            (
+                Value::Struct(v),
+                ColumnType::UserDefinedType {
+                    keyspace,
+                    type_name,
+                    field_types,
+                },
+            ) => {
+                let obj = v.borrow_ref().unwrap();
+                let fields = read_fields(|s| obj.get(s), field_types)?;
+                Ok(CqlValue::UserDefinedType {
+                    keyspace: keyspace.to_string(),
+                    type_name: type_name.to_string(),
+                    fields,
+                })
+            }
+
+            (Value::Any(obj), ColumnType::Uuid) => {
                 let obj = obj.borrow_ref().unwrap();
                 let h = obj.type_hash();
                 if h == Uuid::type_hash() {
                     let uuid: &Uuid = obj.downcast_borrow_ref().unwrap();
                     Ok(CqlValue::Uuid(uuid.0))
-                } else if h == Int32::type_hash() {
-                    let int32: &Int32 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::Int(int32.0))
-                } else if h == Int16::type_hash() {
-                    let int16: &Int16 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::SmallInt(int16.0))
-                } else if h == Int8::type_hash() {
-                    let int8: &Int8 = obj.downcast_borrow_ref().unwrap();
-                    Ok(CqlValue::TinyInt(int8.0))
                 } else {
-                    Err(CassError(CassErrorKind::UnsupportedType(
+                    Err(CassError(CassErrorKind::QueryParamConversion(
                         v.type_info().unwrap(),
+                        ColumnType::Uuid,
                     )))
                 }
             }
-            other => Err(CassError(CassErrorKind::UnsupportedType(
-                other.type_info().unwrap(),
+            (value, typ) => Err(CassError(CassErrorKind::QueryParamConversion(
+                value.type_info().unwrap(),
+                typ.clone(),
             ))),
         }
     }
 
+    fn convert_int<T: TryFrom<i64>, R>(
+        value: i64,
+        typ: ColumnType,
+        f: impl Fn(T) -> R,
+    ) -> Result<R, CassError> {
+        let converted = value.try_into().map_err(|_| {
+            CassError(CassErrorKind::ValueOutOfRange(
+                value.to_string(),
+                typ.clone(),
+            ))
+        })?;
+        Ok(f(converted))
+    }
+
     /// Binds parameters passed as a single rune value to the arguments of the statement.
     /// The `params` value can be a tuple, a vector, a struct or an object.
-    pub fn to_scylla_query_params(params: &Value) -> Result<Vec<CqlValue>, CassError> {
-        let mut values = Vec::new();
-        match params {
+    pub fn to_scylla_query_params(
+        params: &Value,
+        types: &[ColumnSpec],
+    ) -> Result<Vec<CqlValue>, CassError> {
+        Ok(match params {
             Value::Tuple(tuple) => {
+                let mut values = Vec::new();
                 let tuple = tuple.borrow_ref().unwrap();
-                for v in tuple.iter() {
-                    values.push(to_scylla_value(v)?);
+                if tuple.len() != types.len() {
+                    return Err(CassError(CassErrorKind::InvalidNumberOfQueryParams));
                 }
+                for (v, t) in tuple.iter().zip(types) {
+                    values.push(to_scylla_value(v, &t.typ)?);
+                }
+                values
             }
             Value::Vec(vec) => {
+                let mut values = Vec::new();
+
                 let vec = vec.borrow_ref().unwrap();
-                for v in vec.iter() {
-                    values.push(to_scylla_value(v)?);
+                for (v, t) in vec.iter().zip(types) {
+                    values.push(to_scylla_value(v, &t.typ)?);
                 }
+                values
+            }
+            Value::Object(obj) => {
+                let obj = obj.borrow_ref().unwrap();
+                read_params(|f| obj.get(f), types)?
+            }
+            Value::Struct(obj) => {
+                let obj = obj.borrow_ref().unwrap();
+                read_params(|f| obj.get(f), types)?
             }
             other => {
-                return Err(CassError(CassErrorKind::UnsupportedType(
+                return Err(CassError(CassErrorKind::InvalidQueryParamsObject(
                     other.type_info().unwrap(),
                 )));
             }
+        })
+    }
+
+    fn read_params<'a, 'b>(
+        get_value: impl Fn(&String) -> Option<&'a Value>,
+        params: &[ColumnSpec],
+    ) -> Result<Vec<CqlValue>, CassError> {
+        let mut values = Vec::with_capacity(params.len());
+        for column in params {
+            let value = match get_value(&column.name) {
+                Some(value) => to_scylla_value(value, &column.typ)?,
+                None => CqlValue::Empty,
+            };
+            values.push(value)
+        }
+        Ok(values)
+    }
+
+    fn read_fields<'a, 'b>(
+        get_value: impl Fn(&String) -> Option<&'a Value>,
+        fields: &[(String, ColumnType)],
+    ) -> Result<Vec<(String, Option<CqlValue>)>, CassError> {
+        let mut values = Vec::with_capacity(fields.len());
+        for (field_name, field_type) in fields {
+            if let Some(value) = get_value(field_name) {
+                let value = Some(to_scylla_value(value, field_type)?);
+                values.push((field_name.to_string(), value))
+            };
         }
         Ok(values)
     }
@@ -790,6 +913,9 @@ pub struct Int16(pub i16);
 
 #[derive(Clone, Debug, Any)]
 pub struct Int32(pub i32);
+
+#[derive(Clone, Debug, Any)]
+pub struct Float32(pub f32);
 
 /// Returns the literal value stored in the `params` map under the key given as the first
 /// macro arg, and if not found, returns the expression from the second arg.
@@ -844,6 +970,22 @@ pub fn float_to_i32(value: f64) -> Option<Int32> {
     int_to_i32(value as i64)
 }
 
+pub fn int_to_f32(value: i64) -> Option<Float32> {
+    Some(Float32(value as f32))
+}
+
+pub fn float_to_f32(value: f64) -> Option<Float32> {
+    Some(Float32(value as f32))
+}
+
+pub fn int_to_string(value: i64) -> Option<String> {
+    Some(value.to_string())
+}
+
+pub fn float_to_string(value: f64) -> Option<String> {
+    Some(value.to_string())
+}
+
 /// Computes a hash of an integer value `i`.
 /// Returns a value in range `0..i64::MAX`.
 pub fn hash(i: i64) -> i64 {
@@ -873,6 +1015,12 @@ pub fn normal(i: i64, mean: f64, std_dev: f64) -> Result<f64, VmError> {
     Ok(distribution.sample(&mut rng))
 }
 
+pub fn uniform(i: i64, min: f64, max: f64) -> Result<f64, VmError> {
+    let mut rng = StdRng::seed_from_u64(i as u64);
+    let distribution = Uniform::new(min, max).map_err(|e| VmError::panic(format!("{e}")))?;
+    Ok(distribution.sample(&mut rng))
+}
+
 /// Restricts a value to a certain interval unless it is NaN.
 pub fn clamp_float(value: f64, min: f64, max: f64) -> f64 {
     value.clamp(min, max)
@@ -895,10 +1043,12 @@ pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
 /// Parameter `seed` is used to seed the RNG.
 pub fn text(seed: i64, len: usize) -> rune::runtime::StaticString {
     let mut rng = StdRng::seed_from_u64(seed as u64);
-    let s: String = (0..len).map(|_| {
-        let code_point = rng.gen_range(0x0061u32..=0x007Au32); // Unicode range for 'a-z'
-        std::char::from_u32(code_point).unwrap()
-    }).collect();
+    let s: String = (0..len)
+        .map(|_| {
+            let code_point = rng.gen_range(0x0061u32..=0x007Au32); // Unicode range for 'a-z'
+            std::char::from_u32(code_point).unwrap()
+        })
+        .collect();
     rune::runtime::StaticString::new(s)
 }
 

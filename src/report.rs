@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::{fs, io};
 
-use chrono::{Local, NaiveDateTime, TimeZone};
+use chrono::{Local, TimeZone};
 use console::{pad_str, style, Alignment};
 use err_derive::*;
 use itertools::Itertools;
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use statrs::statistics::Statistics;
 use strum::IntoEnumIterator;
 
-use crate::config::{PRINT_RETRY_ERROR_LIMIT, RunCommand};
+use crate::config::{RunCommand, PRINT_RETRY_ERROR_LIMIT};
 use crate::stats::{
     BenchmarkCmp, BenchmarkStats, Bucket, Mean, Percentile, Sample, Significance, TimeDistribution,
 };
@@ -71,7 +71,7 @@ impl Report {
 pub struct Quantity<T> {
     pub value: Option<T>,
     pub error: Option<T>,
-    pub precision: usize,
+    pub precision: Option<usize>,
 }
 
 impl<T> Quantity<T> {
@@ -79,12 +79,12 @@ impl<T> Quantity<T> {
         Quantity {
             value,
             error: None,
-            precision: 0,
+            precision: None,
         }
     }
 
     pub fn with_precision(mut self, precision: usize) -> Self {
-        self.precision = precision;
+        self.precision = Some(precision);
         self
     }
 
@@ -96,9 +96,10 @@ impl<T> Quantity<T> {
 
 impl<T: Display> Quantity<T> {
     fn format_error(&self) -> String {
+        let prec = self.precision.unwrap_or_default();
         match &self.error {
             None => "".to_owned(),
-            Some(e) => format!("± {:<6.prec$}", e, prec = self.precision),
+            Some(e) => format!("± {:<6.prec$}", e, prec = prec),
         }
     }
 }
@@ -142,13 +143,19 @@ impl From<&Option<TimeDistribution>> for Quantity<f64> {
 
 impl<T: Display> Display for Quantity<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match &self.value {
-            None => write!(f, "{}", " ".repeat(18)),
-            Some(v) => write!(
+        match (&self.value, self.precision) {
+            (None, _) => write!(f, "{}", " ".repeat(18)),
+            (Some(v), None) => write!(
+                f,
+                "{value:9} {error:8}",
+                value = style(v).bright().for_stdout(),
+                error = style(self.format_error()).dim().for_stdout(),
+            ),
+            (Some(v), Some(prec)) => write!(
                 f,
                 "{value:9.prec$} {error:8}",
                 value = style(v).bright().for_stdout(),
-                prec = self.precision,
+                prec = prec,
                 error = style(self.format_error()).dim().for_stdout(),
             ),
         }
@@ -431,8 +438,10 @@ impl RunConfigCmp<'_> {
     fn format_time(&self, conf: &RunCommand, format: &str) -> String {
         conf.timestamp
             .and_then(|ts| {
-                NaiveDateTime::from_timestamp_opt(ts, 0)
-                    .map(|utc| Local.from_utc_datetime(&utc).format(format).to_string())
+                Local
+                    .timestamp_opt(ts, 0)
+                    .latest()
+                    .map(|l| l.format(format).to_string())
             })
             .unwrap_or_default()
     }
@@ -534,7 +543,7 @@ impl<'a> Display for RunConfigCmp<'a> {
             self.line("Request timeout", "", |conf| {
                 Quantity::from(conf.connection.request_timeout)
             }),
-            self.line("Retries", "", |_| {Quantity::from("")}),
+            self.line("Retries", "", |_| Quantity::from("")),
             self.line("┌──────┴number", "", |conf| {
                 Quantity::from(conf.connection.retry_number)
             }),
@@ -568,7 +577,9 @@ impl Display for Sample {
                 if num_of_printed_errors < PRINT_RETRY_ERROR_LIMIT {
                     error_msg_bunch += &format!("{}\n", retry_error);
                     num_of_printed_errors += 1;
-                } else { break }
+                } else {
+                    break;
+                }
             }
             let num_of_dropped_errors = self.retry_error_count - num_of_printed_errors;
             if num_of_dropped_errors > 0 {
@@ -577,7 +588,7 @@ impl Display for Sample {
                     num_of_dropped_errors,
                 );
             }
-            eprintln!("{}", error_msg_bunch);
+            writeln!(f, "{}", error_msg_bunch)?;
         }
         write!(
             f,
@@ -653,24 +664,36 @@ impl<'a> Display for BenchmarkCmp<'a> {
             let summary_part2: Vec<Box<dyn Display>> = vec![
                 self.line("Mean sample size", "op", |s| {
                     Quantity::from(s.log.iter().map(|s| s.cycle_count as f64).mean())
+                        .with_precision(0)
                 }),
                 self.line("└─", "req", |s| {
                     Quantity::from(s.log.iter().map(|s| s.request_count as f64).mean())
+                        .with_precision(0)
                 }),
-                self.line("Concurrency", "req", |s| Quantity::from(s.concurrency)),
-                self.line("└─", "%", |s| Quantity::from(s.concurrency_ratio)),
-                self.line("Throughput", "op/s", |s| Quantity::from(s.cycle_throughput))
-                    .with_significance(self.cmp_cycle_throughput())
-                    .with_orientation(1)
-                    .into_box(),
-                self.line("├─", "req/s", |s| Quantity::from(s.req_throughput))
-                    .with_significance(self.cmp_req_throughput())
-                    .with_orientation(1)
-                    .into_box(),
-                self.line("└─", "row/s", |s| Quantity::from(s.row_throughput))
-                    .with_significance(self.cmp_row_throughput())
-                    .with_orientation(1)
-                    .into_box(),
+                self.line("Concurrency", "req", |s| {
+                    Quantity::from(s.concurrency).with_precision(0)
+                }),
+                self.line("└─", "%", |s| {
+                    Quantity::from(s.concurrency_ratio).with_precision(0)
+                }),
+                self.line("Throughput", "op/s", |s| {
+                    Quantity::from(s.cycle_throughput).with_precision(0)
+                })
+                .with_significance(self.cmp_cycle_throughput())
+                .with_orientation(1)
+                .into_box(),
+                self.line("├─", "req/s", |s| {
+                    Quantity::from(s.req_throughput).with_precision(0)
+                })
+                .with_significance(self.cmp_req_throughput())
+                .with_orientation(1)
+                .into_box(),
+                self.line("└─", "row/s", |s| {
+                    Quantity::from(s.row_throughput).with_precision(0)
+                })
+                .with_significance(self.cmp_row_throughput())
+                .with_orientation(1)
+                .into_box(),
                 self.line("Mean cycle time", "ms", |s| {
                     Quantity::from(&s.cycle_time_ms).with_precision(3)
                 })

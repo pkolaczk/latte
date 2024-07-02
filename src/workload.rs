@@ -129,7 +129,9 @@ impl Program {
         let mut latte_module = Module::with_crate("latte");
         latte_module.function(&["blob"], context::blob).unwrap();
         latte_module.function(&["text"], context::text).unwrap();
-        latte_module.function(&["now_timestamp"], context::now_timestamp).unwrap();
+        latte_module
+            .function(&["now_timestamp"], context::now_timestamp)
+            .unwrap();
         latte_module.function(&["hash"], context::hash).unwrap();
         latte_module.function(&["hash2"], context::hash2).unwrap();
         latte_module
@@ -143,7 +145,17 @@ impl Program {
             .unwrap();
         latte_module.function(&["normal"], context::normal).unwrap();
         latte_module
+            .function(&["uniform"], context::uniform)
+            .unwrap();
+        latte_module
             .macro_(&["param"], move |ctx, ts| context::param(ctx, &params, ts))
+            .unwrap();
+
+        latte_module
+            .inst_fn("to_string", context::int_to_string)
+            .unwrap();
+        latte_module
+            .inst_fn("to_string", context::float_to_string)
             .unwrap();
 
         latte_module.inst_fn("to_i32", context::int_to_i32).unwrap();
@@ -156,6 +168,11 @@ impl Program {
             .unwrap();
         latte_module.inst_fn("to_i8", context::int_to_i8).unwrap();
         latte_module.inst_fn("to_i8", context::float_to_i8).unwrap();
+        latte_module.inst_fn("to_f32", context::int_to_f32).unwrap();
+        latte_module
+            .inst_fn("to_f32", context::float_to_f32)
+            .unwrap();
+
         latte_module.inst_fn("clamp", context::clamp_float).unwrap();
         latte_module.inst_fn("clamp", context::clamp_int).unwrap();
 

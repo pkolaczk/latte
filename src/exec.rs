@@ -11,10 +11,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::error::Result;
+use crate::error::{LatteError, Result};
 use crate::{
-    BenchmarkStats, BoundedCycleCounter, InterruptHandler, Interval, Progress, Recorder, Sampler,
-    Workload, WorkloadStats,
+    BenchmarkStats, BoundedCycleCounter, Interval, Progress, Recorder, Sampler, Workload,
+    WorkloadStats,
 };
 
 /// Returns a stream emitting `rate` events per second.
@@ -43,7 +43,6 @@ async fn run_stream<T>(
     cycle_counter: BoundedCycleCounter,
     concurrency: NonZeroUsize,
     sampling: Interval,
-    interrupt: Arc<InterruptHandler>,
     progress: Arc<StatusLine<Progress>>,
     mut out: Sender<Result<WorkloadStats>>,
 ) {
@@ -68,9 +67,6 @@ async fn run_stream<T>(
                 return;
             }
         }
-        if interrupt.is_interrupted() {
-            break;
-        }
     }
     // Send the statistics of remaining requests
     sampler.finish().await;
@@ -88,7 +84,6 @@ fn spawn_stream(
     sampling: Interval,
     workload: Workload,
     iter_counter: BoundedCycleCounter,
-    interrupt: Arc<InterruptHandler>,
     progress: Arc<StatusLine<Progress>>,
 ) -> Receiver<Result<WorkloadStats>> {
     let (tx, rx) = channel(1);
@@ -103,7 +98,6 @@ fn spawn_stream(
                     iter_counter,
                     concurrency,
                     sampling,
-                    interrupt,
                     progress,
                     tx,
                 )
@@ -117,7 +111,6 @@ fn spawn_stream(
                     iter_counter,
                     concurrency,
                     sampling,
-                    interrupt,
                     progress,
                     tx,
                 )
@@ -170,7 +163,6 @@ pub async fn par_execute(
     sampling: Interval,
     store_samples: bool,
     workload: Workload,
-    signals: Arc<InterruptHandler>,
     show_progress: bool,
 ) -> Result<BenchmarkStats> {
     let thread_count = exec_options.threads.get();
@@ -197,29 +189,31 @@ pub async fn par_execute(
             sampling,
             workload.clone()?,
             deadline.share(),
-            signals.clone(),
             progress.clone(),
         );
         streams.push(s);
     }
 
     loop {
-        let partial_stats: Vec<_> = receive_one_of_each(&mut streams)
-            .await
-            .into_iter()
-            .try_collect()?;
+        tokio::select! {
+            partial_stats = receive_one_of_each(&mut streams) => {
+                let partial_stats: Vec<_> = partial_stats.into_iter().try_collect()?;
+                if partial_stats.is_empty() {
+                    break Ok(stats.finish());
+                }
 
-        if partial_stats.is_empty() {
-            break;
-        }
+                let aggregate = stats.record(&partial_stats);
+                if sampling.is_bounded() {
+                    progress.set_visible(false);
+                    println!("{aggregate}");
+                    progress.set_visible(show_progress);
+                }
+            }
 
-        let aggregate = stats.record(&partial_stats);
-        if sampling.is_bounded() {
-            progress.set_visible(false);
-            println!("{aggregate}");
-            progress.set_visible(show_progress);
+            _ = tokio::signal::ctrl_c() => {
+                progress.set_visible(false);
+                break Err(LatteError::Interrupted(Box::new(stats.finish())));
+            }
         }
     }
-
-    Ok(stats.finish())
 }

@@ -97,7 +97,7 @@ impl RetryInterval {
         if values.len() > 2 {
             return None;
         }
-        let min_ms = RetryInterval::parse_time(values.get(0).unwrap_or(&""))?;
+        let min_ms = RetryInterval::parse_time(values.first().unwrap_or(&""))?;
         let max_ms = RetryInterval::parse_time(values.get(1).unwrap_or(&"")).unwrap_or(min_ms);
         if min_ms > max_ms {
             None
@@ -136,7 +136,8 @@ impl FromStr for RetryInterval {
             Err(concat!(
                 "Expected 1 or 2 parts separated by comma such as '500ms' or '200ms,5s' or '1s'.",
                 " First value cannot be bigger than second one.",
-            ).to_string())
+            )
+            .to_string())
         }
     }
 }
@@ -194,9 +195,12 @@ pub struct ConnectionConf {
     #[clap(long("retry-number"), default_value = "10", value_name = "COUNT")]
     pub retry_number: u64,
 
-    #[clap(long("retry-interval"), default_value = "100ms,5s", value_name = "TIME[,TIME]")]
+    #[clap(
+        long("retry-interval"),
+        default_value = "100ms,5s",
+        value_name = "TIME[,TIME]"
+    )]
     pub retry_interval: RetryInterval,
-
 }
 
 #[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -425,8 +429,8 @@ impl RunCommand {
     }
 
     /// Returns the value of parameter under given key.
-    /// If key doesn't exist, or parameter is not an integer, returns `None`.
-    pub fn get_param(&self, key: &str) -> Option<i64> {
+    /// If key doesn't exist, or parameter is not a number, returns `None`.
+    pub fn get_param(&self, key: &str) -> Option<f64> {
         self.params
             .iter()
             .find(|(k, _)| k == key)
@@ -554,6 +558,7 @@ pub struct AppConfig {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(unused)]
 pub struct SchemaConfig {
     #[serde(default)]
     pub script: Vec<String>,
@@ -562,6 +567,7 @@ pub struct SchemaConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(unused)]
 pub struct LoadConfig {
     pub count: u64,
     #[serde(default)]
@@ -577,6 +583,7 @@ mod defaults {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(unused)]
 pub struct RunConfig {
     #[serde(default = "defaults::ratio")]
     pub ratio: f64,
@@ -587,6 +594,7 @@ pub struct RunConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(unused)]
 pub struct WorkloadConfig {
     #[serde(default)]
     pub schema: SchemaConfig,

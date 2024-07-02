@@ -259,7 +259,7 @@ impl Percentile {
 }
 
 /// Records basic statistics for a sample (a group) of requests
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Sample {
     pub time_s: f32,
     pub duration_s: f32,
@@ -360,7 +360,7 @@ impl Log {
         Log {
             samples: Vec::new(),
             samples_counter: 0,
-            store_samples: store_samples,
+            store_samples,
         }
     }
 
@@ -451,7 +451,7 @@ impl Log {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Bucket {
     pub percentile: f64,
     pub duration_ms: f64,
@@ -459,7 +459,7 @@ pub struct Bucket {
     pub cumulative_count: u64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct TimeDistribution {
     pub mean: Mean,
     pub percentiles: Vec<Mean>,
@@ -467,7 +467,7 @@ pub struct TimeDistribution {
 }
 
 /// Stores the final statistics of the test run.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BenchmarkStats {
     pub start_time: DateTime<Local>,
     pub end_time: DateTime<Local>,
@@ -570,7 +570,6 @@ pub struct Recorder {
     pub row_count: u64,
     pub cycle_times_ns: Histogram<u64>,
     pub resp_times_ns: Histogram<u64>,
-    pub queue_len_sum: u64,
     log: Log,
     rate_limit: Option<f64>,
     concurrency_limit: NonZeroUsize,
@@ -600,7 +599,6 @@ impl Recorder {
             error_count: 0,
             cycle_times_ns: Histogram::new(3).unwrap(),
             resp_times_ns: Histogram::new(3).unwrap(),
-            queue_len_sum: 0,
         }
     }
 
