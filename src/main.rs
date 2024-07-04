@@ -1,3 +1,4 @@
+use std::env;
 use std::fs::File;
 use std::io::{stdout, Write};
 use std::path::{Path, PathBuf};
@@ -15,8 +16,8 @@ use tokio::runtime::{Builder, Runtime};
 use config::RunCommand;
 
 use crate::config::{
-    AppConfig, Command, ConnectionConf, HdrCommand, Interval, LoadCommand, SchemaCommand,
-    ShowCommand,
+    AppConfig, Command, ConnectionConf, EditCommand, HdrCommand, Interval, LoadCommand,
+    SchemaCommand, ShowCommand,
 };
 use crate::context::*;
 use crate::context::{CassError, CassErrorKind, Context, SessionStats};
@@ -371,6 +372,7 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
 
 async fn async_main(command: Command) -> Result<()> {
     match command {
+        Command::Edit(config) => edit(config)?,
         Command::Schema(config) => schema(config).await?,
         Command::Load(config) => load(config).await?,
         Command::Run(config) => run(config).await?,
@@ -378,6 +380,26 @@ async fn async_main(command: Command) -> Result<()> {
         Command::Hdr(config) => export_hdr_log(config).await?,
         Command::Plot(config) => plot_graph(config).await?,
     }
+    Ok(())
+}
+
+fn edit(config: EditCommand) -> Result<()> {
+    let workload = find_workload(&config.workload)
+        .canonicalize()
+        .unwrap_or_else(|_| config.workload.to_path_buf());
+    File::open(&workload).map_err(|err| LatteError::ScriptRead(workload.clone(), err))?;
+    edit_workload(workload)
+}
+
+fn edit_workload(workload: PathBuf) -> Result<()> {
+    let editor = env::var("LATTE_EDITOR")
+        .or_else(|_| env::var("EDITOR"))
+        .unwrap_or("vi".to_string());
+    std::process::Command::new(&editor)
+        .current_dir(workload.parent().unwrap_or(Path::new(".")))
+        .arg(workload)
+        .status()
+        .map_err(|e| LatteError::ExternalEditorLaunch(editor, e))?;
     Ok(())
 }
 

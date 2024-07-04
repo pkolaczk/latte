@@ -39,6 +39,9 @@ pub enum LatteError {
 
     #[error(display = "Interrupted")]
     Interrupted(Box<BenchmarkStats>),
+
+    #[error(display = "Failed to launch external editor {}: {}", _0, _1)]
+    ExternalEditorLaunch(String, std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, LatteError>;

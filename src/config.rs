@@ -276,6 +276,14 @@ impl ValueEnum for Consistency {
 
 #[derive(Parser, Debug, Serialize, Deserialize)]
 #[command(next_line_help = true)]
+pub struct EditCommand {
+    /// Path to the workload definition file.
+    #[clap(name = "workload", required = true, value_name = "PATH")]
+    pub workload: PathBuf,
+}
+
+#[derive(Parser, Debug, Serialize, Deserialize)]
+#[command(next_line_help = true)]
 pub struct SchemaCommand {
     /// Parameter values passed to the workload, accessible through param! macro.
     #[clap(short('P'), value_parser = parse_key_val::<String, String>, number_of_values = 1)]
@@ -501,6 +509,19 @@ pub struct PlotCommand {
 #[derive(Parser, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
+    /// Opens the specified workload script file for editing.
+    ///
+    /// Searches for the script on the workload search path. Workload files
+    /// are first searched in the current working directory, next in the paths
+    /// specified by LATTE_WORKLOAD_PATH environment variable. If the variable
+    /// is not defined, `/usr/share/latte/workloads` and `.local/share/latte/workloads`
+    /// are searched.
+    ///
+    /// Opens the editor pointed by LATTE_EDITOR or EDITOR environment variable.
+    /// If no variable is set, tries to launch vi.
+    ///
+    Edit(EditCommand),
+
     /// Creates the database schema by invoking the `schema` function of the workload script.
     ///
     /// The function should remove the old schema if present.
