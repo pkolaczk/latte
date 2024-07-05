@@ -230,11 +230,10 @@ pub enum CassErrorKind {
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
     QueryRetriesExceeded(String),
-    QueryParamConversion(TypeInfo, ColumnType),
+    QueryParamConversion(String, ColumnType, Option<String>),
     ValueOutOfRange(String, ColumnType),
     InvalidNumberOfQueryParams,
     InvalidQueryParamsObject(TypeInfo),
-    WrongDataStructure(String),
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
     QueryExecution(QueryInfo, QueryError),
@@ -259,20 +258,17 @@ impl CassError {
             CassErrorKind::ValueOutOfRange(v, t) => {
                 write!(buf, "Value {v} out of range for Cassandra type {t:?}")
             }
-            CassErrorKind::QueryParamConversion(s, t) => {
-                write!(
-                    buf,
-                    "Cannot convert value of type {s} to Cassandra type {t:?}"
-                )
+            CassErrorKind::QueryParamConversion(v, t, None) => {
+                write!(buf, "Cannot convert value {v} to Cassandra type {t:?}")
+            }
+            CassErrorKind::QueryParamConversion(v, t, Some(e)) => {
+                write!(buf, "Cannot convert value {v} to Cassandra type {t:?}: {e}")
             }
             CassErrorKind::InvalidNumberOfQueryParams => {
                 write!(buf, "Incorrect number of query parameters")
             }
             CassErrorKind::InvalidQueryParamsObject(t) => {
                 write!(buf, "Value of type {t} cannot by used as query parameters; expected a list or object")
-            }
-            CassErrorKind::WrongDataStructure(s) => {
-                write!(buf, "Wrong data structure: {s}")
             }
             CassErrorKind::Prepare(q, e) => {
                 write!(buf, "Failed to prepare query \"{q}\": {e}")
@@ -599,6 +595,7 @@ impl Context {
 /// Functions for binding rune values to CQL parameters
 mod bind {
     use crate::CassErrorKind;
+    use rune::ToValue;
     use scylla::_macro_internal::ColumnType;
     use scylla::frame::response::result::{ColumnSpec, CqlValue};
 
@@ -632,27 +629,27 @@ mod bind {
             (Value::Float(v), ColumnType::Float) => Ok(CqlValue::Float(*v as f32)),
             (Value::Float(v), ColumnType::Double) => Ok(CqlValue::Double(*v)),
 
-            (Value::StaticString(v), ColumnType::Timeuuid) => {
-                let timeuuid = CqlTimeuuid::from_str(v);
+            (Value::StaticString(s), ColumnType::Timeuuid) => {
+                let timeuuid = CqlTimeuuid::from_str(s);
                 match timeuuid {
                     Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
-                    Err(e) => Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                        "Failed to parse '{}' StaticString as Timeuuid: {}",
-                        v.as_str(),
-                        e
-                    )))),
+                    Err(e) => Err(CassError(CassErrorKind::QueryParamConversion(
+                        format!("{:?}", v),
+                        ColumnType::Timeuuid,
+                        Some(format!("{}", e)),
+                    ))),
                 }
             }
-            (Value::String(v), ColumnType::Timeuuid) => {
-                let timeuuid_str = v.borrow_ref().unwrap();
+            (Value::String(s), ColumnType::Timeuuid) => {
+                let timeuuid_str = s.borrow_ref().unwrap();
                 let timeuuid = CqlTimeuuid::from_str(timeuuid_str.as_str());
                 match timeuuid {
                     Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
-                    Err(e) => Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                        "Failed to parse '{}' String as Timeuuid: {}",
-                        timeuuid_str.as_str(),
-                        e
-                    )))),
+                    Err(e) => Err(CassError(CassErrorKind::QueryParamConversion(
+                        format!("{:?}", v),
+                        ColumnType::Timeuuid,
+                        Some(format!("{}", e)),
+                    ))),
                 }
             }
             (Value::StaticString(v), ColumnType::Text | ColumnType::Ascii) => {
@@ -661,27 +658,27 @@ mod bind {
             (Value::String(v), ColumnType::Text | ColumnType::Ascii) => {
                 Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string()))
             }
-            (Value::StaticString(v), ColumnType::Inet) => {
-                let ipaddr = IpAddr::from_str(v);
+            (Value::StaticString(s), ColumnType::Inet) => {
+                let ipaddr = IpAddr::from_str(s);
                 match ipaddr {
                     Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
-                    Err(e) => Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                        "Failed to parse '{}' StaticString as IP address: {}",
-                        v.as_str(),
-                        e
-                    )))),
+                    Err(e) => Err(CassError(CassErrorKind::QueryParamConversion(
+                        format!("{:?}", v),
+                        ColumnType::Inet,
+                        Some(format!("{}", e)),
+                    ))),
                 }
             }
-            (Value::String(v), ColumnType::Inet) => {
-                let ipaddr_str = v.borrow_ref().unwrap();
+            (Value::String(s), ColumnType::Inet) => {
+                let ipaddr_str = s.borrow_ref().unwrap();
                 let ipaddr = IpAddr::from_str(ipaddr_str.as_str());
                 match ipaddr {
                     Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
-                    Err(e) => Err(CassError(CassErrorKind::WrongDataStructure(format!(
-                        "Failed to parse '{}' String as IP address: {}",
-                        ipaddr_str.as_str(),
-                        e
-                    )))),
+                    Err(e) => Err(CassError(CassErrorKind::QueryParamConversion(
+                        format!("{:?}", v),
+                        ColumnType::Inet,
+                        Some(format!("{}", e)),
+                    ))),
                 }
             }
 
@@ -712,39 +709,38 @@ mod bind {
             }
             (Value::Vec(v), ColumnType::Map(key_elt, value_elt)) => {
                 let v = v.borrow_ref().unwrap();
-                if v.len() > 0 {
-                    if let Value::Tuple(first_tuple) = &v[0] {
-                        if first_tuple.borrow_ref().unwrap().len() == 2 {
-                            let map_values: Vec<(CqlValue, CqlValue)> = v
-                                .iter()
-                                .filter_map(|tuple_wrapped| {
-                                    if let Value::Tuple(tuple_wrapped) = &tuple_wrapped {
-                                        let tuple = tuple_wrapped.borrow_ref().unwrap();
-                                        let key = to_scylla_value(tuple.get(0).unwrap(), key_elt)
-                                            .unwrap();
-                                        let value =
-                                            to_scylla_value(tuple.get(1).unwrap(), value_elt)
-                                                .unwrap();
-                                        Some((key, value))
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            Ok(CqlValue::Map(map_values))
-                        } else {
-                            Err(CassError(CassErrorKind::WrongDataStructure(
-                                "Vector's tuple must have exactly 2 elements".to_string(),
-                            )))
+                let mut map_vec = Vec::with_capacity(v.len());
+                for tuple in v.iter() {
+                    match tuple {
+                        Value::Tuple(tuple) if tuple.borrow_ref().unwrap().len() == 2 => {
+                            let tuple = tuple.borrow_ref().unwrap();
+                            let key = to_scylla_value(tuple.get(0).unwrap(), key_elt)?;
+                            let value = to_scylla_value(tuple.get(1).unwrap(), value_elt)?;
+                            map_vec.push((key, value));
                         }
-                    } else {
-                        Err(CassError(CassErrorKind::WrongDataStructure(
-                            "ColumnType::Map expects only vector of tuples".to_string(),
-                        )))
+                        _ => {
+                            return Err(CassError(CassErrorKind::QueryParamConversion(
+                                format!("{:?}", tuple),
+                                ColumnType::Tuple(vec![
+                                    key_elt.as_ref().clone(),
+                                    value_elt.as_ref().clone(),
+                                ]),
+                                None,
+                            )));
+                        }
                     }
-                } else {
-                    Ok(CqlValue::Map(vec![]))
                 }
+                Ok(CqlValue::Map(map_vec))
+            }
+            (Value::Object(obj), ColumnType::Map(key_elt, value_elt)) => {
+                let obj = obj.borrow_ref().unwrap();
+                let mut map_vec = Vec::with_capacity(obj.keys().len());
+                for (k, v) in obj.iter() {
+                    let key = to_scylla_value(&(k.to_owned().to_value().unwrap()), key_elt)?;
+                    let value = to_scylla_value(v, value_elt)?;
+                    map_vec.push((key, value));
+                }
+                Ok(CqlValue::Map(map_vec))
             }
             (
                 Value::Object(v),
@@ -787,14 +783,16 @@ mod bind {
                     Ok(CqlValue::Uuid(uuid.0))
                 } else {
                     Err(CassError(CassErrorKind::QueryParamConversion(
-                        v.type_info().unwrap(),
+                        format!("{:?}", v),
                         ColumnType::Uuid,
+                        None,
                     )))
                 }
             }
             (value, typ) => Err(CassError(CassErrorKind::QueryParamConversion(
-                value.type_info().unwrap(),
+                format!("{:?}", value),
                 typ.clone(),
+                None,
             ))),
         }
     }
