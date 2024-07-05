@@ -80,18 +80,14 @@ impl Report {
             throughput: self.result.cycle_throughput.value,
             latency_p50: self
                 .result
-                .cycle_time_ms
-                .percentiles
-                .get(Percentile::P50 as usize)
-                .unwrap()
-                .value,
+                .resp_time_ms
+                .as_ref()
+                .map(|t| t.percentiles[Percentile::P50 as usize].value),
             latency_p99: self
                 .result
-                .cycle_time_ms
-                .percentiles
-                .get(Percentile::P99 as usize)
-                .unwrap()
-                .value,
+                .resp_time_ms
+                .as_ref()
+                .map(|t| t.percentiles[Percentile::P99 as usize].value),
         }
     }
 }
@@ -824,8 +820,8 @@ pub struct Summary {
     pub params: Vec<(String, String)>,
     pub rate: Option<f64>,
     pub throughput: f64,
-    pub latency_p50: f64,
-    pub latency_p99: f64,
+    pub latency_p50: Option<f64>,
+    pub latency_p99: Option<f64>,
 }
 
 impl PathAndSummary {
@@ -870,8 +866,8 @@ impl Row for PathAndSummary {
             ),
             "Rate" => self.1.rate.map(|r| r.to_string()),
             "Thrpt. [req/s]" => Some(format!("{:.0}", self.1.throughput)),
-            "P50 [ms]" => Some(format!("{:.1}", self.1.latency_p50 * 1000.0)),
-            "P99 [ms]" => Some(format!("{:.1}", self.1.latency_p99 * 1000.0)),
+            "P50 [ms]" => self.1.latency_p50.map(|l| format!("{:.1}", l)),
+            "P99 [ms]" => self.1.latency_p99.map(|l| format!("{:.1}", l)),
             _ => None,
         }
     }
