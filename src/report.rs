@@ -512,7 +512,9 @@ impl<'a> Display for RunConfigCmp<'a> {
         }
 
         let lines: Vec<Box<dyn Display>> = vec![
-            self.line("Datacenter", "", |conf| conf.connection.datacenter.clone()),
+            self.line("Datacenter", "", |conf| {
+                conf.connection.datacenter.clone().unwrap_or_default()
+            }),
             self.line("Consistency", "", |conf| {
                 conf.connection.consistency.scylla_consistency().to_string()
             }),

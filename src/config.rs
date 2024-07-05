@@ -182,8 +182,8 @@ pub struct ConnectionConf {
     pub ssl_key_file: Option<PathBuf>,
 
     /// Datacenter name
-    #[clap(long("datacenter"), required = false, default_value = "")]
-    pub datacenter: String,
+    #[clap(long("datacenter"), required = false)]
+    pub datacenter: Option<String>,
 
     /// Default CQL query consistency level
     #[clap(long("consistency"), required = false, default_value = "LOCAL_QUORUM")]
