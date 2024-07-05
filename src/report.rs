@@ -496,7 +496,9 @@ impl<'a> Display for RunConfigCmp<'a> {
                     match Quantity::from(conf.get_param(k)).value {
                         Some(quantity) => quantity.to_string(),
                         None => {
-                            let str_value = conf.params.iter()
+                            let str_value = conf
+                                .params
+                                .iter()
                                 .find(|(key, _)| key == k)
                                 .map(|(_, value)| value.clone())
                                 .unwrap_or_else(|| "".to_string());
@@ -510,7 +512,7 @@ impl<'a> Display for RunConfigCmp<'a> {
         }
 
         let lines: Vec<Box<dyn Display>> = vec![
-            self.line("Datacenter", "", |conf| {conf.connection.datacenter.clone()}),
+            self.line("Datacenter", "", |conf| conf.connection.datacenter.clone()),
             self.line("Consistency", "", |conf| {
                 conf.connection.consistency.scylla_consistency().to_string()
             }),

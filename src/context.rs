@@ -61,7 +61,9 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
     let mut policy_builder = DefaultPolicy::builder().token_aware(true);
     let dc = &conf.datacenter;
     if !dc.is_empty() {
-        policy_builder = policy_builder.prefer_datacenter(dc.to_owned()).permit_dc_failover(true);
+        policy_builder = policy_builder
+            .prefer_datacenter(dc.to_owned())
+            .permit_dc_failover(true);
     }
     let profile = ExecutionProfile::builder()
         .consistency(conf.consistency.scylla_consistency())
