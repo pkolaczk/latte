@@ -466,6 +466,29 @@ impl RunCommand {
 }
 
 #[derive(Parser, Debug)]
+pub struct ListCommand {
+    /// Lists only the runs of specified workload.
+    #[clap()]
+    pub workload: Option<String>,
+
+    /// Lists only the runs of given function.
+    #[clap(long, short('f'))]
+    pub function: Option<String>,
+
+    /// Lists only the runs with specified tags.
+    #[clap(long("tag"), number_of_values = 1)]
+    pub tags: Vec<String>,
+
+    /// Path to JSON reports directory where the JSON reports were written to.
+    #[clap(long, short('o'), long, default_value = ".", number_of_values = 1)]
+    pub output: Vec<PathBuf>,
+
+    /// Descends into subdirectories recursively.
+    #[clap(short('r'), long)]
+    pub recursive: bool,
+}
+
+#[derive(Parser, Debug)]
 pub struct ShowCommand {
     /// Path to the JSON report file
     #[clap(value_name = "PATH")]
@@ -544,6 +567,10 @@ pub enum Command {
     /// Prints nicely formatted statistics to the standard output.
     /// Additionally dumps all data into a JSON report file.
     Run(RunCommand),
+
+    /// Lists benchmark reports saved in the current or specified directory
+    /// with summaries of their results.
+    List(ListCommand),
 
     /// Displays the report(s) of previously executed benchmark(s).
     ///
