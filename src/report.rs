@@ -1,22 +1,22 @@
-use core::fmt;
-use std::collections::BTreeSet;
-use std::fmt::{Display, Formatter};
-use std::num::NonZeroUsize;
-use std::path::Path;
-use std::{fs, io};
-
-use chrono::{Local, TimeZone};
-use console::{pad_str, style, Alignment};
-use err_derive::*;
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-use statrs::statistics::Statistics;
-use strum::IntoEnumIterator;
-
 use crate::config::{RunCommand, PRINT_RETRY_ERROR_LIMIT};
 use crate::stats::{
     BenchmarkCmp, BenchmarkStats, Bucket, Mean, Percentile, Sample, Significance, TimeDistribution,
 };
+use crate::table::Row;
+use chrono::{DateTime, Local, TimeZone};
+use console::{pad_str, style, Alignment};
+use core::fmt;
+use err_derive::*;
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+use statrs::statistics::Statistics;
+use std::collections::BTreeSet;
+use std::fmt::{Display, Formatter};
+use std::io::{BufReader, BufWriter};
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
+use std::{fs, io};
+use strum::IntoEnumIterator;
 
 /// A standard error is multiplied by this factor to get the error margin.
 /// For a normally distributed random variable,
@@ -53,15 +53,46 @@ impl Report {
     /// Loads benchmark results from a JSON file
     pub fn load(path: &Path) -> Result<Report, ReportLoadError> {
         let file = fs::File::open(path)?;
-        let report = serde_json::from_reader(file)?;
+        let reader = BufReader::new(file);
+        let report = serde_json::from_reader(reader)?;
         Ok(report)
     }
 
     /// Saves benchmark results to a JSON file
     pub fn save(&self, path: &Path) -> io::Result<()> {
         let f = fs::File::create(path)?;
-        serde_json::to_writer_pretty(f, &self)?;
+        let writer = BufWriter::new(f);
+        serde_json::to_writer_pretty(writer, &self)?;
         Ok(())
+    }
+
+    pub fn summary(&self) -> Summary {
+        Summary {
+            workload: self.conf.workload.clone(),
+            function: self.conf.function.clone(),
+            timestamp: self
+                .conf
+                .timestamp
+                .and_then(|ts| Local.timestamp_opt(ts, 0).latest()),
+            tags: self.conf.tags.clone(),
+            params: self.conf.params.clone(),
+            rate: self.conf.rate,
+            throughput: self.result.cycle_throughput.value,
+            latency_p50: self
+                .result
+                .cycle_time_ms
+                .percentiles
+                .get(Percentile::P50 as usize)
+                .unwrap()
+                .value,
+            latency_p99: self
+                .result
+                .cycle_time_ms
+                .percentiles
+                .get(Percentile::P99 as usize)
+                .unwrap()
+                .value,
+        }
     }
 }
 
@@ -436,14 +467,7 @@ impl RunConfigCmp<'_> {
     }
 
     fn format_time(&self, conf: &RunCommand, format: &str) -> String {
-        conf.timestamp
-            .and_then(|ts| {
-                Local
-                    .timestamp_opt(ts, 0)
-                    .latest()
-                    .map(|l| l.format(format).to_string())
-            })
-            .unwrap_or_default()
+        format_time(conf.timestamp, format)
     }
 
     /// Returns the set union of custom user parameters in both configurations.
@@ -786,4 +810,80 @@ impl<'a> Display for BenchmarkCmp<'a> {
         }
         Ok(())
     }
+}
+
+#[derive(Debug)]
+pub struct PathAndSummary(pub PathBuf, pub Summary);
+
+#[derive(Debug)]
+pub struct Summary {
+    pub workload: PathBuf,
+    pub function: String,
+    pub timestamp: Option<DateTime<Local>>,
+    pub tags: Vec<String>,
+    pub params: Vec<(String, String)>,
+    pub rate: Option<f64>,
+    pub throughput: f64,
+    pub latency_p50: f64,
+    pub latency_p99: f64,
+}
+
+impl PathAndSummary {
+    pub const COLUMNS: &'static [&'static str] = &[
+        "File",
+        "Workload",
+        "Function",
+        "Timestamp",
+        "Tags",
+        "Params",
+        "Rate",
+        "Thrpt. [req/s]",
+        "P50 [ms]",
+        "P99 [ms]",
+    ];
+}
+
+impl Row for PathAndSummary {
+    fn cell_value(&self, column: &str) -> Option<String> {
+        match column {
+            "File" => Some(self.0.display().to_string()),
+            "Workload" => Some(
+                self.1
+                    .workload
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            "Function" => Some(self.1.function.clone()),
+            "Timestamp" => self
+                .1
+                .timestamp
+                .map(|ts| ts.format("%Y-%m-%d %H:%M:%S").to_string()),
+            "Tags" => Some(self.1.tags.join(", ")),
+            "Params" => Some(
+                self.1
+                    .params
+                    .iter()
+                    .map(|(k, v)| format!("{k} = {v}"))
+                    .join(", "),
+            ),
+            "Rate" => self.1.rate.map(|r| r.to_string()),
+            "Thrpt. [req/s]" => Some(format!("{:.0}", self.1.throughput)),
+            "P50 [ms]" => Some(format!("{:.1}", self.1.latency_p50 * 1000.0)),
+            "P99 [ms]" => Some(format!("{:.1}", self.1.latency_p99 * 1000.0)),
+            _ => None,
+        }
+    }
+}
+
+fn format_time(timestamp: Option<i64>, format: &str) -> String {
+    timestamp
+        .and_then(|ts| {
+            Local
+                .timestamp_opt(ts, 0)
+                .latest()
+                .map(|l| l.format(format).to_string())
+        })
+        .unwrap_or_default()
 }

@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{stdout, Write};
 use std::path::{Path, PathBuf};
@@ -6,18 +7,21 @@ use std::process::exit;
 use std::time::Duration;
 
 use clap::Parser;
+use config::RunCommand;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use hdrhistogram::serialization::interval_log::Tag;
 use hdrhistogram::serialization::{interval_log, V2DeflateSerializer};
 use itertools::Itertools;
 use rune::Source;
 use search_path::SearchPath;
 use tokio::runtime::{Builder, Runtime};
-
-use config::RunCommand;
+use tokio::task::spawn_blocking;
+use walkdir::WalkDir;
 
 use crate::config::{
-    AppConfig, Command, ConnectionConf, EditCommand, HdrCommand, Interval, LoadCommand,
-    SchemaCommand, ShowCommand,
+    AppConfig, Command, ConnectionConf, EditCommand, HdrCommand, Interval, ListCommand,
+    LoadCommand, SchemaCommand, ShowCommand,
 };
 use crate::context::*;
 use crate::context::{CassError, CassErrorKind, Context, SessionStats};
@@ -26,9 +30,10 @@ use crate::error::{LatteError, Result};
 use crate::exec::{par_execute, ExecutionOptions};
 use crate::plot::plot_graph;
 use crate::progress::Progress;
-use crate::report::{Report, RunConfigCmp};
+use crate::report::{PathAndSummary, Report, RunConfigCmp};
 use crate::sampler::Sampler;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
+use crate::table::{Alignment, Table};
 use crate::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN};
 
 mod config;
@@ -42,6 +47,7 @@ mod progress;
 mod report;
 mod sampler;
 mod stats;
+mod table;
 mod workload;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -301,6 +307,74 @@ async fn run(conf: RunCommand) -> Result<()> {
     Ok(())
 }
 
+async fn list(conf: ListCommand) -> Result<()> {
+    let max_depth = if conf.recursive { usize::MAX } else { 1 };
+
+    // Loading reports is a bit slow, so we do it in parallel:
+    let mut report_futures = FuturesUnordered::new();
+    for path in &conf.output {
+        let walk = WalkDir::new(path).max_depth(max_depth);
+        for entry in walk.into_iter().flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if entry.path().extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+
+            let path = entry.path().to_path_buf();
+            report_futures.push(spawn_blocking(move || (path.clone(), Report::load(&path))));
+        }
+    }
+
+    let mut reports = Vec::new();
+    while let Some(report) = report_futures.next().await {
+        match report.unwrap() {
+            (path, Ok(report)) if should_list(&report, &conf) => {
+                reports.push(PathAndSummary(path, report.summary()))
+            }
+            (path, Err(e)) => eprintln!("Failed to load report {}: {}", path.display(), e),
+            _ => {}
+        };
+    }
+
+    if !reports.is_empty() {
+        reports
+            .sort_unstable_by_key(|s| (s.1.workload.clone(), s.1.function.clone(), s.1.timestamp));
+        let mut table = Table::new(PathAndSummary::COLUMNS);
+        table.align(7, Alignment::Right);
+        table.align(8, Alignment::Right);
+        table.align(9, Alignment::Right);
+        for r in reports {
+            table.push(r);
+        }
+        println!("{}", table);
+    }
+    Ok(())
+}
+
+fn should_list(report: &Report, conf: &ListCommand) -> bool {
+    if let Some(workload_pattern) = &conf.workload {
+        if !report
+            .conf
+            .workload
+            .to_string_lossy()
+            .contains(workload_pattern)
+        {
+            return false;
+        }
+    }
+    if let Some(function) = &conf.function {
+        if report.conf.function != *function {
+            return false;
+        }
+    }
+    if !conf.tags.is_empty() && !conf.tags.iter().any(|t| report.conf.tags.contains(t)) {
+        return false;
+    }
+    true
+}
+
 async fn show(conf: ShowCommand) -> Result<()> {
     let report1 = load_report_or_abort(&conf.report);
     let report2 = conf.baseline.map(|p| load_report_or_abort(&p));
@@ -376,6 +450,7 @@ async fn async_main(command: Command) -> Result<()> {
         Command::Schema(config) => schema(config).await?,
         Command::Load(config) => load(config).await?,
         Command::Run(config) => run(config).await?,
+        Command::List(config) => list(config).await?,
         Command::Show(config) => show(config).await?,
         Command::Hdr(config) => export_hdr_log(config).await?,
         Command::Plot(config) => plot_graph(config).await?,
