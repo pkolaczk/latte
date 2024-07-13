@@ -1039,6 +1039,7 @@ dependencies = [
  "num_cpus",
  "openssl",
  "parse_duration",
+ "pin-project",
  "plotters",
  "plotters-svg",
  "rand",
