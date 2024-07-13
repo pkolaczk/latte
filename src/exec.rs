@@ -3,18 +3,21 @@
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::{SinkExt, Stream, StreamExt};
 use itertools::Itertools;
+use pin_project::pin_project;
 use status_line::StatusLine;
 use std::cmp::max;
 use std::future::ready;
 use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Instant;
 use tokio_stream::wrappers::IntervalStream;
 
+use crate::chunks::ChunksExt;
 use crate::error::{LatteError, Result};
 use crate::{
-    BenchmarkStats, BoundedCycleCounter, Interval, Progress, Recorder, Sampler, Workload,
-    WorkloadStats,
+    BenchmarkStats, BoundedCycleCounter, Interval, Progress, Recorder, Workload, WorkloadStats,
 };
 
 /// Returns a stream emitting `rate` events per second.
@@ -49,7 +52,12 @@ async fn run_stream<T>(
     workload.reset(Instant::now());
 
     let mut iter_counter = cycle_counter;
-    let mut sampler = Sampler::new(iter_counter.duration, sampling, &workload, &mut out);
+
+    let (sample_size, sample_duration) = match sampling {
+        Interval::Count(cnt) => (cnt, tokio::time::Duration::MAX),
+        Interval::Time(duration) => (u64::MAX, duration),
+        Interval::Unbounded => (u64::MAX, tokio::time::Duration::MAX),
+    };
 
     let mut result_stream = stream
         .map(|_| iter_counter.next())
@@ -57,19 +65,25 @@ async fn run_stream<T>(
         // unconstrained to workaround quadratic complexity of buffer_unordered ()
         .map(|i| tokio::task::unconstrained(workload.run(i.unwrap())))
         .buffer_unordered(concurrency.get())
-        .inspect(|_| progress.tick());
+        .inspect(|_| progress.tick())
+        .terminate_after_error()
+        .chunks_aggregated(sample_size, sample_duration, Vec::new, |errors, result| {
+            if let Err(e) = result {
+                errors.push(e)
+            }
+        })
+        .map(|errors| (workload.take_stats(Instant::now()), errors));
 
-    while let Some(res) = result_stream.next().await {
-        match res {
-            Ok((iter, end_time)) => sampler.cycle_completed(iter, end_time).await,
-            Err(e) => {
-                out.send(Err(e)).await.unwrap();
-                return;
+    while let Some((stats, errors)) = result_stream.next().await {
+        if out.send(Ok(stats)).await.is_err() {
+            break;
+        }
+        for err in errors {
+            if out.send(Err(err)).await.is_err() {
+                break;
             }
         }
     }
-    // Send the statistics of remaining requests
-    sampler.finish().await;
 }
 
 /// Launches a new worker task that runs a series of invocations of the workload function.
@@ -214,5 +228,63 @@ pub async fn par_execute(
                 break Err(LatteError::Interrupted(Box::new(stats.finish())));
             }
         }
+    }
+}
+
+trait TerminateAfterErrorExt: Stream + Sized {
+    /// Terminates the stream immediately after returning the first error.
+    fn terminate_after_error(self) -> TerminateAfterError<Self>;
+}
+
+impl<S, Item, E> TerminateAfterErrorExt for S
+where
+    S: Stream<Item = std::result::Result<Item, E>>,
+{
+    fn terminate_after_error(self) -> TerminateAfterError<Self> {
+        TerminateAfterError {
+            stream: self,
+            error: false,
+        }
+    }
+}
+
+#[pin_project]
+struct TerminateAfterError<S: Stream> {
+    #[pin]
+    stream: S,
+    error: bool,
+}
+
+impl<S, Item, E> Stream for TerminateAfterError<S>
+where
+    S: Stream<Item = std::result::Result<Item, E>>,
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.error {
+            return Poll::Ready(None);
+        }
+        let this = self.project();
+        match this.stream.poll_next(cx) {
+            Poll::Ready(Some(Err(e))) => {
+                *this.error = true;
+                Poll::Ready(Some(Err(e)))
+            }
+            other => other,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::exec::TerminateAfterErrorExt;
+    use futures::stream;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn test_terminate() {
+        let s = stream::iter(vec![Ok(1), Ok(2), Err(3), Ok(4), Err(5)]).terminate_after_error();
+        assert_eq!(s.collect::<Vec<_>>().await, vec![Ok(1), Ok(2), Err(3)])
     }
 }
