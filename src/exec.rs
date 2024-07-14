@@ -52,17 +52,11 @@ async fn run_stream<T>(
     progress: Arc<StatusLine<Progress>>,
     mut out: Sender<Result<WorkloadStats>>,
 ) {
-    workload.reset(Instant::now());
-
     let mut iter_counter = cycle_counter;
+    let sample_size = sampling.count().unwrap_or(u64::MAX);
+    let sample_duration = sampling.period().unwrap_or(tokio::time::Duration::MAX);
 
-    let (sample_size, sample_duration) = match sampling {
-        Interval::Count(cnt) => (cnt, tokio::time::Duration::MAX),
-        Interval::Time(duration) => (u64::MAX, duration),
-        Interval::Unbounded => (u64::MAX, tokio::time::Duration::MAX),
-    };
-
-    let mut result_stream = stream
+    let mut stats_stream = stream
         .map(|_| iter_counter.next())
         .take_while(|i| ready(i.is_some()))
         // unconstrained to workaround quadratic complexity of buffer_unordered ()
@@ -77,13 +71,14 @@ async fn run_stream<T>(
         })
         .map(|errors| (workload.take_stats(Instant::now()), errors));
 
-    while let Some((stats, errors)) = result_stream.next().await {
+    workload.reset(Instant::now());
+    while let Some((stats, errors)) = stats_stream.next().await {
         if out.send(Ok(stats)).await.is_err() {
-            break;
+            return;
         }
         for err in errors {
             if out.send(Err(err)).await.is_err() {
-                break;
+                return;
             }
         }
     }
