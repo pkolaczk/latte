@@ -12,6 +12,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
+use tokio::time::MissedTickBehavior;
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::chunks::ChunksExt;
@@ -22,8 +23,10 @@ use crate::{
 
 /// Returns a stream emitting `rate` events per second.
 fn interval_stream(rate: f64) -> IntervalStream {
-    let interval = tokio::time::Duration::from_nanos(max(1, (1000000000.0 / rate) as u64));
-    IntervalStream::new(tokio::time::interval(interval))
+    let period = tokio::time::Duration::from_nanos(max(1, (1000000000.0 / rate) as u64));
+    let mut interval = tokio::time::interval(period);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    IntervalStream::new(interval)
 }
 
 /// Runs a stream of workload cycles till completion in the context of the current task.
