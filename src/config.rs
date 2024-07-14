@@ -58,7 +58,15 @@ impl Interval {
         }
     }
 
-    pub fn seconds(&self) -> Option<f32> {
+    pub fn period(&self) -> Option<tokio::time::Duration> {
+        if let Interval::Time(d) = self {
+            Some(*d)
+        } else {
+            None
+        }
+    }
+
+    pub fn period_secs(&self) -> Option<f32> {
         if let Interval::Time(d) = self {
             Some(d.as_secs_f32())
         } else {

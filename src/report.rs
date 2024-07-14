@@ -547,19 +547,19 @@ impl<'a> Display for RunConfigCmp<'a> {
             }),
             self.line("Max rate", "op/s", |conf| Quantity::from(conf.rate)),
             self.line("Warmup", "s", |conf| {
-                Quantity::from(conf.warmup_duration.seconds())
+                Quantity::from(conf.warmup_duration.period_secs())
             }),
             self.line("└─", "op", |conf| {
                 Quantity::from(conf.warmup_duration.count())
             }),
             self.line("Run time", "s", |conf| {
-                Quantity::from(conf.run_duration.seconds()).with_precision(1)
+                Quantity::from(conf.run_duration.period_secs()).with_precision(1)
             }),
             self.line("└─", "op", |conf| {
                 Quantity::from(conf.run_duration.count())
             }),
             self.line("Sampling", "s", |conf| {
-                Quantity::from(conf.sampling_interval.seconds()).with_precision(1)
+                Quantity::from(conf.sampling_interval.period_secs()).with_precision(1)
             }),
             self.line("└─", "op", |conf| {
                 Quantity::from(conf.sampling_interval.count())
