@@ -264,11 +264,11 @@ pub struct Sample {
     pub time_s: f32,
     pub duration_s: f32,
     pub cycle_count: u64,
+    pub cycle_error_count: u64,
     pub request_count: u64,
-    pub retry_errors: HashSet<String>,
-    pub retry_error_count: u64,
-    pub errors: HashSet<String>,
-    pub error_count: u64,
+    pub req_retry_count: u64,
+    pub req_errors: HashSet<String>,
+    pub req_error_count: u64,
     pub row_count: u64,
     pub mean_queue_len: f32,
     pub cycle_throughput: f32,
@@ -286,14 +286,14 @@ impl Sample {
     pub fn new(base_start_time: Instant, stats: &[WorkloadStats]) -> Sample {
         assert!(!stats.is_empty());
         let mut cycle_count = 0;
+        let mut cycle_error_count = 0;
         let mut cycle_times_ns = Histogram::new(3).unwrap();
 
         let mut request_count = 0;
-        let mut retry_errors = HashSet::new();
-        let mut retry_error_count = 0;
+        let mut req_retry_count = 0;
         let mut row_count = 0;
         let mut errors = HashSet::new();
-        let mut error_count = 0;
+        let mut req_error_count = 0;
         let mut mean_queue_len = 0.0;
         let mut duration_s = 0.0;
         let mut resp_times_ns = Histogram::new(3).unwrap();
@@ -309,15 +309,15 @@ impl Sample {
             if errors.len() < MAX_KEPT_ERRORS {
                 errors.extend(ss.req_errors.iter().cloned());
             }
-            error_count += ss.req_error_count;
-            retry_errors.extend(ss.retry_errors.iter().cloned());
-            retry_error_count += ss.retry_error_count;
+            req_error_count += ss.req_error_count;
+            req_retry_count += ss.req_retry_count;
             mean_queue_len += ss.mean_queue_length / stats.len() as f32;
             duration_s += (s.end_time - s.start_time).as_secs_f32() / stats.len() as f32;
             resp_times_ns.add(&ss.resp_times_ns).unwrap();
             resp_time_histogram_ns.add(&ss.resp_times_ns).unwrap();
 
             cycle_count += fs.call_count;
+            cycle_error_count = fs.error_count;
             cycle_times_ns.add(&fs.call_times_ns).unwrap();
             cycle_time_histogram_ns.add(&fs.call_times_ns).unwrap();
         }
@@ -328,11 +328,11 @@ impl Sample {
             time_s: (stats[0].start_time - base_start_time).as_secs_f32(),
             duration_s,
             cycle_count,
+            cycle_error_count,
             request_count,
-            retry_errors,
-            retry_error_count,
-            errors,
-            error_count,
+            req_retry_count,
+            req_errors: errors,
+            req_error_count,
             row_count,
             mean_queue_len: not_nan_f32(mean_queue_len).unwrap_or(0.0),
             cycle_throughput: cycle_count as f32 / duration_s,
@@ -468,6 +468,8 @@ pub struct BenchmarkStats {
     pub cycle_count: u64,
     pub request_count: u64,
     pub requests_per_cycle: f64,
+    pub request_retry_count: u64,
+    pub request_retry_per_request: Option<f64>,
     pub errors: Vec<String>,
     pub error_count: u64,
     pub errors_ratio: Option<f64>,
@@ -555,8 +557,10 @@ pub struct Recorder {
     pub end_cpu_time: ProcessTime,
     pub cycle_count: u64,
     pub request_count: u64,
+    pub request_retry_count: u64,
+    pub request_error_count: u64,
     pub errors: HashSet<String>,
-    pub error_count: u64,
+    pub cycle_error_count: u64,
     pub row_count: u64,
     pub cycle_times_ns: Histogram<u64>,
     pub resp_times_ns: Histogram<u64>,
@@ -584,9 +588,11 @@ impl Recorder {
             concurrency_limit,
             cycle_count: 0,
             request_count: 0,
+            request_retry_count: 0,
+            request_error_count: 0,
             row_count: 0,
             errors: HashSet::new(),
-            error_count: 0,
+            cycle_error_count: 0,
             cycle_times_ns: Histogram::new(3).unwrap(),
             resp_times_ns: Histogram::new(3).unwrap(),
         }
@@ -595,6 +601,7 @@ impl Recorder {
     /// Adds the statistics of the completed request to the already collected statistics.
     /// Called on completion of each sample.
     pub fn record(&mut self, samples: &[WorkloadStats]) -> &Sample {
+        assert!(!samples.is_empty());
         for s in samples.iter() {
             self.resp_times_ns
                 .add(&s.session_stats.resp_times_ns)
@@ -605,12 +612,14 @@ impl Recorder {
         }
         let stats = Sample::new(self.start_instant, samples);
         self.cycle_count += stats.cycle_count;
+        self.cycle_error_count += stats.cycle_error_count;
         self.request_count += stats.request_count;
+        self.request_retry_count += stats.req_retry_count;
+        self.request_error_count += stats.req_error_count;
         self.row_count += stats.row_count;
         if self.errors.len() < MAX_KEPT_ERRORS {
-            self.errors.extend(stats.errors.iter().cloned());
+            self.errors.extend(stats.req_errors.iter().cloned());
         }
-        self.error_count += stats.error_count;
         self.log.append(stats)
     }
 
@@ -631,8 +640,6 @@ impl Recorder {
             .duration_since(self.start_cpu_time)
             .as_secs_f64();
         let cpu_util = 100.0 * cpu_time_s / elapsed_time_s / num_cpus::get() as f64;
-        let count = self.request_count + self.error_count;
-
         let cycle_throughput = self.log.call_throughput();
         let cycle_throughput_ratio = self.rate_limit.map(|r| 100.0 * cycle_throughput.value / r);
         let req_throughput = self.log.req_throughput();
@@ -655,9 +662,13 @@ impl Recorder {
             cpu_util,
             cycle_count: self.cycle_count,
             errors: self.errors.into_iter().collect(),
-            error_count: self.error_count,
-            errors_ratio: not_nan(100.0 * self.error_count as f64 / count as f64),
+            error_count: self.cycle_error_count,
+            errors_ratio: not_nan(100.0 * self.cycle_error_count as f64 / self.cycle_count as f64),
             request_count: self.request_count,
+            request_retry_count: self.request_retry_count,
+            request_retry_per_request: not_nan(
+                self.request_retry_count as f64 / self.request_count as f64,
+            ),
             requests_per_cycle: self.request_count as f64 / self.cycle_count as f64,
             row_count: self.row_count,
             row_count_per_req: not_nan(self.row_count as f64 / self.request_count as f64),

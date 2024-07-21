@@ -10,9 +10,6 @@ use clap::builder::PossibleValue;
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-/// Limit of retry errors to be kept and then printed in scope of a sampling interval
-pub const PRINT_RETRY_ERROR_LIMIT: u64 = 5;
-
 /// Parse a single key-value pair
 fn parse_key_val<T, U>(s: &str) -> Result<(T, U), anyhow::Error>
 where
