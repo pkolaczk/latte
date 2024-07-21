@@ -1,4 +1,4 @@
-use crate::config::{RunCommand, PRINT_RETRY_ERROR_LIMIT};
+use crate::config::RunCommand;
 use crate::stats::{
     BenchmarkCmp, BenchmarkStats, Bucket, Mean, Percentile, Sample, Significance, TimeDistribution,
 };
@@ -567,14 +567,13 @@ impl<'a> Display for RunConfigCmp<'a> {
             self.line("Request timeout", "", |conf| {
                 Quantity::from(conf.connection.request_timeout)
             }),
-            self.line("Retries", "", |_| Quantity::from("")),
-            self.line("┌──────┴number", "", |conf| {
+            self.line("Retries", "", |conf| {
                 Quantity::from(conf.connection.retry_number)
             }),
-            self.line("├─min interval", "ms", |conf| {
+            self.line("├─ min interval", "ms", |conf| {
                 Quantity::from(conf.connection.retry_interval.min_ms)
             }),
-            self.line("└─max interval", "ms", |conf| {
+            self.line("└─ max interval", "ms", |conf| {
                 Quantity::from(conf.connection.retry_interval.max_ms)
             }),
         ];
@@ -588,47 +587,26 @@ impl<'a> Display for RunConfigCmp<'a> {
 
 pub fn print_log_header() {
     println!("{}", fmt_section_header("LOG"));
-    println!("{}", style("    Time  ───── Throughput ─────  ────────────────────────────────── Response times [ms] ───────────────────────────────────").yellow().bold().for_stdout());
-    println!("{}", style("     [s]      [op/s]     [req/s]         Min        25        50        75        90        95        99      99.9       Max").yellow().for_stdout());
+    println!("{}", style("    Time      Cycles      Errors  Throughput         ───────────────────────────── Latency [ms/op] ─────────────────────────").yellow().bold().for_stdout());
+    println!("{}", style("     [s]        [op]        [op]      [op/s]                 Min        25        50        75        90        99       Max").yellow().for_stdout());
 }
 
 impl Display for Sample {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if self.retry_error_count > 0 {
-            let mut num_of_printed_errors = 0;
-            let mut error_msg_bunch = String::new();
-            for retry_error in &self.retry_errors {
-                if num_of_printed_errors < PRINT_RETRY_ERROR_LIMIT {
-                    error_msg_bunch += &format!("{}\n", retry_error);
-                    num_of_printed_errors += 1;
-                } else {
-                    break;
-                }
-            }
-            let num_of_dropped_errors = self.retry_error_count - num_of_printed_errors;
-            if num_of_dropped_errors > 0 {
-                error_msg_bunch += &format!(
-                    "...number of dropped error messages per sampling period: {}",
-                    num_of_dropped_errors,
-                );
-            }
-            writeln!(f, "{}", error_msg_bunch)?;
-        }
         write!(
             f,
-            "{:8.3} {:11.0} {:11.0}   {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3}",
+            "{:8.3} {:11.0} {:11.0} {:11.0}           {:9.1} {:9.1} {:9.1} {:9.1} {:9.1} {:9.1} {:9.1}",
             self.time_s + self.duration_s,
+            self.cycle_count,
+            self.cycle_error_count,
             self.cycle_throughput,
-            self.req_throughput,
-            self.resp_time_percentiles[Percentile::Min as usize],
-            self.resp_time_percentiles[Percentile::P25 as usize],
-            self.resp_time_percentiles[Percentile::P50 as usize],
-            self.resp_time_percentiles[Percentile::P75 as usize],
-            self.resp_time_percentiles[Percentile::P90 as usize],
-            self.resp_time_percentiles[Percentile::P95 as usize],
-            self.resp_time_percentiles[Percentile::P99 as usize],
-            self.resp_time_percentiles[Percentile::P99_9 as usize],
-            self.resp_time_percentiles[Percentile::Max as usize]
+            self.cycle_time_percentiles[Percentile::Min as usize],
+            self.cycle_time_percentiles[Percentile::P25 as usize],
+            self.cycle_time_percentiles[Percentile::P50 as usize],
+            self.cycle_time_percentiles[Percentile::P75 as usize],
+            self.cycle_time_percentiles[Percentile::P90 as usize],
+            self.cycle_time_percentiles[Percentile::P99 as usize],
+            self.cycle_time_percentiles[Percentile::Max as usize]
         )
     }
 }
@@ -677,6 +655,10 @@ impl<'a> Display for BenchmarkCmp<'a> {
             self.line("Requests", "req", |s| Quantity::from(s.request_count)),
             self.line("└─", "req/op", |s| {
                 Quantity::from(s.requests_per_cycle).with_precision(1)
+            }),
+            self.line("Retries", "ret", |s| Quantity::from(s.request_retry_count)),
+            self.line("└─", "ret/req", |s| {
+                Quantity::from(s.request_retry_per_request).with_precision(1)
             }),
             self.line("Rows", "row", |s| Quantity::from(s.row_count)),
             self.line("└─", "row/req", |s| {

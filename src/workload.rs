@@ -369,6 +369,7 @@ impl Program {
 #[derive(Clone, Debug)]
 pub struct FnStats {
     pub call_count: u64,
+    pub error_count: u64,
     pub call_times_ns: Histogram<u64>,
 }
 
@@ -379,12 +380,21 @@ impl FnStats {
             .record(duration.as_nanos().clamp(1, u64::MAX as u128) as u64)
             .unwrap();
     }
+
+    pub fn operation_failed(&mut self, duration: Duration) {
+        self.call_count += 1;
+        self.error_count += 1;
+        self.call_times_ns
+            .record(duration.as_nanos().clamp(1, u64::MAX as u128) as u64)
+            .unwrap();
+    }
 }
 
 impl Default for FnStats {
     fn default() -> Self {
         FnStats {
             call_count: 0,
+            error_count: 0,
             call_times_ns: Histogram::new(3).unwrap(),
         }
     }
@@ -450,19 +460,25 @@ impl Workload {
         let result = self
             .program
             .async_call(&self.function, (context, cycle as i64))
-            .await
-            .map(|_| ()); // erase Value, because Value is !Send
+            .await;
         let end_time = Instant::now();
         let mut state = self.state.try_lock().unwrap();
-        state.fn_stats.operation_completed(end_time - start_time);
+        let duration = end_time - start_time;
         match result {
-            Ok(_) => Ok((cycle, end_time)),
+            Ok(_) => {
+                state.fn_stats.operation_completed(duration);
+                Ok((cycle, end_time))
+            }
             Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_, _)))) => {
                 // don't stop on overload errors;
                 // they are being counted by the context stats anyways
+                state.fn_stats.operation_failed(duration);
                 Ok((cycle, end_time))
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                state.fn_stats.operation_failed(duration);
+                Err(e)
+            }
         }
     }
 
