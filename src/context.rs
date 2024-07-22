@@ -39,7 +39,7 @@ use tokio::time::{Duration, Instant};
 use try_lock::TryLock;
 use uuid::{Variant, Version};
 
-use crate::config::{ConnectionConf, RetryInterval};
+use crate::config::{ConnectionConf, RetryDelay};
 use crate::LatteError;
 
 fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
@@ -71,7 +71,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
     let profile = ExecutionProfile::builder()
         .consistency(conf.consistency.scylla_consistency())
         .load_balancing_policy(policy_builder.build())
-        .request_timeout(Some(Duration::from_secs(conf.request_timeout.get() as u64)))
+        .request_timeout(Some(conf.request_timeout))
         .build();
 
     let scylla_session = SessionBuilder::new()
@@ -85,7 +85,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
     Ok(Context::new(
         scylla_session,
-        conf.retry_number,
+        conf.retries,
         conf.retry_interval,
     ))
 }
@@ -369,11 +369,11 @@ impl Default for SessionStats {
 }
 
 pub fn get_exponential_retry_interval(
-    min_interval: u64,
-    max_interval: u64,
+    min_interval: Duration,
+    max_interval: Duration,
     current_attempt_num: u64,
-) -> u64 {
-    let min_interval_float: f64 = min_interval as f64;
+) -> Duration {
+    let min_interval_float: f64 = min_interval.as_secs_f64();
     let mut current_interval: f64 =
         min_interval_float * (2u64.pow(current_attempt_num.try_into().unwrap_or(0)) as f64);
 
@@ -381,7 +381,7 @@ pub fn get_exponential_retry_interval(
     current_interval += random::<f64>() * min_interval_float;
     current_interval -= min_interval_float / 2.0;
 
-    std::cmp::min(current_interval as u64, max_interval)
+    Duration::from_secs_f64(current_interval.min(max_interval.as_secs_f64()))
 }
 
 /// This is the main object that a workload script uses to interface with the outside world.
@@ -392,7 +392,7 @@ pub struct Context {
     statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
     retry_number: u64,
-    retry_interval: RetryInterval,
+    retry_interval: RetryDelay,
     #[rune(get, set, add_assign, copy)]
     pub load_cycle_count: u64,
     #[rune(get)]
@@ -409,11 +409,7 @@ unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    pub fn new(
-        session: scylla::Session,
-        retry_number: u64,
-        retry_interval: RetryInterval,
-    ) -> Context {
+    pub fn new(session: scylla::Session, retry_number: u64, retry_interval: RetryDelay) -> Context {
         Context {
             session: Arc::new(session),
             statements: HashMap::new(),
@@ -506,14 +502,14 @@ impl Context {
 
         let mut rs: Result<QueryResult, QueryError> = Err(QueryError::TimeoutError);
         let mut attempts = 0;
-        while attempts <= self.retry_number + 1 && Self::should_retry(&rs) {
+        while attempts <= self.retry_number && Self::should_retry(&rs) {
             if attempts > 0 {
                 let current_retry_interval = get_exponential_retry_interval(
-                    self.retry_interval.min_ms,
-                    self.retry_interval.max_ms,
+                    self.retry_interval.min,
+                    self.retry_interval.max,
                     attempts,
                 );
-                tokio::time::sleep(Duration::from_millis(current_retry_interval)).await;
+                tokio::time::sleep(current_retry_interval).await;
             }
             rs = f().await;
             attempts += 1;
