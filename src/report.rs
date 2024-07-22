@@ -490,16 +490,22 @@ impl<'a> Display for RunConfigCmp<'a> {
             self.line("Cluster", "", |conf| {
                 OptionDisplay(conf.cluster_name.clone())
             }),
+            self.line("Datacenter", "", |conf| {
+                conf.connection.datacenter.clone().unwrap_or_default()
+            }),
             self.line("Cass. version", "", |conf| {
                 OptionDisplay(conf.cass_version.clone())
             }),
-            self.line("Tags", "", |conf| conf.tags.iter().join(", ")),
             self.line("Workload", "", |conf| {
                 conf.workload
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default()
             }),
+            self.line("Consistency", "", |conf| {
+                conf.connection.consistency.scylla_consistency().to_string()
+            }),
+            self.line("Tags", "", |conf| conf.tags.iter().join(", ")),
         ];
 
         for l in lines {
@@ -532,12 +538,6 @@ impl<'a> Display for RunConfigCmp<'a> {
         }
 
         let lines: Vec<Box<dyn Display>> = vec![
-            self.line("Datacenter", "", |conf| {
-                conf.connection.datacenter.clone().unwrap_or_default()
-            }),
-            self.line("Consistency", "", |conf| {
-                conf.connection.consistency.scylla_consistency().to_string()
-            }),
             self.line("Threads", "", |conf| Quantity::from(conf.threads)),
             self.line("Connections", "", |conf| {
                 Quantity::from(conf.connection.count)
@@ -587,15 +587,15 @@ impl<'a> Display for RunConfigCmp<'a> {
 
 pub fn print_log_header() {
     println!("{}", fmt_section_header("LOG"));
-    println!("{}", style("    Time      Cycles      Errors  Throughput         ───────────────────────────── Latency [ms/op] ─────────────────────────").yellow().bold().for_stdout());
-    println!("{}", style("     [s]        [op]        [op]      [op/s]                 Min        25        50        75        90        99       Max").yellow().for_stdout());
+    println!("{}", style("    Time    Cycles    Errors    Thrpt.     ────────────────────────────────── Latency [ms/op] ──────────────────────────────").yellow().bold().for_stdout());
+    println!("{}", style("     [s]      [op]      [op]    [op/s]             Min        25        50        75        90        99      99.9       Max").yellow().for_stdout());
 }
 
 impl Display for Sample {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:8.3} {:11.0} {:11.0} {:11.0}           {:9.1} {:9.1} {:9.1} {:9.1} {:9.1} {:9.1} {:9.1}",
+            "{:8.3} {:9.0} {:9.0} {:9.0}       {:9.1} {:9.1} {:9.1} {:9.1} {:9.1} {:9.1} {:9.1} {:9.1}",
             self.time_s + self.duration_s,
             self.cycle_count,
             self.cycle_error_count,
@@ -606,6 +606,7 @@ impl Display for Sample {
             self.cycle_time_percentiles[Percentile::P75 as usize],
             self.cycle_time_percentiles[Percentile::P90 as usize],
             self.cycle_time_percentiles[Percentile::P99 as usize],
+            self.cycle_time_percentiles[Percentile::P99_9 as usize],
             self.cycle_time_percentiles[Percentile::Max as usize]
         )
     }
