@@ -1,10 +1,10 @@
-use std::env;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{stdout, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::time::Duration;
+use std::{env, fs};
 
 use clap::Parser;
 use config::RunCommand;
@@ -17,6 +17,8 @@ use rune::Source;
 use search_path::SearchPath;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::spawn_blocking;
+use tracing::info;
+use tracing_appender::non_blocking::WorkerGuard;
 use walkdir::WalkDir;
 
 use crate::config::{
@@ -74,8 +76,11 @@ fn load_workload_script(workload: &Path, params: &[(String, String)]) -> Result<
         .canonicalize()
         .unwrap_or_else(|_| workload.to_path_buf());
     eprintln!("info: Loading workload script {}...", workload.display());
-    let src = Source::from_path(&workload).map_err(|e| LatteError::ScriptRead(workload, e))?;
-    Program::new(src, params.iter().cloned().collect())
+    let src =
+        Source::from_path(&workload).map_err(|e| LatteError::ScriptRead(workload.clone(), e))?;
+    let program = Program::new(src, params.iter().cloned().collect())?;
+    info!("Loaded workload script {}", workload.display());
+    Ok(program)
 }
 
 /// Locates the workload and returns an absolute path to it.
@@ -291,7 +296,7 @@ async fn run(conf: RunCommand) -> Result<()> {
     let path = conf
         .output
         .clone()
-        .unwrap_or_else(|| conf.default_output_file_name("json"));
+        .unwrap_or_else(|| PathBuf::from(format!("latte-{}.json", conf.id.as_ref().unwrap())));
 
     let report = Report::new(conf, stats);
     match report.save(&path) {
@@ -443,12 +448,15 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
     Ok(())
 }
 
-async fn async_main(command: Command) -> Result<()> {
+async fn async_main(run_id: String, command: Command) -> Result<()> {
     match command {
         Command::Edit(config) => edit(config)?,
         Command::Schema(config) => schema(config).await?,
         Command::Load(config) => load(config).await?,
-        Command::Run(config) => run(config).await?,
+        Command::Run(mut config) => {
+            config.id = Some(run_id);
+            run(config).await?
+        }
         Command::List(config) => list(config).await?,
         Command::Show(config) => show(config).await?,
         Command::Hdr(config) => export_hdr_log(config).await?,
@@ -488,16 +496,46 @@ fn init_runtime(thread_count: usize) -> std::io::Result<Runtime> {
     }
 }
 
+fn setup_logging(run_id: &str, config: &AppConfig) -> Result<WorkerGuard> {
+    let log_file = match &config.log_file {
+        Some(file) if file.is_absolute() => file.clone(),
+        Some(file) => config.log_dir.clone().join(file),
+        None => config.log_dir.join(format!("latte-{}.log", run_id)),
+    };
+    fs::create_dir_all(&config.log_dir)
+        .map_err(|e| LatteError::LogFileCreate(log_file.clone(), e))?;
+    let log_file = File::create(&log_file).map_err(|e| LatteError::LogFileCreate(log_file, e))?;
+    let (non_blocking, guard) = tracing_appender::non_blocking(log_file);
+    tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(non_blocking)
+        .init();
+    Ok(guard)
+}
+
+fn run_id() -> String {
+    chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
+}
+
 fn main() {
-    tracing_subscriber::fmt::init();
-    let command = AppConfig::parse().command;
+    let run_id = run_id();
+    let config = AppConfig::parse();
+    let _guard = match setup_logging(run_id.as_str(), &config) {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    };
+
+    let command = config.command;
     let thread_count = match &command {
         Command::Run(cmd) => cmd.threads.get(),
         Command::Load(cmd) => cmd.threads.get(),
         _ => 1,
     };
     let runtime = init_runtime(thread_count);
-    if let Err(e) = runtime.unwrap().block_on(async_main(command)) {
+    if let Err(e) = runtime.unwrap().block_on(async_main(run_id, command)) {
         eprintln!("error: {e}");
         exit(128);
     }

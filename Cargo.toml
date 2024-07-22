@@ -15,9 +15,9 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
-rmp = "0.8.10"
-rmp-serde = "1.0.0-beta.2"
-chrono = { version = "0.4.18", features = ["serde"] }
+rmp = "0.8"
+rmp-serde = "1"
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "cargo", "env"] }
 console = "0.15.0"
 cpu-time = "1.0.0"
@@ -41,8 +41,8 @@ rune = "0.12"
 rust-embed = "8"
 scylla = { version = "0.13", features = ["ssl"] }
 search_path = "0.1"
-serde = { version = "1.0.116", features = ["derive"] }
-serde_json = "1.0.57"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 statrs = "0.17"
 status-line = "0.2.0"
 strum = { version = "0.26", features = ["derive"] }
@@ -52,6 +52,7 @@ thiserror = "1.0.26"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "parking_lot", "signal"] }
 tokio-stream = "0.1"
 tracing = "0.1"
+tracing-appender = "0.2"
 tracing-subscriber = "0.3"
 try-lock = "0.2.3"
 uuid = { version = "1.1", features = ["v4"] }

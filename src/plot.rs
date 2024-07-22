@@ -11,6 +11,7 @@ use plotters::prelude::*;
 use plotters_svg::SVGBackend;
 use std::collections::BTreeSet;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::process::exit;
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug, Ord, PartialOrd)]
@@ -142,9 +143,10 @@ pub async fn plot_graph(conf: PlotCommand) -> Result<()> {
         }
     };
 
-    let output_path = conf
-        .output
-        .unwrap_or(reports[0].conf.default_output_file_name("svg"));
+    let output_path = conf.output.unwrap_or(PathBuf::from(format!(
+        "latte-{}.svg",
+        reports[0].conf.id.as_ref().unwrap()
+    )));
     let root = SVGBackend::new(&output_path, (2000, 1000)).into_drawing_area();
     root.fill(&WHITE).unwrap();
 
