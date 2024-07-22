@@ -504,9 +504,9 @@ impl Context {
     {
         let start_time = self.stats.try_lock().unwrap().start_request();
 
-        let mut rs = Err(QueryError::TimeoutError);
+        let mut rs: Result<QueryResult, QueryError> = Err(QueryError::TimeoutError);
         let mut attempts = 0;
-        while attempts <= self.retry_number + 1 && rs.is_err() {
+        while attempts <= self.retry_number + 1 && Self::should_retry(&rs) {
             if attempts > 0 {
                 let current_retry_interval = get_exponential_retry_interval(
                     self.retry_interval.min_ms,
@@ -525,6 +525,20 @@ impl Context {
             .unwrap()
             .complete_request(duration, &rs, attempts - 1);
         rs
+    }
+
+    fn should_retry<R>(result: &Result<R, QueryError>) -> bool {
+        matches!(
+            result,
+            Err(QueryError::RequestTimeout(_))
+                | Err(QueryError::TimeoutError)
+                | Err(QueryError::DbError(
+                    DbError::ReadTimeout { .. }
+                        | DbError::WriteTimeout { .. }
+                        | DbError::Overloaded,
+                    _
+                ))
+        )
     }
 
     /// Returns the current accumulated request stats snapshot and resets the stats.
