@@ -34,6 +34,9 @@ pub enum LatteError {
     #[error(display = "Failed to create output file {:?}: {}", _0, _1)]
     OutputFileCreate(PathBuf, std::io::Error),
 
+    #[error(display = "Failed to create log file {:?}: {}", _0, _1)]
+    LogFileCreate(PathBuf, std::io::Error),
+
     #[error(display = "Error writing HDR log: {}", _0)]
     HdrLogWrite(#[source] IntervalLogWriterError<V2DeflateSerializeError>),
 

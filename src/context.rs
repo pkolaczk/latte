@@ -36,6 +36,7 @@ use scylla::transport::session::PoolSize;
 use scylla::{ExecutionProfile, QueryResult, SessionBuilder};
 use statrs::distribution::{Normal, Uniform};
 use tokio::time::{Duration, Instant};
+use tracing::error;
 use try_lock::TryLock;
 use uuid::{Variant, Version};
 
@@ -473,8 +474,11 @@ impl Context {
 
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
-        let rs = self.execute_inner(|| self.session.query(cql, ())).await;
-        rs.map_err(|e| CassError::query_execution_error(cql, &[], e.clone()))?;
+        if let Err(err) = self.execute_inner(|| self.session.query(cql, ())).await {
+            let err = CassError::query_execution_error(cql, &[], err);
+            error!("{}", err);
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -490,7 +494,12 @@ impl Context {
             .execute_inner(|| self.session.execute(statement, params.clone()))
             .await;
 
-        rs.map_err(|e| CassError::query_execution_error(statement.get_statement(), &params, e))?;
+        if let Err(err) = rs {
+            let err = CassError::query_execution_error(statement.get_statement(), &params, err);
+            error!("{}", err);
+            return Err(err);
+        }
+
         Ok(())
     }
 

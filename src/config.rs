@@ -406,6 +406,9 @@ pub struct RunCommand {
 
     #[clap(skip)]
     pub cass_version: Option<String>,
+
+    #[clap(skip)]
+    pub id: Option<String>,
 }
 
 impl RunCommand {
@@ -423,31 +426,6 @@ impl RunCommand {
             .iter()
             .find(|(k, _)| k == key)
             .and_then(|v| v.1.parse().ok())
-    }
-
-    /// Returns benchmark name
-    pub fn name(&self) -> String {
-        self.workload
-            .file_stem()
-            .unwrap()
-            .to_string_lossy()
-            .to_string()
-    }
-
-    /// Suggested file name where to save the results of the run.
-    pub fn default_output_file_name(&self, extension: &str) -> PathBuf {
-        let mut components = vec![self.name()];
-        components.extend(self.cluster_name.iter().map(|x| x.replace(' ', "_")));
-        components.extend(self.cass_version.iter().cloned());
-        components.extend(self.tags.iter().cloned());
-        components.extend(self.rate.map(|r| format!("r{r}")));
-        components.push(format!("p{}", self.concurrency));
-        components.push(format!("t{}", self.threads));
-        components.push(format!("c{}", self.connection.count));
-        let params = self.params.iter().map(|(k, v)| format!("{k}{v}"));
-        components.extend(params);
-        components.push(chrono::Local::now().format("%Y%m%d.%H%M%S").to_string());
-        PathBuf::from(format!("{}.{extension}", components.join(".")))
     }
 }
 
@@ -581,6 +559,18 @@ author = "Piotr Kołaczkowski <pkolaczk@datastax.com>",
 version = clap::crate_version ! (),
 )]
 pub struct AppConfig {
+    /// Name of the log file.
+    ///
+    /// If not given, the log file name will be created automatically based on the current timestamp.
+    /// If relative path given, the file will be placed in the directory determined by `log-dir`.
+    /// The log file will store detailed information about e.g. query errors.
+    #[clap(long("log-file"))]
+    pub log_file: Option<PathBuf>,
+
+    /// Directory where log files are stored.
+    #[clap(long("log-dir"), env("LATTE_LOG_DIR"), default_value = ".")]
+    pub log_dir: PathBuf,
+
     #[clap(subcommand)]
     pub command: Command,
 }
