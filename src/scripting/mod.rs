@@ -44,6 +44,7 @@ fn try_install(
     latte_module.function_meta(functions::blob)?;
     latte_module.function_meta(functions::text)?;
     latte_module.function_meta(functions::vector)?;
+    latte_module.function_meta(functions::join)?;
     latte_module.function_meta(functions::now_timestamp)?;
     latte_module.function_meta(functions::hash)?;
     latte_module.function_meta(functions::hash2)?;
@@ -68,8 +69,10 @@ fn try_install(
     let mut fs_module = Module::with_crate("fs")?;
     fs_module.function_meta(functions::read_to_string)?;
     fs_module.function_meta(functions::read_lines)?;
+    fs_module.function_meta(functions::read_words)?;
     fs_module.function_meta(functions::read_resource_to_string)?;
     fs_module.function_meta(functions::read_resource_lines)?;
+    fs_module.function_meta(functions::read_resource_words)?;
 
     rune_ctx.install(&context_module)?;
     rune_ctx.install(&err_module)?;
