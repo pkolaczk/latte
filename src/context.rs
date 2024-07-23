@@ -23,9 +23,9 @@ use rand::{random, Rng, SeedableRng};
 use rune::alloc::fmt::TryWrite;
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
-use rune::{ast, vm_try, vm_write};
-use rune::runtime::{Mut, Ref, VmResult};
 use rune::runtime::{Function, Object, Shared, TypeInfo, VmError};
+use rune::runtime::{Mut, Ref, VmResult};
+use rune::{ast, vm_try, vm_write};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
 use scylla::_macro_internal::ColumnType;
@@ -942,10 +942,6 @@ pub fn hash(i: i64) -> i64 {
 /// Computes hash of two integer values.
 #[rune::function]
 pub fn hash2(a: i64, b: i64) -> i64 {
-    hash2_inner(a, b)
-}
-
-fn hash2_inner(a: i64, b: i64) -> i64 {
     let mut hash = MetroHash64::new();
     a.hash(&mut hash);
     b.hash(&mut hash);
@@ -976,10 +972,10 @@ pub fn uniform(i: i64, min: f64, max: f64) -> VmResult<f64> {
 }
 
 #[rune::function]
-pub fn list(seed: i64, len: usize, generator: Function) -> VmResult<Vec<Value>> {
+pub fn vector(len: usize, generator: Function) -> VmResult<Vec<Value>> {
     let mut result = Vec::with_capacity(len);
     for i in 0..len {
-        let value = vm_try!(generator.call((hash2_inner(seed, i as i64),)));
+        let value = vm_try!(generator.call((i as i64,)));
         result.push(value);
     }
     VmResult::Ok(result)
@@ -1019,6 +1015,22 @@ pub fn hash_select(i: i64, collection: &[Value]) -> Value {
     collection[(hash_inner(i) % collection.len() as i64) as usize].clone()
 }
 
+/// Joins all strings in vector with given separator
+#[rune::function]
+pub fn join(collection: &[Value], separator: &str) -> VmResult<String> {
+    let mut result = String::new();
+    let mut first = true;
+    for v in collection {
+        let v = vm_try!(v.clone().into_string());
+        if !first {
+            result.push_str(separator);
+        }
+        result.push_str(vm_try!(v.borrow_ref()).as_str());
+        first = false;
+    }
+    VmResult::Ok(result)
+}
+
 /// Reads a file into a string.
 #[rune::function]
 pub fn read_to_string(filename: &str) -> io::Result<String> {
@@ -1033,12 +1045,27 @@ pub fn read_to_string(filename: &str) -> io::Result<String> {
 /// Reads a file into a vector of lines.
 #[rune::function]
 pub fn read_lines(filename: &str) -> io::Result<Vec<String>> {
-    let file = File::open(filename).expect("no such file");
+    let file = File::open(filename)
+        .map_err(|e| io::Error::new(e.kind(), format!("Failed to open file {filename}: {e}")))?;
     let buf = BufReader::new(file);
-    let result = buf
-        .lines()
-        .map(|l| l.expect("Could not parse line"))
-        .collect();
+    buf.lines().try_collect()
+}
+
+/// Reads a file into a vector of words.
+#[rune::function]
+pub fn read_words(filename: &str) -> io::Result<Vec<String>> {
+    let file = File::open(filename)
+        .map_err(|e| io::Error::new(e.kind(), format!("Failed to open file {filename}: {e}")))?;
+    let buf = BufReader::new(file);
+    let mut result = Vec::new();
+    for line in buf.lines() {
+        let line = line?;
+        let words = line
+            .split(|c: char| !c.is_alphabetic())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
+        result.extend(words);
+    }
     Ok(result)
 }
 
@@ -1061,6 +1088,14 @@ pub fn read_resource_to_string(path: &str) -> io::Result<String> {
 pub fn read_resource_lines(path: &str) -> io::Result<Vec<String>> {
     Ok(read_resource_to_string_inner(path)?
         .split('\n')
+        .map(|s| s.to_string())
+        .collect_vec())
+}
+
+#[rune::function]
+pub fn read_resource_words(path: &str) -> io::Result<Vec<String>> {
+    Ok(read_resource_to_string_inner(path)?
+        .split(|c: char| !c.is_alphabetic())
         .map(|s| s.to_string())
         .collect_vec())
 }

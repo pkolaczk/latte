@@ -132,7 +132,8 @@ impl Program {
 
         latte_module.function_meta(context::blob).unwrap();
         latte_module.function_meta(context::text).unwrap();
-        latte_module.function_meta(context::list).unwrap();
+        latte_module.function_meta(context::vector).unwrap();
+        latte_module.function_meta(context::join).unwrap();
         latte_module.function_meta(context::now_timestamp).unwrap();
         latte_module.function_meta(context::hash).unwrap();
         latte_module.function_meta(context::hash2).unwrap();
@@ -157,11 +158,15 @@ impl Program {
         let mut fs_module = Module::with_crate("fs").unwrap();
         fs_module.function_meta(context::read_to_string).unwrap();
         fs_module.function_meta(context::read_lines).unwrap();
+        fs_module.function_meta(context::read_words).unwrap();
         fs_module
             .function_meta(context::read_resource_to_string)
             .unwrap();
         fs_module
             .function_meta(context::read_resource_lines)
+            .unwrap();
+        fs_module
+            .function_meta(context::read_resource_words)
             .unwrap();
 
         let mut context = rune::Context::with_default_modules().unwrap();
