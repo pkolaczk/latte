@@ -712,15 +712,12 @@ mod test {
     fn random_vector(seed: usize, len: usize, mean: f64, std_dev: f64) -> Vec<f32> {
         let mut rng = StdRng::seed_from_u64(seed as u64);
         let distrib = Normal::new(mean, std_dev).unwrap();
-        (0..len)
-            .into_iter()
-            .map(|_| distrib.sample(&mut rng) as f32)
-            .collect()
+        (0..len).map(|_| distrib.sample(&mut rng) as f32).collect()
     }
 
     /// Introduces a strong dependency between the observations,
     /// making it an AR(1) process
-    fn make_autocorrelated(v: &mut Vec<f32>) {
+    fn make_autocorrelated(v: &mut [f32]) {
         for i in 1..v.len() {
             v[i] = 0.01 * v[i] + 0.99 * v[i - 1];
         }
