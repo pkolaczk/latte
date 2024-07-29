@@ -484,6 +484,12 @@ impl Context {
         Ok(None)
     }
 
+    /// Returns list of datacenters used by nodes
+    pub async fn get_datacenters(&self) -> Result<Vec<String>, CassError> {
+        let dc_info = self.session.get_cluster_data().get_datacenters_info();
+        return Ok(dc_info.keys().cloned().collect());
+    }
+
     /// Prepares a statement and stores it in an internal statement map for future use.
     pub async fn prepare(&mut self, key: &str, cql: &str) -> Result<(), CassError> {
         let statement = self
@@ -1052,6 +1058,11 @@ pub fn read_resource_lines(path: &str) -> io::Result<Vec<String>> {
         .split('\n')
         .map(|s| s.to_string())
         .collect_vec())
+}
+
+#[rune::function(instance)]
+pub async fn get_datacenters(ctx: Mut<Context>) -> Result<Vec<String>, CassError> {
+    ctx.get_datacenters().await
 }
 
 #[rune::function(instance)]
