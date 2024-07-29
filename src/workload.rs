@@ -102,6 +102,9 @@ impl Program {
         let mut context_module = Module::default();
         context_module.ty::<Context>().unwrap();
         context_module
+            .async_inst_fn("get_datacenters", Context::get_datacenters)
+            .unwrap();
+        context_module
             .async_inst_fn("execute", Context::execute)
             .unwrap();
         context_module
