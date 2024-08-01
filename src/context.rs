@@ -83,6 +83,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
     Ok(Context::new(
         scylla_session,
+        dc.to_string(),
         conf.retry_number,
         conf.retry_interval,
     ))
@@ -441,6 +442,8 @@ pub struct Context {
     #[rune(get, set, add_assign, copy)]
     pub load_cycle_count: u64,
     #[rune(get)]
+    pub preferred_datacenter: String,
+    #[rune(get)]
     pub data: Value,
 }
 
@@ -456,6 +459,7 @@ unsafe impl Sync for Context {}
 impl Context {
     pub fn new(
         session: scylla::Session,
+        preferred_datacenter: String,
         retry_number: u64,
         retry_interval: RetryInterval,
     ) -> Context {
@@ -466,6 +470,7 @@ impl Context {
             retry_number,
             retry_interval,
             load_cycle_count: 0,
+            preferred_datacenter: preferred_datacenter,
             data: Value::Object(Shared::new(Object::new())),
         }
     }
@@ -484,6 +489,7 @@ impl Context {
             retry_number: self.retry_number,
             retry_interval: self.retry_interval,
             load_cycle_count: self.load_cycle_count,
+            preferred_datacenter: self.preferred_datacenter.clone(),
             data: deserialized,
         })
     }
