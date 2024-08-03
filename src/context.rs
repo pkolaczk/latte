@@ -389,6 +389,7 @@ pub fn get_exponential_retry_interval(
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
 #[derive(Any)]
 pub struct Context {
+    start_time: TryLock<Instant>,
     session: Arc<scylla::Session>,
     statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
@@ -412,6 +413,7 @@ unsafe impl Sync for Context {}
 impl Context {
     pub fn new(session: scylla::Session, retry_number: u64, retry_interval: RetryDelay) -> Context {
         Context {
+            start_time: TryLock::new(Instant::now()),
             session: Arc::new(session),
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
@@ -433,10 +435,9 @@ impl Context {
             session: self.session.clone(),
             statements: self.statements.clone(),
             stats: TryLock::new(SessionStats::default()),
-            retry_number: self.retry_number,
-            retry_interval: self.retry_interval,
-            load_cycle_count: self.load_cycle_count,
             data: deserialized,
+            start_time: TryLock::new(*self.start_time.try_lock().unwrap()),
+            ..*self
         })
     }
 
@@ -532,6 +533,10 @@ impl Context {
         rs
     }
 
+    pub fn elapsed_secs(&self) -> f64 {
+        self.start_time.try_lock().unwrap().elapsed().as_secs_f64()
+    }
+
     fn should_retry<R>(result: &Result<R, QueryError>) -> bool {
         matches!(
             result,
@@ -555,8 +560,9 @@ impl Context {
     }
 
     /// Resets query and request counters
-    pub fn reset_session_stats(&self) {
+    pub fn reset(&self) {
         self.stats.try_lock().unwrap().reset();
+        *self.start_time.try_lock().unwrap() = Instant::now();
     }
 }
 

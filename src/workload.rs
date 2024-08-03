@@ -110,6 +110,9 @@ impl Program {
         context_module
             .async_inst_fn("execute_prepared", Context::execute_prepared)
             .unwrap();
+        context_module
+            .inst_fn("elapsed_secs", Context::elapsed_secs)
+            .unwrap();
 
         let mut err_module = Module::default();
         err_module.ty::<CassError>().unwrap();
@@ -495,7 +498,7 @@ impl Workload {
         let mut state = self.state.try_lock().unwrap();
         state.fn_stats = FnStats::default();
         state.start_time = start_time;
-        self.context.reset_session_stats();
+        self.context.reset();
     }
 
     /// Returns statistics of the operations invoked by this workload so far.

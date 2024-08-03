@@ -296,3 +296,7 @@ Errors during execution of a workload script are divided into three classes:
   errors terminate  
   the benchmark immediately. Overload errors (e.g. timeouts) that happen during the main run phase are counted and
   reported in the benchmark report.
+
+### Other functions
+
+- `ctx.elapsed_secs()` – returns the number of seconds elapsed since starting the workload, as float
