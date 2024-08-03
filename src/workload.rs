@@ -454,12 +454,12 @@ impl Workload {
     /// This should be idempotent –
     /// the generated action should be a function of the iteration number.
     /// Returns the cycle number and the end time of the query.
-    pub async fn run(&self, cycle: u64) -> Result<(u64, Instant), LatteError> {
+    pub async fn run(&self, cycle: i64) -> Result<(i64, Instant), LatteError> {
         let start_time = Instant::now();
         let context = SessionRef::new(&self.context);
         let result = self
             .program
-            .async_call(&self.function, (context, cycle as i64))
+            .async_call(&self.function, (context, cycle))
             .await;
         let end_time = Instant::now();
         let mut state = self.state.try_lock().unwrap();
