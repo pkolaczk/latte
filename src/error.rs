@@ -45,6 +45,11 @@ pub enum LatteError {
 
     #[error(display = "Failed to launch external editor {}: {}", _0, _1)]
     ExternalEditorLaunch(String, std::io::Error),
+
+    #[error(display = "Invalid configuration: {}", _0)]
+    Configuration(String),
 }
+
+impl LatteError {}
 
 pub type Result<T> = std::result::Result<T, LatteError>;

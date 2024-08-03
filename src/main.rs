@@ -182,6 +182,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
     let loader = Workload::new(session.clone()?, program.clone(), FnRef::new(LOAD_FN));
     let load_options = ExecutionOptions {
         duration: config::Interval::Count(load_count),
+        cycle_range: (0, i64::MAX),
         rate: conf.rate,
         threads: conf.threads,
         concurrency: conf.concurrency,
@@ -238,6 +239,7 @@ async fn run(conf: RunCommand) -> Result<()> {
         eprintln!("info: Warming up...");
         let warmup_options = ExecutionOptions {
             duration: conf.warmup_duration,
+            cycle_range: (conf.start_cycle, conf.end_cycle),
             rate: None,
             threads: conf.threads,
             concurrency: conf.concurrency,
@@ -264,6 +266,7 @@ async fn run(conf: RunCommand) -> Result<()> {
 
     let exec_options = ExecutionOptions {
         duration: conf.run_duration,
+        cycle_range: (conf.start_cycle, conf.end_cycle),
         concurrency: conf.concurrency,
         rate: conf.rate,
         threads: conf.threads,

@@ -152,6 +152,8 @@ where
 pub struct ExecutionOptions {
     /// How long to execute
     pub duration: Interval,
+    /// Range of the cycle counter
+    pub cycle_range: (i64, i64),
     /// Maximum rate of requests in requests per second, `None` means no limit
     pub rate: Option<f64>,
     /// Number of parallel threads of execution
@@ -176,6 +178,13 @@ pub async fn par_execute(
     workload: Workload,
     show_progress: bool,
 ) -> Result<BenchmarkStats> {
+    if exec_options.cycle_range.1 <= exec_options.cycle_range.0 {
+        return Err(LatteError::Configuration(format!(
+            "End cycle {} must not be lower than start cycle {}",
+            exec_options.cycle_range.1, exec_options.cycle_range.0
+        )));
+    }
+
     let thread_count = exec_options.threads.get();
     let concurrency = exec_options.concurrency;
     let rate = exec_options.rate;
@@ -189,7 +198,7 @@ pub async fn par_execute(
         ..Default::default()
     };
     let progress = Arc::new(StatusLine::with_options(progress, progress_opts));
-    let deadline = BoundedCycleCounter::new(exec_options.duration);
+    let deadline = BoundedCycleCounter::new(exec_options.duration, exec_options.cycle_range);
     let mut streams = Vec::with_capacity(thread_count);
     let mut stats = Recorder::start(rate, concurrency);
 

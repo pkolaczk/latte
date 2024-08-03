@@ -347,6 +347,19 @@ pub struct RunCommand {
     )]
     pub run_duration: Interval,
 
+    /// The initial value of the cycle counter.
+    ///
+    /// Normally the cycle counter starts from 0, but you can start from a different value.
+    /// This is particularly useful for splitting the workload into
+    /// parts executed from different client nodes.
+    #[clap(long, default_value = "0")]
+    pub start_cycle: i64,
+
+    /// The maximum value of the cycle counter at which the cycle counter wraps-around back
+    /// to the start value.
+    #[clap(long, default_value = "9223372036854775807")]
+    pub end_cycle: i64,
+
     /// Number of worker threads used by the driver.
     #[clap(short('t'), long, default_value = "1", value_name = "COUNT")]
     pub threads: NonZeroUsize,

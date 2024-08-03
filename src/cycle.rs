@@ -57,6 +57,8 @@ impl CycleCounter {
 /// Decides when to stop the benchmark execution.
 pub struct BoundedCycleCounter {
     pub duration: config::Interval,
+    cycle_start: i64,
+    cycle_range_size: u64,
     start_time: Instant,
     cycle_counter: CycleCounter,
 }
@@ -64,42 +66,51 @@ pub struct BoundedCycleCounter {
 impl BoundedCycleCounter {
     /// Creates a new counter based on configured benchmark duration.
     /// For time-based deadline, the clock starts ticking when this object is created.
-    pub fn new(duration: config::Interval) -> Self {
+    pub fn new(duration: config::Interval, cycle_range: (i64, i64)) -> Self {
         BoundedCycleCounter {
             duration,
             start_time: Instant::now(),
             cycle_counter: CycleCounter::new(0),
+            cycle_start: cycle_range.0,
+            cycle_range_size: cycle_range.1.saturating_sub(cycle_range.0) as u64,
         }
     }
 
     /// Returns the next cycle number or `None` if deadline or cycle count was exceeded.
-    pub fn next(&mut self) -> Option<u64> {
+    pub fn next(&mut self) -> Option<i64> {
         match self.duration {
             Interval::Count(count) => {
                 let result = self.cycle_counter.next();
                 if result < count {
-                    Some(result)
+                    Some(self.cycle_number(result))
                 } else {
                     None
                 }
             }
             Interval::Time(duration) => {
                 if Instant::now() < self.start_time + duration {
-                    Some(self.cycle_counter.next())
+                    let result = self.cycle_counter.next();
+                    Some(self.cycle_number(result))
                 } else {
                     None
                 }
             }
-            Interval::Unbounded => Some(self.cycle_counter.next()),
+            Interval::Unbounded => {
+                let result = self.cycle_counter.next();
+                Some(self.cycle_number(result))
+            }
         }
+    }
+
+    fn cycle_number(&mut self, result: u64) -> i64 {
+        self.cycle_start + (result % self.cycle_range_size) as i64
     }
 
     /// Shares this counter e.g. with another thread.
     pub fn share(&self) -> Self {
         BoundedCycleCounter {
-            start_time: self.start_time,
-            duration: self.duration,
             cycle_counter: self.cycle_counter.share(),
+            ..*self
         }
     }
 }
