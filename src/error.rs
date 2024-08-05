@@ -1,5 +1,4 @@
 use crate::context::CassError;
-use crate::stats::BenchmarkStats;
 use err_derive::*;
 use hdrhistogram::serialization::interval_log::IntervalLogWriterError;
 use hdrhistogram::serialization::V2DeflateSerializeError;
@@ -39,9 +38,6 @@ pub enum LatteError {
 
     #[error(display = "Error writing HDR log: {}", _0)]
     HdrLogWrite(#[source] IntervalLogWriterError<V2DeflateSerializeError>),
-
-    #[error(display = "Interrupted")]
-    Interrupted(Box<BenchmarkStats>),
 
     #[error(display = "Failed to launch external editor {}: {}", _0, _1)]
     ExternalEditorLaunch(String, std::io::Error),

@@ -1,7 +1,7 @@
 //! Implementation of the main benchmarking loop
 
 use futures::channel::mpsc::{channel, Receiver, Sender};
-use futures::{SinkExt, Stream, StreamExt};
+use futures::{pin_mut, SinkExt, Stream, StreamExt};
 use itertools::Itertools;
 use pin_project::pin_project;
 use status_line::StatusLine;
@@ -12,6 +12,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
+use tokio::signal::ctrl_c;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::wrappers::IntervalStream;
 
@@ -56,13 +57,14 @@ async fn run_stream<T>(
     let sample_size = sampling.count().unwrap_or(u64::MAX);
     let sample_duration = sampling.period().unwrap_or(tokio::time::Duration::MAX);
 
-    let mut stats_stream = stream
+    let stats_stream = stream
         .map(|_| iter_counter.next())
         .take_while(|i| ready(i.is_some()))
         // unconstrained to workaround quadratic complexity of buffer_unordered ()
         .map(|i| tokio::task::unconstrained(workload.run(i.unwrap())))
         .buffer_unordered(concurrency.get())
         .inspect(|_| progress.tick())
+        .take_until(ctrl_c())
         .terminate_after_error()
         .chunks_aggregated(sample_size, sample_duration, Vec::new, |errors, result| {
             if let Err(e) = result {
@@ -70,6 +72,8 @@ async fn run_stream<T>(
             }
         })
         .map(|errors| (workload.take_stats(Instant::now()), errors));
+
+    pin_mut!(stats_stream);
 
     workload.reset(Instant::now());
     while let Some((stats, errors)) = stats_stream.next().await {
@@ -215,25 +219,17 @@ pub async fn par_execute(
     }
 
     loop {
-        tokio::select! {
-            partial_stats = receive_one_of_each(&mut streams) => {
-                let partial_stats: Vec<_> = partial_stats.into_iter().try_collect()?;
-                if partial_stats.is_empty() {
-                    break Ok(stats.finish());
-                }
+        let partial_stats = receive_one_of_each(&mut streams).await;
+        let partial_stats: Vec<_> = partial_stats.into_iter().try_collect()?;
+        if partial_stats.is_empty() {
+            break Ok(stats.finish());
+        }
 
-                let aggregate = stats.record(&partial_stats);
-                if sampling.is_bounded() {
-                    progress.set_visible(false);
-                    println!("{aggregate}");
-                    progress.set_visible(show_progress);
-                }
-            }
-
-            _ = tokio::signal::ctrl_c() => {
-                progress.set_visible(false);
-                break Err(LatteError::Interrupted(Box::new(stats.finish())));
-            }
+        let aggregate = stats.record(&partial_stats);
+        if sampling.is_bounded() {
+            progress.set_visible(false);
+            println!("{aggregate}");
+            progress.set_visible(show_progress);
         }
     }
 }
