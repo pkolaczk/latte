@@ -8,7 +8,6 @@ use plotters::coord::ranged1d::{DefaultFormatting, KeyPointHint};
 use plotters::coord::types::RangedCoordf32;
 use plotters::prelude::full_palette::ORANGE;
 use plotters::prelude::*;
-use plotters_svg::SVGBackend;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::PathBuf;

@@ -8,9 +8,8 @@ use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{ContinuousCDF, StudentsT};
-use strum::EnumCount;
 use strum::IntoEnumIterator;
-use strum_macros::{EnumCount as EnumCountM, EnumIter};
+use strum::{EnumCount, EnumIter};
 
 use crate::histogram::SerializableHistogram;
 use crate::workload::WorkloadStats;
@@ -197,7 +196,7 @@ fn not_nan_f32(x: f32) -> Option<f32> {
 const MAX_KEPT_ERRORS: usize = 10;
 
 #[allow(non_camel_case_types)]
-#[derive(Copy, Clone, EnumIter, EnumCountM)]
+#[derive(Copy, Clone, EnumIter, EnumCount)]
 pub enum Percentile {
     Min = 0,
     P1,

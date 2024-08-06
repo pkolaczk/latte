@@ -33,8 +33,7 @@ num_cpus = "1.13.0"
 openssl = "0.10.38"
 parse_duration = "2.1.1"
 pin-project = "1.1"
-plotters = "0.3.4"
-plotters-svg = "0.3.3"
+plotters = { version = "0.3", default-features = false, features = ["line_series", "svg_backend", "full_palette"]}
 rand = "0.8"
 regex = "1.5"
 rune = "0.13"
@@ -46,7 +45,6 @@ serde_json = "1.0"
 statrs = "0.17"
 status-line = "0.2.0"
 strum = { version = "0.26", features = ["derive"] }
-strum_macros = "0.26"
 time = "0.3"
 thiserror = "1.0.26"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "parking_lot", "signal"] }
