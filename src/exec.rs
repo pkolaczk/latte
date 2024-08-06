@@ -40,10 +40,8 @@ fn interval_stream(rate: f64) -> IntervalStream {
 /// - concurrency: the maximum number of pending workload calls
 /// - sampling: controls when to output workload statistics
 /// - progress: progress bar notified about each successful cycle
-/// - interrupt: allows for terminating the stream early
 /// - out: the channel to receive workload statistics
 ///
-#[allow(clippy::too_many_arguments)] // todo: refactor
 async fn run_stream<T>(
     stream: impl Stream<Item = T> + std::marker::Unpin,
     workload: Workload,

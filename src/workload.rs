@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::path::Path;
 use std::sync::Arc;
@@ -6,9 +6,12 @@ use std::time::Duration;
 use std::time::Instant;
 
 use hdrhistogram::Histogram;
-use rune::runtime::{AnyObj, Args, RuntimeContext, Shared, VmError};
+use rune::alloc::clone::TryClone;
+use rune::compile::meta::Kind;
+use rune::compile::{CompileVisitor, MetaError, MetaRef};
+use rune::runtime::{AnyObj, Args, RuntimeContext, Shared, VmError, VmResult};
 use rune::termcolor::{ColorChoice, StandardStream};
-use rune::{Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
+use rune::{vm_try, Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
 use try_lock::TryLock;
 
 use crate::error::LatteError;
@@ -35,9 +38,9 @@ impl SessionRef<'_> {
 /// implementation and the compiler is not going to catch that.
 /// The receiver of a `Value` must ensure that it is dropped before `Session`!
 impl<'a> ToValue for SessionRef<'a> {
-    fn to_value(self) -> Result<Value, VmError> {
+    fn to_value(self) -> VmResult<Value> {
         let obj = unsafe { AnyObj::from_ref(self.context) };
-        Ok(Value::from(Shared::new(obj)))
+        VmResult::Ok(Value::from(vm_try!(Shared::new(obj))))
     }
 }
 
@@ -55,15 +58,15 @@ impl ContextRefMut<'_> {
 
 /// Caution! See `impl ToValue for SessionRef`.
 impl<'a> ToValue for ContextRefMut<'a> {
-    fn to_value(self) -> Result<Value, VmError> {
+    fn to_value(self) -> VmResult<Value> {
         let obj = unsafe { AnyObj::from_mut(self.context) };
-        Ok(Value::from(Shared::new(obj)))
+        VmResult::Ok(Value::from(vm_try!(Shared::new(obj))))
     }
 }
 
 /// Stores the name and hash together.
 /// Name is used for message formatting, hash is used for fast function lookup.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct FnRef {
     name: String,
     hash: rune::Hash,
@@ -89,6 +92,7 @@ pub struct Program {
     sources: Arc<Sources>,
     context: Arc<RuntimeContext>,
     unit: Arc<Unit>,
+    meta: ProgramMetadata,
 }
 
 impl Program {
@@ -101,99 +105,59 @@ impl Program {
     pub fn new(source: Source, params: HashMap<String, String>) -> Result<Program, LatteError> {
         let mut context_module = Module::default();
         context_module.ty::<Context>().unwrap();
+        context_module.function_meta(context::execute).unwrap();
+        context_module.function_meta(context::prepare).unwrap();
         context_module
-            .async_inst_fn("execute", Context::execute)
+            .function_meta(context::execute_prepared)
             .unwrap();
-        context_module
-            .async_inst_fn("prepare", Context::prepare)
-            .unwrap();
-        context_module
-            .async_inst_fn("execute_prepared", Context::execute_prepared)
-            .unwrap();
-        context_module
-            .inst_fn("elapsed_secs", Context::elapsed_secs)
-            .unwrap();
+        context_module.function_meta(context::elapsed_secs).unwrap();
 
         let mut err_module = Module::default();
         err_module.ty::<CassError>().unwrap();
-        err_module
-            .inst_fn(rune::runtime::Protocol::STRING_DISPLAY, CassError::display)
-            .unwrap();
+        err_module.function_meta(CassError::string_display).unwrap();
 
         let mut uuid_module = Module::default();
         uuid_module.ty::<context::Uuid>().unwrap();
         uuid_module
-            .inst_fn(
-                rune::runtime::Protocol::STRING_DISPLAY,
-                context::Uuid::display,
-            )
+            .function_meta(context::Uuid::string_display)
             .unwrap();
 
-        let mut latte_module = Module::with_crate("latte");
-        latte_module.function(&["blob"], context::blob).unwrap();
-        latte_module.function(&["text"], context::text).unwrap();
+        let mut latte_module = Module::with_crate("latte").unwrap();
         latte_module
-            .function(&["now_timestamp"], context::now_timestamp)
-            .unwrap();
-        latte_module.function(&["hash"], context::hash).unwrap();
-        latte_module.function(&["hash2"], context::hash2).unwrap();
-        latte_module
-            .function(&["hash_range"], context::hash_range)
-            .unwrap();
-        latte_module
-            .function(&["hash_select"], context::hash_select)
-            .unwrap();
-        latte_module
-            .function(&["uuid"], context::Uuid::new)
-            .unwrap();
-        latte_module.function(&["normal"], context::normal).unwrap();
-        latte_module
-            .function(&["uniform"], context::uniform)
-            .unwrap();
-        latte_module
-            .macro_(&["param"], move |ctx, ts| context::param(ctx, &params, ts))
+            .macro_("param", move |ctx, ts| context::param(ctx, &params, ts))
             .unwrap();
 
-        latte_module
-            .inst_fn("to_string", context::int_to_string)
-            .unwrap();
-        latte_module
-            .inst_fn("to_string", context::float_to_string)
-            .unwrap();
+        latte_module.function_meta(context::blob).unwrap();
+        latte_module.function_meta(context::text).unwrap();
+        latte_module.function_meta(context::now_timestamp).unwrap();
+        latte_module.function_meta(context::hash).unwrap();
+        latte_module.function_meta(context::hash2).unwrap();
+        latte_module.function_meta(context::hash_range).unwrap();
+        latte_module.function_meta(context::hash_select).unwrap();
+        latte_module.function_meta(context::uuid).unwrap();
+        latte_module.function_meta(context::normal).unwrap();
+        latte_module.function_meta(context::uniform).unwrap();
 
-        latte_module.inst_fn("to_i32", context::int_to_i32).unwrap();
-        latte_module
-            .inst_fn("to_i32", context::float_to_i32)
-            .unwrap();
-        latte_module.inst_fn("to_i16", context::int_to_i16).unwrap();
-        latte_module
-            .inst_fn("to_i16", context::float_to_i16)
-            .unwrap();
-        latte_module.inst_fn("to_i8", context::int_to_i8).unwrap();
-        latte_module.inst_fn("to_i8", context::float_to_i8).unwrap();
-        latte_module.inst_fn("to_f32", context::int_to_f32).unwrap();
-        latte_module
-            .inst_fn("to_f32", context::float_to_f32)
-            .unwrap();
+        latte_module.function_meta(context::i64::to_i32).unwrap();
+        latte_module.function_meta(context::i64::to_i16).unwrap();
+        latte_module.function_meta(context::i64::to_i8).unwrap();
+        latte_module.function_meta(context::i64::to_f32).unwrap();
+        latte_module.function_meta(context::i64::clamp).unwrap();
 
-        latte_module.inst_fn("clamp", context::clamp_float).unwrap();
-        latte_module.inst_fn("clamp", context::clamp_int).unwrap();
+        latte_module.function_meta(context::f64::to_i8).unwrap();
+        latte_module.function_meta(context::f64::to_i16).unwrap();
+        latte_module.function_meta(context::f64::to_i32).unwrap();
+        latte_module.function_meta(context::f64::to_f32).unwrap();
+        latte_module.function_meta(context::f64::clamp).unwrap();
 
-        let mut fs_module = Module::with_crate("fs");
+        let mut fs_module = Module::with_crate("fs").unwrap();
+        fs_module.function_meta(context::read_to_string).unwrap();
+        fs_module.function_meta(context::read_lines).unwrap();
         fs_module
-            .function(&["read_to_string"], context::read_to_string)
+            .function_meta(context::read_resource_to_string)
             .unwrap();
         fs_module
-            .function(&["read_lines"], context::read_lines)
-            .unwrap();
-        fs_module
-            .function(
-                &["read_resource_to_string"],
-                context::read_resource_to_string,
-            )
-            .unwrap();
-        fs_module
-            .function(&["read_resource_lines"], context::read_resource_lines)
+            .function_meta(context::read_resource_lines)
             .unwrap();
 
         let mut context = rune::Context::with_default_modules().unwrap();
@@ -208,9 +172,11 @@ impl Program {
 
         let mut diagnostics = Diagnostics::new();
         let mut sources = Self::load_sources(source)?;
+        let mut meta = ProgramMetadata::new();
         let unit = rune::prepare(&mut sources)
             .with_context(&context)
             .with_diagnostics(&mut diagnostics)
+            .with_visitor(&mut meta)?
             .build();
 
         if !diagnostics.is_empty() {
@@ -221,8 +187,9 @@ impl Program {
 
         Ok(Program {
             sources: Arc::new(sources),
-            context: Arc::new(context.runtime()),
+            context: Arc::new(context.runtime().unwrap()),
             unit: Arc::new(unit),
+            meta,
         })
     }
 
@@ -233,7 +200,7 @@ impl Program {
                 Self::try_insert_lib_source(parent, &mut sources)?
             }
         }
-        sources.insert(source);
+        sources.insert(source)?;
         Ok(sources)
     }
 
@@ -244,7 +211,7 @@ impl Program {
             sources.insert(
                 Source::from_path(&lib_src)
                     .map_err(|e| LatteError::ScriptRead(lib_src.clone(), e))?,
-            );
+            )?;
         }
         Ok(())
     }
@@ -255,9 +222,10 @@ impl Program {
     /// sharing of Arc references.
     fn unshare(&self) -> Program {
         Program {
+            meta: self.meta.clone(),
             sources: self.sources.clone(),
-            context: Arc::new(self.context.as_ref().clone()),
-            unit: Arc::new(self.unit.as_ref().clone()),
+            context: Arc::new(self.context.as_ref().try_clone().unwrap()),
+            unit: Arc::new(self.unit.as_ref().try_clone().unwrap()),
         }
     }
 
@@ -284,14 +252,9 @@ impl Program {
                         let e = e.take_downcast::<CassError>().unwrap();
                         return Err(LatteError::Cassandra(e));
                     }
-                    let mut msg = String::new();
-                    let mut buf = String::new();
+
                     let e = Value::Any(e);
-                    self.vm().with(|| {
-                        if e.string_display(&mut msg, &mut buf).unwrap().is_err() {
-                            msg = format!("{e:?}")
-                        }
-                    });
+                    let msg = self.vm().with(|| format!("{e:?}"));
                     Err(LatteError::FunctionResult(function_name.to_string(), msg))
                 }
                 Err(other) => Err(LatteError::FunctionResult(
@@ -318,7 +281,11 @@ impl Program {
             LatteError::ScriptExecError(fun.name.to_string(), e)
         };
         let execution = self.vm().send_execute(fun.hash, args).map_err(handle_err)?;
-        let result = execution.async_complete().await.map_err(handle_err)?;
+        let result = execution
+            .async_complete()
+            .await
+            .into_result()
+            .map_err(handle_err)?;
         self.convert_error(fun.name.as_str(), result)
     }
 
@@ -339,7 +306,7 @@ impl Program {
     }
 
     pub fn has_function(&self, function: &FnRef) -> bool {
-        self.unit.function(function.hash).is_some()
+        self.meta.functions.contains(function)
     }
 
     /// Calls the script's `init` function.
@@ -364,6 +331,29 @@ impl Program {
     pub async fn erase(&mut self, context: &mut Context) -> Result<(), LatteError> {
         let context = ContextRefMut::new(context);
         self.async_call(&FnRef::new(ERASE_FN), (context,)).await?;
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct ProgramMetadata {
+    functions: HashSet<FnRef>,
+}
+
+impl ProgramMetadata {
+    pub fn new() -> Self {
+        Self {
+            functions: HashSet::new(),
+        }
+    }
+}
+
+impl CompileVisitor for ProgramMetadata {
+    fn register_meta(&mut self, meta: MetaRef<'_>) -> Result<(), MetaError> {
+        if let Kind::Function { .. } = meta.kind {
+            let name = meta.item.last().unwrap().to_string();
+            self.functions.insert(FnRef::new(name.as_str()));
+        }
         Ok(())
     }
 }

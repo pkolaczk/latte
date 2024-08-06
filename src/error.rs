@@ -2,6 +2,7 @@ use crate::context::CassError;
 use err_derive::*;
 use hdrhistogram::serialization::interval_log::IntervalLogWriterError;
 use hdrhistogram::serialization::V2DeflateSerializeError;
+use rune::alloc;
 use std::path::PathBuf;
 
 #[derive(Debug, Error)]
@@ -16,7 +17,7 @@ pub enum LatteError {
     Cassandra(#[source] CassError),
 
     #[error(display = "Failed to read file {:?}: {}", _0, _1)]
-    ScriptRead(PathBuf, #[source] std::io::Error),
+    ScriptRead(PathBuf, #[source] rune::source::FromPathError),
 
     #[error(display = "Failed to load script: {}", _0)]
     ScriptBuildError(#[source] rune::BuildError),
@@ -44,6 +45,9 @@ pub enum LatteError {
 
     #[error(display = "Invalid configuration: {}", _0)]
     Configuration(String),
+
+    #[error(display = "Memory allocation failure: {}", _0)]
+    OutOfMemory(#[source] alloc::Error),
 }
 
 impl LatteError {}
