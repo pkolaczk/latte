@@ -6,6 +6,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use hdrhistogram::Histogram;
+use rand::distributions::{Distribution, WeightedIndex};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use rune::alloc::clone::TryClone;
 use rune::compile::meta::Kind;
 use rune::compile::{CompileVisitor, MetaError, MetaRef};
@@ -419,16 +422,16 @@ impl Default for WorkloadState {
 pub struct Workload {
     context: Context,
     program: Program,
-    function: FnRef,
+    router: FunctionRouter,
     state: TryLock<WorkloadState>,
 }
 
 impl Workload {
-    pub fn new(context: Context, program: Program, function: FnRef) -> Workload {
+    pub fn new(context: Context, program: Program, functions: &[(FnRef, f64)]) -> Workload {
         Workload {
             context,
             program,
-            function,
+            router: FunctionRouter::new(functions),
             state: TryLock::new(WorkloadState::default()),
         }
     }
@@ -438,7 +441,7 @@ impl Workload {
             context: self.context.clone()?,
             // make a deep copy to avoid congestion on Arc ref counts used heavily by Rune
             program: self.program.unshare(),
-            function: self.function.clone(),
+            router: self.router.clone(),
             state: TryLock::new(WorkloadState::default()),
         })
     }
@@ -449,10 +452,11 @@ impl Workload {
     /// Returns the cycle number and the end time of the query.
     pub async fn run(&self, cycle: i64) -> Result<(i64, Instant), LatteError> {
         let start_time = Instant::now();
+        let mut rng = StdRng::seed_from_u64(cycle as u64);
         let context = SessionRef::new(&self.context);
         let result = self
             .program
-            .async_call(&self.function, (context, cycle))
+            .async_call(self.router.select(&mut rng), (context, cycle))
             .await;
         let end_time = Instant::now();
         let mut state = self.state.try_lock().unwrap();
@@ -504,5 +508,26 @@ impl Workload {
         state.start_time = end_time;
         state.fn_stats = FnStats::default();
         result
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FunctionRouter {
+    selector: WeightedIndex<f64>,
+    functions: Vec<FnRef>,
+}
+
+impl FunctionRouter {
+    pub fn new(functions: &[(FnRef, f64)]) -> Self {
+        let (functions, weights): (Vec<_>, Vec<_>) = functions.iter().cloned().unzip();
+        let selector = WeightedIndex::new(weights).unwrap();
+        FunctionRouter {
+            selector,
+            functions,
+        }
+    }
+
+    pub fn select(&self, rng: &mut impl Rng) -> &FnRef {
+        &self.functions[self.selector.sample(rng)]
     }
 }

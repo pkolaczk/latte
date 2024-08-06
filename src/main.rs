@@ -181,7 +181,11 @@ async fn load(conf: LoadCommand) -> Result<()> {
     }
 
     eprintln!("info: Loading data...");
-    let loader = Workload::new(session.clone()?, program.clone(), FnRef::new(LOAD_FN));
+    let loader = Workload::new(
+        session.clone()?,
+        program.clone(),
+        &[(FnRef::new(LOAD_FN), 1.0)],
+    );
     let load_options = ExecutionOptions {
         duration: config::Interval::Count(load_count),
         cycle_range: (0, i64::MAX),
@@ -210,16 +214,21 @@ async fn load(conf: LoadCommand) -> Result<()> {
 
 async fn run(conf: RunCommand) -> Result<()> {
     let mut conf = conf.set_timestamp_if_empty();
-    let function = FnRef::new(conf.function.as_str());
     let compare = conf.baseline.as_ref().map(|p| load_report_or_abort(p));
 
     let mut program = load_workload_script(&conf.workload, &conf.params)?;
-    if !program.has_function(&function) {
-        eprintln!(
-            "error: Function {} not found in the workload script.",
-            conf.function.as_str()
-        );
-        exit(255);
+
+    let mut functions = Vec::new();
+    for f in &conf.functions {
+        let function = FnRef::new(f.name.as_str());
+        if !program.has_function(&function) {
+            eprintln!(
+                "error: Function {} not found in the workload script.",
+                f.name.as_str()
+            );
+            exit(255);
+        }
+        functions.push((function, f.weight))
     }
 
     let (mut session, cluster_info) = connect(&conf.connection).await?;
@@ -236,7 +245,7 @@ async fn run(conf: RunCommand) -> Result<()> {
         }
     }
 
-    let runner = Workload::new(session.clone()?, program.clone(), function);
+    let runner = Workload::new(session.clone()?, program.clone(), &functions);
     if conf.warmup_duration.is_not_zero() {
         eprintln!("info: Warming up...");
         let warmup_options = ExecutionOptions {
@@ -347,8 +356,15 @@ async fn list(conf: ListCommand) -> Result<()> {
     }
 
     if !reports.is_empty() {
-        reports
-            .sort_unstable_by_key(|s| (s.1.workload.clone(), s.1.function.clone(), s.1.timestamp));
+        reports.sort_unstable_by_key(|s| {
+            (
+                s.1.workload.clone(),
+                s.1.functions.clone(),
+                s.1.params.clone(),
+                s.1.tags.clone(),
+                s.1.timestamp,
+            )
+        });
         let mut table = Table::new(PathAndSummary::COLUMNS);
         table.align(7, Alignment::Right);
         table.align(8, Alignment::Right);
@@ -373,7 +389,13 @@ fn should_list(report: &Report, conf: &ListCommand) -> bool {
         }
     }
     if let Some(function) = &conf.function {
-        if report.conf.function != *function {
+        if !report
+            .conf
+            .functions
+            .iter()
+            .map(|f| &f.name)
+            .contains(function)
+        {
             return false;
         }
     }

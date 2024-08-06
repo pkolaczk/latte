@@ -71,7 +71,6 @@ user-defined data structures, objects, enums, constants, macros and many more.
 
 Latte is still early stage software under intensive development.
 
-* Binding some CQL data types is not yet supported, e.g. user defined types, maps or integer types smaller than 64-bit.
 * Query result sets are not exposed yet.
 * The set of data generating functions is tiny and will be extended soon.
 * Backwards compatibility may be broken frequently.
@@ -281,6 +280,19 @@ pub async fn prepare(ctx) {
 Then you can set the parameter by using `-P`:
 ```
 latte run <workload> -P row_count=200
+```
+
+### Mixing workloads
+It is possible to run more than one workload function at the same time.
+You can specify multiple functions with `-f` / `--function` and optionally give
+each function the weight which will determine how frequently the function should be called.
+If unspecified, the default weight is 1. Weights don't have to sum to 1.
+
+Assuming the workload definition file contains functions `read` and `write`, the following
+invocation of latte will run a mix of 20% writes and 80% reads:
+
+```
+latte run <workload> -f read:0.2 -f write:0.8
 ```
 
 ### Error handling
