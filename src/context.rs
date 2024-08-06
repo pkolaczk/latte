@@ -6,10 +6,10 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::net::IpAddr;
+use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use chrono::Utc;
 use hdrhistogram::Histogram;
 use itertools::Itertools;
@@ -19,11 +19,11 @@ use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
 use rand::distributions::Distribution;
 use rand::rngs::StdRng;
 use rand::{random, Rng, SeedableRng};
-use rune::ast;
-use rune::ast::Kind;
+use rune::alloc::fmt::TryWrite;
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
-use rune::runtime::{Object, Shared, TypeInfo, VmError};
+use rune::runtime::{Mut, Object, Ref, Shared, TypeInfo, VmError, VmResult};
+use rune::{ast, vm_try, vm_write};
 use rune::{Any, Value};
 use rust_embed::RustEmbed;
 use scylla::_macro_internal::ColumnType;
@@ -234,6 +234,12 @@ pub enum CassErrorKind {
 }
 
 impl CassError {
+    #[rune::function(protocol = STRING_DISPLAY)]
+    pub fn string_display(&self, f: &mut rune::runtime::Formatter) -> VmResult<()> {
+        vm_write!(f, "{}", self.to_string());
+        VmResult::Ok(())
+    }
+
     pub fn display(&self, buf: &mut String) -> std::fmt::Result {
         use std::fmt::Write;
         match &self.0 {
@@ -420,7 +426,7 @@ impl Context {
             retry_number,
             retry_interval,
             load_cycle_count: 0,
-            data: Value::Object(Shared::new(Object::new())),
+            data: Value::Object(Shared::new(Object::new()).unwrap()),
         }
     }
 
@@ -603,17 +609,6 @@ mod bind {
             (Value::Float(v), ColumnType::Float) => Ok(CqlValue::Float(*v as f32)),
             (Value::Float(v), ColumnType::Double) => Ok(CqlValue::Double(*v)),
 
-            (Value::StaticString(s), ColumnType::Timeuuid) => {
-                let timeuuid = CqlTimeuuid::from_str(s);
-                match timeuuid {
-                    Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
-                    Err(e) => Err(CassError(CassErrorKind::QueryParamConversion(
-                        format!("{:?}", v),
-                        ColumnType::Timeuuid,
-                        Some(format!("{}", e)),
-                    ))),
-                }
-            }
             (Value::String(s), ColumnType::Timeuuid) => {
                 let timeuuid_str = s.borrow_ref().unwrap();
                 let timeuuid = CqlTimeuuid::from_str(timeuuid_str.as_str());
@@ -626,22 +621,8 @@ mod bind {
                     ))),
                 }
             }
-            (Value::StaticString(v), ColumnType::Text | ColumnType::Ascii) => {
-                Ok(CqlValue::Text(v.as_str().to_string()))
-            }
             (Value::String(v), ColumnType::Text | ColumnType::Ascii) => {
                 Ok(CqlValue::Text(v.borrow_ref().unwrap().as_str().to_string()))
-            }
-            (Value::StaticString(s), ColumnType::Inet) => {
-                let ipaddr = IpAddr::from_str(s);
-                match ipaddr {
-                    Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
-                    Err(e) => Err(CassError(CassErrorKind::QueryParamConversion(
-                        format!("{:?}", v),
-                        ColumnType::Inet,
-                        Some(format!("{}", e)),
-                    ))),
-                }
             }
             (Value::String(s), ColumnType::Inet) => {
                 let ipaddr_str = s.borrow_ref().unwrap();
@@ -655,7 +636,6 @@ mod bind {
                     ))),
                 }
             }
-
             (Value::Bytes(v), ColumnType::Blob) => {
                 Ok(CqlValue::Blob(v.borrow_ref().unwrap().to_vec()))
             }
@@ -688,7 +668,7 @@ mod bind {
                     match tuple {
                         Value::Tuple(tuple) if tuple.borrow_ref().unwrap().len() == 2 => {
                             let tuple = tuple.borrow_ref().unwrap();
-                            let key = to_scylla_value(tuple.get(0).unwrap(), key_elt)?;
+                            let key = to_scylla_value(tuple.first().unwrap(), key_elt)?;
                             let value = to_scylla_value(tuple.get(1).unwrap(), value_elt)?;
                             map_vec.push((key, value));
                         }
@@ -710,7 +690,8 @@ mod bind {
                 let obj = obj.borrow_ref().unwrap();
                 let mut map_vec = Vec::with_capacity(obj.keys().len());
                 for (k, v) in obj.iter() {
-                    let key = to_scylla_value(&(k.to_owned().to_value().unwrap()), key_elt)?;
+                    let key = String::from(k.as_str());
+                    let key = to_scylla_value(&(key.to_value().unwrap()), key_elt)?;
                     let value = to_scylla_value(v, value_elt)?;
                     map_vec.push((key, value));
                 }
@@ -829,7 +810,7 @@ mod bind {
     }
 
     fn read_params<'a, 'b>(
-        get_value: impl Fn(&String) -> Option<&'a Value>,
+        get_value: impl Fn(&str) -> Option<&'a Value>,
         params: &[ColumnSpec],
     ) -> Result<Vec<CqlValue>, CassError> {
         let mut values = Vec::with_capacity(params.len());
@@ -844,7 +825,7 @@ mod bind {
     }
 
     fn read_fields<'a, 'b>(
-        get_value: impl Fn(&String) -> Option<&'a Value>,
+        get_value: impl Fn(&str) -> Option<&'a Value>,
         fields: &[(String, ColumnType)],
     ) -> Result<Vec<(String, Option<CqlValue>)>, CassError> {
         let mut values = Vec::with_capacity(fields.len());
@@ -877,9 +858,10 @@ impl Uuid {
         Uuid(builder.into_uuid())
     }
 
-    pub fn display(&self, buf: &mut String) -> std::fmt::Result {
-        use std::fmt::Write;
-        write!(buf, "{}", self.0)
+    #[rune::function(protocol = STRING_DISPLAY)]
+    pub fn string_display(&self, f: &mut rune::runtime::Formatter) -> VmResult<()> {
+        vm_write!(f, "{}", self.0);
+        VmResult::Ok(())
     }
 }
 
@@ -901,78 +883,51 @@ pub fn param(
     ctx: &mut MacroContext,
     params: &HashMap<String, String>,
     ts: &TokenStream,
-) -> rune::Result<TokenStream> {
+) -> rune::compile::Result<TokenStream> {
     let mut parser = Parser::from_token_stream(ts, ctx.macro_span());
     let name = parser.parse::<ast::LitStr>()?;
     let name = ctx.resolve(name)?.to_string();
-    let sep = parser.next()?;
-    if sep.kind != Kind::Comma {
-        return Err(anyhow!("Expected comma"));
-    }
+    let _ = parser.parse::<ast::Comma>()?;
     let expr = parser.parse::<ast::Expr>()?;
     let rhs = match params.get(&name) {
         Some(value) => {
-            let src_id = ctx.insert_source(&name, value);
+            let src_id = ctx.insert_source(&name, value)?;
             let value = ctx.parse_source::<ast::Expr>(src_id)?;
             quote!(#value)
         }
         None => quote!(#expr),
     };
-    Ok(rhs.into_token_stream(ctx))
+    Ok(rhs.into_token_stream(ctx)?)
 }
 
-/// Converts a Rune integer to i8 (Cassandra tinyint)
-pub fn int_to_i8(value: i64) -> Option<Int8> {
-    Some(Int8(value.try_into().ok()?))
+/// Creates a new UUID for current iteration
+#[rune::function]
+pub fn uuid(i: i64) -> Uuid {
+    Uuid::new(i)
 }
 
+#[rune::function]
 pub fn float_to_i8(value: f64) -> Option<Int8> {
-    int_to_i8(value as i64)
-}
-
-/// Converts a Rune integer to i16 (Cassandra smallint)
-pub fn int_to_i16(value: i64) -> Option<Int16> {
-    Some(Int16(value.try_into().ok()?))
-}
-
-pub fn float_to_i16(value: f64) -> Option<Int16> {
-    int_to_i16(value as i64)
-}
-
-/// Converts a Rune integer to i32 (Cassandra int)
-pub fn int_to_i32(value: i64) -> Option<Int32> {
-    Some(Int32(value.try_into().ok()?))
-}
-
-pub fn float_to_i32(value: f64) -> Option<Int32> {
-    int_to_i32(value as i64)
-}
-
-pub fn int_to_f32(value: i64) -> Option<Float32> {
-    Some(Float32(value as f32))
-}
-
-pub fn float_to_f32(value: f64) -> Option<Float32> {
-    Some(Float32(value as f32))
-}
-
-pub fn int_to_string(value: i64) -> Option<String> {
-    Some(value.to_string())
-}
-
-pub fn float_to_string(value: f64) -> Option<String> {
-    Some(value.to_string())
+    Some(Int8((value as i64).try_into().ok()?))
 }
 
 /// Computes a hash of an integer value `i`.
 /// Returns a value in range `0..i64::MAX`.
-pub fn hash(i: i64) -> i64 {
+fn hash_inner(i: i64) -> i64 {
     let mut hash = MetroHash64::new();
     i.hash(&mut hash);
     (hash.finish() & 0x7FFFFFFFFFFFFFFF) as i64
 }
 
+/// Computes a hash of an integer value `i`.
+/// Returns a value in range `0..i64::MAX`.
+#[rune::function]
+pub fn hash(i: i64) -> i64 {
+    hash_inner(i)
+}
+
 /// Computes hash of two integer values.
+#[rune::function]
 pub fn hash2(a: i64, b: i64) -> i64 {
     let mut hash = MetroHash64::new();
     a.hash(&mut hash);
@@ -982,65 +937,63 @@ pub fn hash2(a: i64, b: i64) -> i64 {
 
 /// Computes a hash of an integer value `i`.
 /// Returns a value in range `0..max`.
+#[rune::function]
 pub fn hash_range(i: i64, max: i64) -> i64 {
-    hash(i) % max
+    hash_inner(i) % max
 }
 
 /// Generates a floating point value with normal distribution
-pub fn normal(i: i64, mean: f64, std_dev: f64) -> Result<f64, VmError> {
+#[rune::function]
+pub fn normal(i: i64, mean: f64, std_dev: f64) -> VmResult<f64> {
     let mut rng = StdRng::seed_from_u64(i as u64);
-    let distribution = Normal::new(mean, std_dev).map_err(|e| VmError::panic(format!("{e}")))?;
-    Ok(distribution.sample(&mut rng))
+    let distribution =
+        vm_try!(Normal::new(mean, std_dev).map_err(|e| VmError::panic(format!("{e}"))));
+    VmResult::Ok(distribution.sample(&mut rng))
 }
 
-pub fn uniform(i: i64, min: f64, max: f64) -> Result<f64, VmError> {
+#[rune::function]
+pub fn uniform(i: i64, min: f64, max: f64) -> VmResult<f64> {
     let mut rng = StdRng::seed_from_u64(i as u64);
-    let distribution = Uniform::new(min, max).map_err(|e| VmError::panic(format!("{e}")))?;
-    Ok(distribution.sample(&mut rng))
-}
-
-/// Restricts a value to a certain interval unless it is NaN.
-pub fn clamp_float(value: f64, min: f64, max: f64) -> f64 {
-    value.clamp(min, max)
-}
-
-/// Restricts a value to a certain interval.
-pub fn clamp_int(value: i64, min: i64, max: i64) -> i64 {
-    value.clamp(min, max)
+    let distribution = vm_try!(Uniform::new(min, max).map_err(|e| VmError::panic(format!("{e}"))));
+    VmResult::Ok(distribution.sample(&mut rng))
 }
 
 /// Generates random blob of data of given length.
 /// Parameter `seed` is used to seed the RNG.
-pub fn blob(seed: i64, len: usize) -> rune::runtime::Bytes {
+#[rune::function]
+pub fn blob(seed: i64, len: usize) -> Vec<u8> {
     let mut rng = StdRng::seed_from_u64(seed as u64);
-    let v = (0..len).map(|_| rng.gen()).collect_vec();
-    rune::runtime::Bytes::from_vec(v)
+    (0..len).map(|_| rng.gen::<u8>()).collect()
 }
 
 /// Generates random string of given length.
-/// Parameter `seed` is used to seed the RNG.
-pub fn text(seed: i64, len: usize) -> rune::runtime::StaticString {
+/// Parameter `seed` is used to seed
+/// the RNG.
+#[rune::function]
+pub fn text(seed: i64, len: usize) -> String {
     let mut rng = StdRng::seed_from_u64(seed as u64);
-    let s: String = (0..len)
+    (0..len)
         .map(|_| {
             let code_point = rng.gen_range(0x0061u32..=0x007Au32); // Unicode range for 'a-z'
             std::char::from_u32(code_point).unwrap()
         })
-        .collect();
-    rune::runtime::StaticString::new(s)
+        .collect()
 }
 
 /// Generates 'now' timestamp
+#[rune::function]
 pub fn now_timestamp() -> i64 {
     Utc::now().timestamp()
 }
 
 /// Selects one item from the collection based on the hash of the given value.
-pub fn hash_select(i: i64, collection: &[Value]) -> &Value {
-    &collection[hash_range(i, collection.len() as i64) as usize]
+#[rune::function]
+pub fn hash_select(i: i64, collection: &[Value]) -> Value {
+    collection[(hash_inner(i) % collection.len() as i64) as usize].clone()
 }
 
 /// Reads a file into a string.
+#[rune::function]
 pub fn read_to_string(filename: &str) -> io::Result<String> {
     let mut file = File::open(filename).expect("no such file");
 
@@ -1051,6 +1004,7 @@ pub fn read_to_string(filename: &str) -> io::Result<String> {
 }
 
 /// Reads a file into a vector of lines.
+#[rune::function]
 pub fn read_lines(filename: &str) -> io::Result<Vec<String>> {
     let file = File::open(filename).expect("no such file");
     let buf = BufReader::new(file);
@@ -1062,7 +1016,7 @@ pub fn read_lines(filename: &str) -> io::Result<Vec<String>> {
 }
 
 /// Reads a resource file as a string.
-pub fn read_resource_to_string(path: &str) -> io::Result<String> {
+fn read_resource_to_string_inner(path: &str) -> io::Result<String> {
     let resource = Resources::get(path).ok_or_else(|| {
         io::Error::new(ErrorKind::NotFound, format!("Resource not found: {path}"))
     })?;
@@ -1071,9 +1025,114 @@ pub fn read_resource_to_string(path: &str) -> io::Result<String> {
     Ok(contents.to_string())
 }
 
+#[rune::function]
+pub fn read_resource_to_string(path: &str) -> io::Result<String> {
+    read_resource_to_string_inner(path)
+}
+
+#[rune::function]
 pub fn read_resource_lines(path: &str) -> io::Result<Vec<String>> {
-    Ok(read_resource_to_string(path)?
+    Ok(read_resource_to_string_inner(path)?
         .split('\n')
         .map(|s| s.to_string())
         .collect_vec())
+}
+
+#[rune::function(instance)]
+pub async fn prepare(mut ctx: Mut<Context>, key: Ref<str>, cql: Ref<str>) -> Result<(), CassError> {
+    ctx.prepare(&key, &cql).await
+}
+
+#[rune::function(instance)]
+pub async fn execute(ctx: Ref<Context>, cql: Ref<str>) -> Result<(), CassError> {
+    ctx.execute(cql.deref()).await
+}
+
+#[rune::function(instance)]
+pub async fn execute_prepared(
+    ctx: Ref<Context>,
+    key: Ref<str>,
+    params: Value,
+) -> Result<(), CassError> {
+    ctx.execute_prepared(&key, params).await
+}
+
+#[rune::function(instance)]
+pub fn elapsed_secs(ctx: &Context) -> f64 {
+    ctx.elapsed_secs()
+}
+
+pub mod i64 {
+    use crate::context::{Float32, Int16, Int32, Int8};
+
+    /// Converts a Rune integer to i8 (Cassandra tinyint)
+    #[rune::function(instance)]
+    pub fn to_i8(value: i64) -> Option<Int8> {
+        Some(Int8(value.try_into().ok()?))
+    }
+
+    /// Converts a Rune integer to i16 (Cassandra smallint)
+    #[rune::function(instance)]
+    pub fn to_i16(value: i64) -> Option<Int16> {
+        Some(Int16(value.try_into().ok()?))
+    }
+
+    /// Converts a Rune integer to i32 (Cassandra int)
+    #[rune::function(instance)]
+    pub fn to_i32(value: i64) -> Option<Int32> {
+        Some(Int32(value.try_into().ok()?))
+    }
+
+    /// Converts a Rune integer to f32 (Cassandra float)
+    #[rune::function(instance)]
+    pub fn to_f32(value: i64) -> Float32 {
+        Float32(value as f32)
+    }
+
+    /// Converts a Rune integer to a String
+    #[rune::function(instance)]
+    pub fn to_string(value: i64) -> String {
+        value.to_string()
+    }
+
+    /// Restricts a value to a certain interval.
+    #[rune::function(instance)]
+    pub fn clamp(value: i64, min: i64, max: i64) -> i64 {
+        value.clamp(min, max)
+    }
+}
+
+pub mod f64 {
+    use crate::context::{Float32, Int16, Int32, Int8};
+
+    #[rune::function(instance)]
+    pub fn to_i8(value: f64) -> Int8 {
+        Int8(value as i8)
+    }
+
+    #[rune::function(instance)]
+    pub fn to_i16(value: f64) -> Int16 {
+        Int16(value as i16)
+    }
+
+    #[rune::function(instance)]
+    pub fn to_i32(value: f64) -> Int32 {
+        Int32(value as i32)
+    }
+
+    #[rune::function(instance)]
+    pub fn to_f32(value: f64) -> Float32 {
+        Float32(value as f32)
+    }
+
+    #[rune::function(instance)]
+    pub fn to_string(value: f64) -> String {
+        value.to_string()
+    }
+
+    /// Restricts a value to a certain interval unless it is NaN.
+    #[rune::function(instance)]
+    pub fn clamp(value: f64, min: f64, max: f64) -> f64 {
+        value.clamp(min, max)
+    }
 }

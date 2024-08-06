@@ -18,7 +18,9 @@ use search_path::SearchPath;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::spawn_blocking;
 use tracing::info;
+use tracing::level_filters::LevelFilter;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::EnvFilter;
 use walkdir::WalkDir;
 
 use crate::config::{
@@ -471,7 +473,7 @@ fn edit(config: EditCommand) -> Result<()> {
     let workload = find_workload(&config.workload)
         .canonicalize()
         .unwrap_or_else(|_| config.workload.to_path_buf());
-    File::open(&workload).map_err(|err| LatteError::ScriptRead(workload.clone(), err))?;
+    File::open(&workload).map_err(|err| LatteError::ScriptRead(workload.clone(), err.into()))?;
     edit_workload(workload)
 }
 
@@ -508,9 +510,18 @@ fn setup_logging(run_id: &str, config: &AppConfig) -> Result<WorkerGuard> {
         .map_err(|e| LatteError::LogFileCreate(log_file.clone(), e))?;
     let log_file = File::create(&log_file).map_err(|e| LatteError::LogFileCreate(log_file, e))?;
     let (non_blocking, guard) = tracing_appender::non_blocking(log_file);
+
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .with_env_var("LATTE_LOG")
+        .from_env()
+        .map_err(|e| LatteError::Configuration(e.to_string()))?
+        .add_directive("rune=off".parse().unwrap()); // turn off rune tracing for performance reasons
+
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_writer(non_blocking)
+        .with_env_filter(filter)
         .init();
     Ok(guard)
 }
