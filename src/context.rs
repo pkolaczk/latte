@@ -451,18 +451,26 @@ impl Context {
             .session
             .query(cql, ())
             .await
-            .map_err(|e| CassError::query_execution_error(cql, &[], e))?;
-        if let Some(rows) = rs.rows {
-            if let Some(row) = rows.into_iter().next() {
-                if let Ok((name, cassandra_version)) = row.into_typed() {
-                    return Ok(Some(ClusterInfo {
-                        name,
-                        cassandra_version,
-                    }));
+            .map_err(|e| CassError::query_execution_error(cql, &[], e));
+        match rs {
+            Ok(rs) => {
+                if let Some(rows) = rs.rows {
+                    if let Some(row) = rows.into_iter().next() {
+                        if let Ok((name, cassandra_version)) = row.into_typed() {
+                            return Ok(Some(ClusterInfo {
+                                name,
+                                cassandra_version,
+                            }));
+                        }
+                    }
                 }
+                Ok(None)
+            }
+            Err(e) => {
+                eprintln!("WARNING: {e}", e=e);
+                Ok(None)
             }
         }
-        Ok(None)
     }
 
     /// Prepares a statement and stores it in an internal statement map for future use.
