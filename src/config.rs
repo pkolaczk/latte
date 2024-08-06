@@ -2,9 +2,11 @@ use anyhow::anyhow;
 use chrono::Utc;
 use clap::builder::PossibleValue;
 use clap::{Parser, ValueEnum};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -264,6 +266,44 @@ impl ValueEnum for Consistency {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WeightedFunction {
+    pub name: String,
+    pub weight: f64,
+}
+
+impl FromStr for WeightedFunction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if !s.contains(':') {
+            Ok(Self {
+                name: s.to_string(),
+                weight: 1.0,
+            })
+        } else if let Some((name, weight)) = s.split(':').collect_tuple() {
+            let weight: f64 = weight
+                .parse()
+                .map_err(|e| format!("Invalid weight value: {e}"))?;
+            if weight < 0.0 {
+                return Err("Weight must be greater or equal 0.0".to_string());
+            }
+            Ok(Self {
+                name: name.to_string(),
+                weight,
+            })
+        } else {
+            Err("Failed to parse function specification. Expected <NAME>[:WEIGHT]".to_string())
+        }
+    }
+}
+
+impl Display for WeightedFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.name, self.weight)
+    }
+}
+
 #[derive(Parser, Debug, Serialize, Deserialize)]
 #[command(next_line_help = true)]
 pub struct EditCommand {
@@ -378,7 +418,7 @@ pub struct RunCommand {
     pub sampling_interval: Interval,
 
     /// Label that will be added to the report to help identifying the test
-    #[clap(long("tag"), number_of_values = 1)]
+    #[clap(long("tag"), value_delimiter = ',')]
     pub tags: Vec<String>,
 
     /// Path to an output file or directory where the JSON report should be written to.
@@ -395,8 +435,14 @@ pub struct RunCommand {
     pub workload: PathBuf,
 
     /// Function of the workload to invoke.
-    #[clap(long, short('f'), required = false, default_value = "run")]
-    pub function: String,
+    #[clap(
+        long,
+        short('f'),
+        required = false,
+        default_value = "run",
+        value_delimiter = ','
+    )]
+    pub functions: Vec<WeightedFunction>,
 
     /// Parameter values passed to the workload, accessible through param! macro.
     #[clap(short('P'), value_parser = parse_key_val::<String, String>, number_of_values = 1)]
@@ -453,7 +499,7 @@ pub struct ListCommand {
     pub function: Option<String>,
 
     /// Lists only the runs with specified tags.
-    #[clap(long("tag"), number_of_values = 1)]
+    #[clap(long("tag"), value_delimiter = ',')]
     pub tags: Vec<String>,
 
     /// Path to JSON reports directory where the JSON reports were written to.

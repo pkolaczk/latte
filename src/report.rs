@@ -1,4 +1,4 @@
-use crate::config::RunCommand;
+use crate::config::{RunCommand, WeightedFunction};
 use crate::stats::{
     BenchmarkCmp, BenchmarkStats, Bucket, Mean, Percentile, Sample, Significance, TimeDistribution,
 };
@@ -69,7 +69,12 @@ impl Report {
     pub fn summary(&self) -> Summary {
         Summary {
             workload: self.conf.workload.clone(),
-            function: self.conf.function.clone(),
+            functions: self
+                .conf
+                .functions
+                .iter()
+                .map(WeightedFunction::to_string)
+                .join(", "),
             timestamp: self
                 .conf
                 .timestamp
@@ -502,6 +507,12 @@ impl<'a> Display for RunConfigCmp<'a> {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default()
             }),
+            self.line("Function(s)", "", |conf| {
+                conf.functions
+                    .iter()
+                    .map(WeightedFunction::to_string)
+                    .join(", ")
+            }),
             self.line("Consistency", "", |conf| {
                 conf.connection.consistency.scylla_consistency().to_string()
             }),
@@ -797,7 +808,7 @@ pub struct PathAndSummary(pub PathBuf, pub Summary);
 #[derive(Debug)]
 pub struct Summary {
     pub workload: PathBuf,
-    pub function: String,
+    pub functions: String,
     pub timestamp: Option<DateTime<Local>>,
     pub tags: Vec<String>,
     pub params: Vec<(String, String)>,
@@ -810,11 +821,11 @@ pub struct Summary {
 impl PathAndSummary {
     pub const COLUMNS: &'static [&'static str] = &[
         "File",
-        "Workload",
-        "Function",
         "Timestamp",
-        "Tags",
+        "Workload",
+        "Function(s)",
         "Params",
+        "Tags",
         "Rate",
         "Thrpt. [req/s]",
         "P50 [ms]",
@@ -834,7 +845,7 @@ impl Row for PathAndSummary {
                     .to_string_lossy()
                     .to_string(),
             ),
-            "Function" => Some(self.1.function.clone()),
+            "Function(s)" => Some(self.1.functions.clone()),
             "Timestamp" => self
                 .1
                 .timestamp

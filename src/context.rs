@@ -17,6 +17,7 @@ use metrohash::{MetroHash128, MetroHash64};
 use openssl::error::ErrorStack;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
 use rand::distributions::Distribution;
+use rand::prelude::ThreadRng;
 use rand::rngs::StdRng;
 use rand::{random, Rng, SeedableRng};
 use rune::alloc::fmt::TryWrite;
@@ -405,6 +406,7 @@ pub struct Context {
     pub load_cycle_count: u64,
     #[rune(get)]
     pub data: Value,
+    pub rng: ThreadRng,
 }
 
 // Needed, because Rune `Value` is !Send, as it may contain some internal pointers.
@@ -427,6 +429,7 @@ impl Context {
             retry_interval,
             load_cycle_count: 0,
             data: Value::Object(Shared::new(Object::new()).unwrap()),
+            rng: rand::thread_rng(),
         }
     }
 
@@ -443,6 +446,7 @@ impl Context {
             stats: TryLock::new(SessionStats::default()),
             data: deserialized,
             start_time: TryLock::new(*self.start_time.try_lock().unwrap()),
+            rng: rand::thread_rng(),
             ..*self
         })
     }
