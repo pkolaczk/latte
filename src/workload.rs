@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
+use std::mem;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +17,7 @@ use rune::compile::{CompileVisitor, MetaError, MetaRef};
 use rune::runtime::{AnyObj, Args, RuntimeContext, Shared, VmError, VmResult};
 use rune::termcolor::{ColorChoice, StandardStream};
 use rune::{vm_try, Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
+use serde::{Deserialize, Serialize};
 use try_lock::TryLock;
 
 use crate::error::LatteError;
@@ -69,10 +72,16 @@ impl<'a> ToValue for ContextRefMut<'a> {
 
 /// Stores the name and hash together.
 /// Name is used for message formatting, hash is used for fast function lookup.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FnRef {
-    name: String,
-    hash: rune::Hash,
+    pub name: String,
+    pub hash: rune::Hash,
+}
+
+impl Hash for FnRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.hash.hash(state);
+    }
 }
 
 impl FnRef {
@@ -364,12 +373,28 @@ impl CompileVisitor for ProgramMetadata {
 /// Tracks statistics of the Rune function invoked by the workload
 #[derive(Clone, Debug)]
 pub struct FnStats {
+    pub function: FnRef,
     pub call_count: u64,
     pub error_count: u64,
     pub call_times_ns: Histogram<u64>,
 }
 
 impl FnStats {
+    pub fn new(function: FnRef) -> FnStats {
+        FnStats {
+            function,
+            call_count: 0,
+            error_count: 0,
+            call_times_ns: Histogram::new(3).unwrap(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.call_count = 0;
+        self.error_count = 0;
+        self.call_times_ns.clear();
+    }
+
     pub fn operation_completed(&mut self, duration: Duration) {
         self.call_count += 1;
         self.call_times_ns
@@ -386,36 +411,67 @@ impl FnStats {
     }
 }
 
-impl Default for FnStats {
-    fn default() -> Self {
-        FnStats {
-            call_count: 0,
-            error_count: 0,
-            call_times_ns: Histogram::new(3).unwrap(),
-        }
-    }
-}
-
 /// Statistics of operations (function calls) and Cassandra requests.
 pub struct WorkloadStats {
     pub start_time: Instant,
     pub end_time: Instant,
-    pub function_stats: FnStats,
+    pub function_stats: Vec<FnStats>,
     pub session_stats: SessionStats,
 }
 
 /// Mutable part of Workload
-pub struct WorkloadState {
+pub struct FnStatsCollector {
     start_time: Instant,
-    fn_stats: FnStats,
+    fn_stats: Vec<FnStats>,
 }
 
-impl Default for WorkloadState {
-    fn default() -> Self {
-        WorkloadState {
-            start_time: Instant::now(),
-            fn_stats: Default::default(),
+impl FnStatsCollector {
+    pub fn new(functions: impl IntoIterator<Item = FnRef>) -> FnStatsCollector {
+        let mut fn_stats = Vec::new();
+        for f in functions {
+            fn_stats.push(FnStats::new(f));
         }
+        FnStatsCollector {
+            start_time: Instant::now(),
+            fn_stats,
+        }
+    }
+
+    pub fn functions(&self) -> impl Iterator<Item = FnRef> + '_ {
+        self.fn_stats.iter().map(|f| f.function.clone())
+    }
+
+    /// Records the duration of a successful operation
+    pub fn operation_completed(&mut self, function: &FnRef, duration: Duration) {
+        self.fn_stats_mut(function).operation_completed(duration);
+    }
+
+    /// Records the duration of a failed operation
+    pub fn operation_failed(&mut self, function: &FnRef, duration: Duration) {
+        self.fn_stats_mut(function).operation_failed(duration);
+    }
+
+    /// Finds the stats for given function.
+    /// The function must exist! Otherwise, it will panic.
+    fn fn_stats_mut(&mut self, function: &FnRef) -> &mut FnStats {
+        self.fn_stats
+            .iter_mut()
+            .find(|f| f.function.hash == function.hash)
+            .unwrap()
+    }
+
+    /// Clears any collected stats and sets the start time
+    pub fn reset(&mut self, start_time: Instant) {
+        self.fn_stats.iter_mut().for_each(FnStats::reset);
+        self.start_time = start_time;
+    }
+
+    /// Returns the collected stats and resets this object
+    pub fn take(&mut self, end_time: Instant) -> FnStatsCollector {
+        let mut state = FnStatsCollector::new(self.functions());
+        state.start_time = end_time;
+        mem::swap(self, &mut state);
+        state
     }
 }
 
@@ -423,16 +479,17 @@ pub struct Workload {
     context: Context,
     program: Program,
     router: FunctionRouter,
-    state: TryLock<WorkloadState>,
+    state: TryLock<FnStatsCollector>,
 }
 
 impl Workload {
     pub fn new(context: Context, program: Program, functions: &[(FnRef, f64)]) -> Workload {
+        let state = FnStatsCollector::new(functions.iter().map(|x| x.0.clone()));
         Workload {
             context,
             program,
             router: FunctionRouter::new(functions),
-            state: TryLock::new(WorkloadState::default()),
+            state: TryLock::new(state),
         }
     }
 
@@ -442,7 +499,9 @@ impl Workload {
             // make a deep copy to avoid congestion on Arc ref counts used heavily by Rune
             program: self.program.unshare(),
             router: self.router.clone(),
-            state: TryLock::new(WorkloadState::default()),
+            state: TryLock::new(FnStatsCollector::new(
+                self.state.try_lock().unwrap().functions(),
+            )),
         })
     }
 
@@ -454,26 +513,24 @@ impl Workload {
         let start_time = Instant::now();
         let mut rng = SmallRng::seed_from_u64(cycle as u64);
         let context = SessionRef::new(&self.context);
-        let result = self
-            .program
-            .async_call(self.router.select(&mut rng), (context, cycle))
-            .await;
+        let function = self.router.select(&mut rng);
+        let result = self.program.async_call(function, (context, cycle)).await;
         let end_time = Instant::now();
         let mut state = self.state.try_lock().unwrap();
         let duration = end_time - start_time;
         match result {
             Ok(_) => {
-                state.fn_stats.operation_completed(duration);
+                state.operation_completed(function, duration);
                 Ok((cycle, end_time))
             }
             Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_, _)))) => {
                 // don't stop on overload errors;
                 // they are being counted by the context stats anyways
-                state.fn_stats.operation_failed(duration);
+                state.operation_failed(function, duration);
                 Ok((cycle, end_time))
             }
             Err(e) => {
-                state.fn_stats.operation_failed(duration);
+                state.operation_failed(function, duration);
                 Err(e)
             }
         }
@@ -489,24 +546,20 @@ impl Workload {
     /// Needed for producing `WorkloadStats` with
     /// recorded start and end times of measurement.
     pub fn reset(&self, start_time: Instant) {
-        let mut state = self.state.try_lock().unwrap();
-        state.fn_stats = FnStats::default();
-        state.start_time = start_time;
+        self.state.try_lock().unwrap().reset(start_time);
         self.context.reset();
     }
 
     /// Returns statistics of the operations invoked by this workload so far.
     /// Resets the internal statistic counters.
     pub fn take_stats(&self, end_time: Instant) -> WorkloadStats {
-        let mut state = self.state.try_lock().unwrap();
+        let state = self.state.try_lock().unwrap().take(end_time);
         let result = WorkloadStats {
             start_time: state.start_time,
             end_time,
             function_stats: state.fn_stats.clone(),
             session_stats: self.context().take_session_stats(),
         };
-        state.start_time = end_time;
-        state.fn_stats = FnStats::default();
         result
     }
 }

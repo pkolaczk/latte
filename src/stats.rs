@@ -1,6 +1,6 @@
 use chrono::{DateTime, Local};
 use std::cmp::min;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::time::{Instant, SystemTime};
 
@@ -275,19 +275,24 @@ pub struct Sample {
     pub row_throughput: f32,
     pub mean_cycle_time_ms: f32,
     pub mean_resp_time_ms: f32,
+
     pub cycle_time_percentiles: [f32; Percentile::COUNT],
+    pub cycle_time_histograms_ns: SerializableHistogram,
+
+    pub cycle_time_percentiles_by_fn: HashMap<String, [f32; Percentile::COUNT]>,
+    pub cycle_time_histograms_ns_by_fn: HashMap<String, SerializableHistogram>,
+
     pub resp_time_percentiles: [f32; Percentile::COUNT],
-    pub cycle_time_histogram_ns: SerializableHistogram,
     pub resp_time_histogram_ns: SerializableHistogram,
 }
 
 impl Sample {
     pub fn new(base_start_time: Instant, stats: &[WorkloadStats]) -> Sample {
         assert!(!stats.is_empty());
+
+        let create_histogram = || SerializableHistogram(Histogram::new(3).unwrap());
         let mut cycle_count = 0;
         let mut cycle_error_count = 0;
-        let mut cycle_times_ns = Histogram::new(3).unwrap();
-
         let mut request_count = 0;
         let mut req_retry_count = 0;
         let mut row_count = 0;
@@ -295,14 +300,13 @@ impl Sample {
         let mut req_error_count = 0;
         let mut mean_queue_len = 0.0;
         let mut duration_s = 0.0;
-        let mut resp_times_ns = Histogram::new(3).unwrap();
 
-        let mut cycle_time_histogram_ns = Histogram::new(3).unwrap();
-        let mut resp_time_histogram_ns = Histogram::new(3).unwrap();
+        let mut resp_times_ns = create_histogram();
+        let mut cycle_times_ns = create_histogram();
+        let mut cycle_times_ns_per_fn = HashMap::new();
 
         for s in stats {
             let ss = &s.session_stats;
-            let fs = &s.function_stats;
             request_count += ss.req_count;
             row_count += ss.row_count;
             if errors.len() < MAX_KEPT_ERRORS {
@@ -312,16 +316,27 @@ impl Sample {
             req_retry_count += ss.req_retry_count;
             mean_queue_len += ss.mean_queue_length / stats.len() as f32;
             duration_s += (s.end_time - s.start_time).as_secs_f32() / stats.len() as f32;
-            resp_times_ns.add(&ss.resp_times_ns).unwrap();
-            resp_time_histogram_ns.add(&ss.resp_times_ns).unwrap();
+            resp_times_ns.0.add(&ss.resp_times_ns).unwrap();
 
-            cycle_count += fs.call_count;
-            cycle_error_count = fs.error_count;
-            cycle_times_ns.add(&fs.call_times_ns).unwrap();
-            cycle_time_histogram_ns.add(&fs.call_times_ns).unwrap();
+            for fs in &s.function_stats {
+                cycle_count += fs.call_count;
+                cycle_error_count = fs.error_count;
+                cycle_times_ns.0.add(&fs.call_times_ns).unwrap();
+                cycle_times_ns_per_fn
+                    .entry(fs.function.name.clone())
+                    .or_insert_with(create_histogram)
+                    .0
+                    .add(&fs.call_times_ns)
+                    .unwrap();
+            }
         }
-        let resp_time_percentiles = percentiles_ms(&resp_times_ns);
-        let call_time_percentiles = percentiles_ms(&cycle_times_ns);
+        let resp_time_percentiles = percentiles_ms(&resp_times_ns.0);
+        let cycle_time_percentiles = percentiles_ms(&cycle_times_ns.0);
+
+        let mut cycle_time_percentiles_per_fn = HashMap::new();
+        for (fn_name, histogram) in &cycle_times_ns_per_fn {
+            cycle_time_percentiles_per_fn.insert(fn_name.to_owned(), percentiles_ms(&histogram.0));
+        }
 
         Sample {
             time_s: (stats[0].start_time - base_start_time).as_secs_f32(),
@@ -337,12 +352,14 @@ impl Sample {
             cycle_throughput: cycle_count as f32 / duration_s,
             req_throughput: request_count as f32 / duration_s,
             row_throughput: row_count as f32 / duration_s,
-            mean_cycle_time_ms: cycle_times_ns.mean() as f32 / 1000000.0,
-            cycle_time_histogram_ns: SerializableHistogram(cycle_time_histogram_ns),
-            cycle_time_percentiles: call_time_percentiles,
-            mean_resp_time_ms: resp_times_ns.mean() as f32 / 1000000.0,
+            mean_cycle_time_ms: cycle_times_ns.0.mean() as f32 / 1000000.0,
+            mean_resp_time_ms: resp_times_ns.0.mean() as f32 / 1000000.0,
             resp_time_percentiles,
-            resp_time_histogram_ns: SerializableHistogram(resp_time_histogram_ns),
+            resp_time_histogram_ns: resp_times_ns,
+            cycle_time_percentiles,
+            cycle_time_percentiles_by_fn: cycle_time_percentiles_per_fn,
+            cycle_time_histograms_ns: cycle_times_ns,
+            cycle_time_histograms_ns_by_fn: cycle_times_ns_per_fn,
         }
     }
 }
@@ -605,9 +622,10 @@ impl Recorder {
             self.resp_times_ns
                 .add(&s.session_stats.resp_times_ns)
                 .unwrap();
-            self.cycle_times_ns
-                .add(&s.function_stats.call_times_ns)
-                .unwrap();
+
+            for fs in &s.function_stats {
+                self.cycle_times_ns.add(&fs.call_times_ns).unwrap();
+            }
         }
         let stats = Sample::new(self.start_instant, samples);
         self.cycle_count += stats.cycle_count;
