@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use hdrhistogram::Histogram;
 use rand::distributions::{Distribution, WeightedIndex};
-use rand::rngs::StdRng;
+use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rune::alloc::clone::TryClone;
 use rune::compile::meta::Kind;
@@ -452,7 +452,7 @@ impl Workload {
     /// Returns the cycle number and the end time of the query.
     pub async fn run(&self, cycle: i64) -> Result<(i64, Instant), LatteError> {
         let start_time = Instant::now();
-        let mut rng = StdRng::seed_from_u64(cycle as u64);
+        let mut rng = SmallRng::seed_from_u64(cycle as u64);
         let context = SessionRef::new(&self.context);
         let result = self
             .program
