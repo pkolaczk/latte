@@ -459,7 +459,7 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
         let interval_start_time = Duration::from_millis((sample.time_s * 1000.0) as u64);
         let interval_duration = Duration::from_millis((sample.duration_s * 1000.0) as u64);
         log_writer.write_histogram(
-            &sample.cycle_time_histogram_ns.0,
+            &sample.cycle_time_histograms_ns.0,
             interval_start_time,
             interval_duration,
             Tag::new(format!("{tag_prefix}cycles").as_str()),
