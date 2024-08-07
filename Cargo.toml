@@ -34,7 +34,7 @@ openssl = "0.10.38"
 parse_duration = "2.1.1"
 pin-project = "1.1"
 plotters = { version = "0.3", default-features = false, features = ["line_series", "svg_backend", "full_palette"]}
-rand = "0.8"
+rand = { version = "0.8", default-features = false, features = ["small_rng", "std"] }
 regex = "1.5"
 rune = "0.13"
 rust-embed = "8"
