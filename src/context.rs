@@ -11,7 +11,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::Utc;
-use hdrhistogram::Histogram;
 use itertools::Itertools;
 use metrohash::{MetroHash128, MetroHash64};
 use openssl::error::ErrorStack;
@@ -42,6 +41,7 @@ use try_lock::TryLock;
 use uuid::{Variant, Version};
 
 use crate::config::{ConnectionConf, RetryDelay};
+use crate::latency::LatencyDistributionRecorder;
 use crate::LatteError;
 
 fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
@@ -309,7 +309,7 @@ pub struct SessionStats {
     pub row_count: u64,
     pub queue_length: u64,
     pub mean_queue_length: f32,
-    pub resp_times_ns: Histogram<u64>,
+    pub resp_times_ns: LatencyDistributionRecorder,
 }
 
 impl SessionStats {
@@ -333,8 +333,7 @@ impl SessionStats {
         retries: u64,
     ) {
         self.queue_length -= 1;
-        let duration_ns = duration.as_nanos().clamp(1, u64::MAX as u128) as u64;
-        self.resp_times_ns.record(duration_ns).unwrap();
+        self.resp_times_ns.record(duration);
         self.req_count += 1;
         self.req_retry_count += retries;
         match rs {
@@ -371,7 +370,7 @@ impl Default for SessionStats {
             row_count: 0,
             queue_length: 0,
             mean_queue_length: 0.0,
-            resp_times_ns: Histogram::new(3).unwrap(),
+            resp_times_ns: LatencyDistributionRecorder::default(),
         }
     }
 }

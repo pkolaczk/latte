@@ -39,6 +39,7 @@ use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
 use crate::table::{Alignment, Table};
 use crate::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN};
 
+mod autocorrelation;
 mod chunks;
 mod config;
 mod context;
@@ -46,6 +47,8 @@ mod cycle;
 mod error;
 mod exec;
 mod histogram;
+mod latency;
+mod percentiles;
 mod plot;
 mod progress;
 mod report;
@@ -459,13 +462,13 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
         let interval_start_time = Duration::from_millis((sample.time_s * 1000.0) as u64);
         let interval_duration = Duration::from_millis((sample.duration_s * 1000.0) as u64);
         log_writer.write_histogram(
-            &sample.cycle_time_histograms_ns.0,
+            &sample.cycle_latency.histogram.0,
             interval_start_time,
             interval_duration,
             Tag::new(format!("{tag_prefix}cycles").as_str()),
         )?;
         log_writer.write_histogram(
-            &sample.resp_time_histogram_ns.0,
+            &sample.request_latency.histogram.0,
             interval_start_time,
             interval_duration,
             Tag::new(format!("{tag_prefix}requests").as_str()),

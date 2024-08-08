@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use hdrhistogram::Histogram;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -21,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use try_lock::TryLock;
 
 use crate::error::LatteError;
+use crate::latency::LatencyDistributionRecorder;
 use crate::{context, CassError, CassErrorKind, Context, SessionStats};
 
 /// Wraps a reference to Session that can be converted to a Rune `Value`
@@ -376,7 +376,7 @@ pub struct FnStats {
     pub function: FnRef,
     pub call_count: u64,
     pub error_count: u64,
-    pub call_times_ns: Histogram<u64>,
+    pub cycle_latency: LatencyDistributionRecorder,
 }
 
 impl FnStats {
@@ -385,29 +385,25 @@ impl FnStats {
             function,
             call_count: 0,
             error_count: 0,
-            call_times_ns: Histogram::new(3).unwrap(),
+            cycle_latency: LatencyDistributionRecorder::default(),
         }
     }
 
     pub fn reset(&mut self) {
         self.call_count = 0;
         self.error_count = 0;
-        self.call_times_ns.clear();
+        self.cycle_latency.clear();
     }
 
     pub fn operation_completed(&mut self, duration: Duration) {
         self.call_count += 1;
-        self.call_times_ns
-            .record(duration.as_nanos().clamp(1, u64::MAX as u128) as u64)
-            .unwrap();
+        self.cycle_latency.record(duration)
     }
 
     pub fn operation_failed(&mut self, duration: Duration) {
         self.call_count += 1;
         self.error_count += 1;
-        self.call_times_ns
-            .record(duration.as_nanos().clamp(1, u64::MAX as u128) as u64)
-            .unwrap();
+        self.cycle_latency.record(duration);
     }
 }
 

@@ -1,7 +1,6 @@
 use crate::config::{RunCommand, WeightedFunction};
-use crate::stats::{
-    BenchmarkCmp, BenchmarkStats, Bucket, Mean, Percentile, Sample, Significance, TimeDistribution,
-};
+use crate::percentiles::Percentile;
+use crate::stats::{BenchmarkCmp, BenchmarkStats, Mean, Sample, Significance};
 use crate::table::Row;
 use chrono::{DateTime, Local, TimeZone};
 use console::{pad_str, style, Alignment};
@@ -9,7 +8,6 @@ use core::fmt;
 use err_derive::*;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use statrs::statistics::Statistics;
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::io::{BufReader, BufWriter};
@@ -85,14 +83,14 @@ impl Report {
             throughput: self.result.cycle_throughput.value,
             latency_p50: self
                 .result
-                .resp_time_ms
+                .request_latency
                 .as_ref()
-                .map(|t| t.percentiles[Percentile::P50 as usize].value),
+                .map(|t| t.percentiles.get(Percentile::P50).value),
             latency_p99: self
                 .result
-                .resp_time_ms
+                .request_latency
                 .as_ref()
-                .map(|t| t.percentiles[Percentile::P99 as usize].value),
+                .map(|t| t.percentiles.get(Percentile::P99).value),
         }
     }
 }
@@ -158,18 +156,6 @@ impl From<Option<Mean>> for Quantity<f64> {
     fn from(m: Option<Mean>) -> Self {
         Quantity::new(m.map(|mean| mean.value))
             .with_error(m.and_then(|mean| mean.std_err.map(|e| e * ERR_MARGIN)))
-    }
-}
-
-impl From<&TimeDistribution> for Quantity<f64> {
-    fn from(td: &TimeDistribution) -> Self {
-        Quantity::from(td.mean)
-    }
-}
-
-impl From<&Option<TimeDistribution>> for Quantity<f64> {
-    fn from(td: &Option<TimeDistribution>) -> Self {
-        Quantity::from(td.as_ref().map(|td| td.mean))
     }
 }
 
@@ -611,14 +597,14 @@ impl Display for Sample {
             self.cycle_count,
             self.cycle_error_count,
             self.cycle_throughput,
-            self.cycle_time_percentiles[Percentile::Min as usize],
-            self.cycle_time_percentiles[Percentile::P25 as usize],
-            self.cycle_time_percentiles[Percentile::P50 as usize],
-            self.cycle_time_percentiles[Percentile::P75 as usize],
-            self.cycle_time_percentiles[Percentile::P90 as usize],
-            self.cycle_time_percentiles[Percentile::P99 as usize],
-            self.cycle_time_percentiles[Percentile::P99_9 as usize],
-            self.cycle_time_percentiles[Percentile::Max as usize]
+            self.cycle_latency.percentiles.get(Percentile::Min).value,
+            self.cycle_latency.percentiles.get(Percentile::P25).value,
+            self.cycle_latency.percentiles.get(Percentile::P50).value,
+            self.cycle_latency.percentiles.get(Percentile::P75).value,
+            self.cycle_latency.percentiles.get(Percentile::P90).value,
+            self.cycle_latency.percentiles.get(Percentile::P99).value,
+            self.cycle_latency.percentiles.get(Percentile::P99_9).value,
+            self.cycle_latency.percentiles.get(Percentile::Max).value
         )
     }
 }
@@ -676,14 +662,6 @@ impl<'a> Display for BenchmarkCmp<'a> {
             self.line("└─", "row/req", |s| {
                 Quantity::from(s.row_count_per_req).with_precision(1)
             }),
-            self.line("Samples", "", |s| Quantity::from(s.log.len())),
-            self.line("Mean sample size", "op", |s| {
-                Quantity::from(s.log.iter().map(|s| s.cycle_count as f64).mean()).with_precision(0)
-            }),
-            self.line("└─", "req", |s| {
-                Quantity::from(s.log.iter().map(|s| s.request_count as f64).mean())
-                    .with_precision(0)
-            }),
             self.line("Concurrency", "req", |s| {
                 Quantity::from(s.concurrency).with_precision(0)
             }),
@@ -708,14 +686,14 @@ impl<'a> Display for BenchmarkCmp<'a> {
             .with_significance(self.cmp_row_throughput())
             .with_orientation(1)
             .into_box(),
-            self.line("Mean cycle time", "ms", |s| {
-                Quantity::from(&s.cycle_time_ms).with_precision(3)
+            self.line("Cycle latency", "ms", |s| {
+                Quantity::from(s.cycle_latency.mean).with_precision(3)
             })
             .with_significance(self.cmp_mean_resp_time())
             .with_orientation(-1)
             .into_box(),
-            self.line("Mean resp. time", "ms", |s| {
-                Quantity::from(s.resp_time_ms.as_ref().map(|rt| rt.mean)).with_precision(3)
+            self.line("Request latency", "ms", |s| {
+                Quantity::from(s.request_latency.as_ref().map(|rt| rt.mean)).with_precision(3)
             })
             .with_significance(self.cmp_mean_resp_time())
             .with_orientation(-1)
@@ -727,68 +705,35 @@ impl<'a> Display for BenchmarkCmp<'a> {
         }
         writeln!(f)?;
 
-        if self.v1.request_count > 0 {
-            let resp_time_percentiles = [
-                Percentile::Min,
-                Percentile::P25,
-                Percentile::P50,
-                Percentile::P75,
-                Percentile::P90,
-                Percentile::P95,
-                Percentile::P98,
-                Percentile::P99,
-                Percentile::P99_9,
-                Percentile::P99_99,
-                Percentile::Max,
-            ];
-            writeln!(f)?;
-            writeln!(f, "{}", fmt_section_header("RESPONSE TIMES [ms]"))?;
-            if self.v2.is_some() {
-                writeln!(f, "{}", fmt_cmp_header(true))?;
-            }
+        let resp_time_percentiles = [
+            Percentile::Min,
+            Percentile::P25,
+            Percentile::P50,
+            Percentile::P75,
+            Percentile::P90,
+            Percentile::P95,
+            Percentile::P98,
+            Percentile::P99,
+            Percentile::P99_9,
+            Percentile::P99_99,
+            Percentile::Max,
+        ];
 
-            for p in resp_time_percentiles.iter() {
-                let l = self
-                    .line(p.name(), "", |s| {
-                        let rt = s
-                            .resp_time_ms
-                            .as_ref()
-                            .map(|rt| rt.percentiles[*p as usize]);
-                        Quantity::from(rt).with_precision(3)
-                    })
-                    .with_orientation(-1)
-                    .with_significance(self.cmp_resp_time_percentile(*p));
-                writeln!(f, "{l}")?;
-            }
+        writeln!(f)?;
+        writeln!(f, "{}", fmt_section_header("CYCLE LATENCY [ms]"))?;
+        if self.v2.is_some() {
+            writeln!(f, "{}", fmt_cmp_header(true))?;
+        }
 
-            writeln!(f)?;
-            writeln!(f, "{}", fmt_section_header("RESPONSE TIME DISTRIBUTION"))?;
-            writeln!(f, "{}", style("── Resp. time [ms] ──  ────────────────────────────────────────────── Count ────────────────────────────────────────────────").yellow().bold().for_stdout())?;
-            let zero = Bucket {
-                percentile: 0.0,
-                duration_ms: 0.0,
-                count: 0,
-                cumulative_count: 0,
-            };
-            let dist = &self.v1.resp_time_ms.as_ref().unwrap().distribution;
-            let max_count = dist.iter().map(|b| b.count).max().unwrap_or(1);
-            for (low, high) in ([zero].iter().chain(dist)).tuple_windows() {
-                writeln!(
-                    f,
-                    "{:8.1} {} {:8.1}  {:9} {:6.2}%  {}",
-                    style(low.duration_ms).yellow().for_stdout(),
-                    style("...").yellow().for_stdout(),
-                    style(high.duration_ms).yellow().for_stdout(),
-                    high.count,
-                    high.percentile - low.percentile,
-                    style("▪".repeat((82 * high.count / max_count) as usize))
-                        .dim()
-                        .for_stdout()
-                )?;
-                if high.cumulative_count == self.v1.request_count {
-                    break;
-                }
-            }
+        for p in resp_time_percentiles.iter() {
+            let l = self
+                .line(p.name(), "", |s| {
+                    let rt = s.request_latency.as_ref().map(|rt| rt.percentiles.get(*p));
+                    Quantity::from(rt).with_precision(3)
+                })
+                .with_orientation(-1)
+                .with_significance(self.cmp_resp_time_percentile(*p));
+            writeln!(f, "{l}")?;
         }
 
         if self.v1.error_count > 0 {
