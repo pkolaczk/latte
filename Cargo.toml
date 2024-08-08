@@ -29,12 +29,14 @@ itertools = "0.13"
 jemallocator = "0.5"
 lazy_static = "1.4.0"
 metrohash = "1.0"
+more-asserts = "0.3"
 num_cpus = "1.13.0"
 openssl = "0.10.38"
 parse_duration = "2.1.1"
 pin-project = "1.1"
 plotters = { version = "0.3", default-features = false, features = ["line_series", "svg_backend", "full_palette"]}
 rand = { version = "0.8", default-features = false, features = ["small_rng", "std"] }
+rand_distr = "0.4"
 regex = "1.5"
 rune = "0.13"
 rust-embed = "8"
@@ -57,6 +59,8 @@ uuid = { version = "1.1", features = ["v4"] }
 walkdir = "2"
 
 [dev-dependencies]
+assert_approx_eq = "1"
+rstest = "0.22"
 tokio = { version = "1", features = ["rt", "test-util", "macros"] }
 
 [profile.release]

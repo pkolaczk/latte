@@ -4,15 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::time::{Instant, SystemTime};
 
+use crate::latency::{LatencyDistribution, LatencyDistributionRecorder};
+use crate::percentiles::Percentile;
+use crate::workload::WorkloadStats;
 use cpu_time::ProcessTime;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{ContinuousCDF, StudentsT};
-use strum::IntoEnumIterator;
-use strum::{EnumCount, EnumIter};
-
-use crate::histogram::SerializableHistogram;
-use crate::workload::WorkloadStats;
 
 /// Controls the maximum order of autocovariance taken into
 /// account when estimating the long run mean error. Higher values make the estimator
@@ -97,14 +95,6 @@ pub fn long_run_err(mean: f64, values: &[f32], weights: &[f32]) -> f64 {
     (long_run_variance(mean, values, weights) / values.len() as f64).sqrt()
 }
 
-fn percentiles_ms(hist: &Histogram<u64>) -> [f32; Percentile::COUNT] {
-    let mut percentiles = [0.0; Percentile::COUNT];
-    for (i, p) in Percentile::iter().enumerate() {
-        percentiles[i] = hist.value_at_percentile(p.value()) as f32 / 1000000.0;
-    }
-    percentiles
-}
-
 /// Holds a mean and its error together.
 /// Makes it more convenient to compare means and it also reduces the number
 /// of fields, because we don't have to keep the values and the errors in separate fields.
@@ -122,6 +112,18 @@ impl Mean {
             n: v.len() as u64,
             value: m,
             std_err: not_nan(long_run_err(m, v, weights)),
+        }
+    }
+
+    pub fn from(h: &Histogram<u64>, scale: f64, effective_n: u64) -> Mean {
+        Mean {
+            n: effective_n,
+            value: h.mean() * scale,
+            std_err: if effective_n > 1 {
+                Some(h.stdev() * scale / (effective_n as f64 - 1.0).sqrt())
+            } else {
+                None
+            },
         }
     }
 }
@@ -160,21 +162,6 @@ pub fn t_test(mean1: &Mean, mean2: &Mean) -> f64 {
     }
 }
 
-fn distribution(hist: &Histogram<u64>) -> Vec<Bucket> {
-    let mut result = Vec::new();
-    if !hist.is_empty() {
-        for x in hist.iter_log(100000, 2.15443469) {
-            result.push(Bucket {
-                percentile: x.percentile(),
-                duration_ms: x.value_iterated_to() as f64 / 1000000.0,
-                count: x.count_since_last_iteration(),
-                cumulative_count: x.count_at_value(),
-            });
-        }
-    }
-    result
-}
-
 /// Converts NaN to None.
 fn not_nan(x: f64) -> Option<f64> {
     if x.is_nan() {
@@ -195,68 +182,6 @@ fn not_nan_f32(x: f32) -> Option<f32> {
 
 const MAX_KEPT_ERRORS: usize = 10;
 
-#[allow(non_camel_case_types)]
-#[derive(Copy, Clone, EnumIter, EnumCount)]
-pub enum Percentile {
-    Min = 0,
-    P1,
-    P2,
-    P5,
-    P10,
-    P25,
-    P50,
-    P75,
-    P90,
-    P95,
-    P98,
-    P99,
-    P99_9,
-    P99_99,
-    Max,
-}
-
-impl Percentile {
-    pub fn value(&self) -> f64 {
-        match self {
-            Percentile::Min => 0.0,
-            Percentile::P1 => 1.0,
-            Percentile::P2 => 2.0,
-            Percentile::P5 => 5.0,
-            Percentile::P10 => 10.0,
-            Percentile::P25 => 25.0,
-            Percentile::P50 => 50.0,
-            Percentile::P75 => 75.0,
-            Percentile::P90 => 90.0,
-            Percentile::P95 => 95.0,
-            Percentile::P98 => 98.0,
-            Percentile::P99 => 99.0,
-            Percentile::P99_9 => 99.9,
-            Percentile::P99_99 => 99.99,
-            Percentile::Max => 100.0,
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Percentile::Min => "  Min   ",
-            Percentile::P1 => "    1   ",
-            Percentile::P2 => "    2   ",
-            Percentile::P5 => "    5   ",
-            Percentile::P10 => "   10   ",
-            Percentile::P25 => "   25   ",
-            Percentile::P50 => "   50   ",
-            Percentile::P75 => "   75   ",
-            Percentile::P90 => "   90   ",
-            Percentile::P95 => "   95   ",
-            Percentile::P98 => "   98   ",
-            Percentile::P99 => "   99   ",
-            Percentile::P99_9 => "   99.9 ",
-            Percentile::P99_99 => "  99.99",
-            Percentile::Max => "  Max   ",
-        }
-    }
-}
-
 /// Records basic statistics for a sample (a group) of requests
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Sample {
@@ -273,24 +198,16 @@ pub struct Sample {
     pub cycle_throughput: f32,
     pub req_throughput: f32,
     pub row_throughput: f32,
-    pub mean_cycle_time_ms: f32,
-    pub mean_resp_time_ms: f32,
 
-    pub cycle_time_percentiles: [f32; Percentile::COUNT],
-    pub cycle_time_histograms_ns: SerializableHistogram,
-
-    pub cycle_time_percentiles_by_fn: HashMap<String, [f32; Percentile::COUNT]>,
-    pub cycle_time_histograms_ns_by_fn: HashMap<String, SerializableHistogram>,
-
-    pub resp_time_percentiles: [f32; Percentile::COUNT],
-    pub resp_time_histogram_ns: SerializableHistogram,
+    pub cycle_latency: LatencyDistribution,
+    pub cycle_latency_by_fn: HashMap<String, LatencyDistribution>,
+    pub request_latency: LatencyDistribution,
 }
 
 impl Sample {
     pub fn new(base_start_time: Instant, stats: &[WorkloadStats]) -> Sample {
         assert!(!stats.is_empty());
 
-        let create_histogram = || SerializableHistogram(Histogram::new(3).unwrap());
         let mut cycle_count = 0;
         let mut cycle_error_count = 0;
         let mut request_count = 0;
@@ -301,9 +218,9 @@ impl Sample {
         let mut mean_queue_len = 0.0;
         let mut duration_s = 0.0;
 
-        let mut resp_times_ns = create_histogram();
-        let mut cycle_times_ns = create_histogram();
-        let mut cycle_times_ns_per_fn = HashMap::new();
+        let mut request_latency = LatencyDistributionRecorder::default();
+        let mut cycle_latency = LatencyDistributionRecorder::default();
+        let mut cycle_latency_per_fn = HashMap::<String, LatencyDistributionRecorder>::new();
 
         for s in stats {
             let ss = &s.session_stats;
@@ -316,26 +233,17 @@ impl Sample {
             req_retry_count += ss.req_retry_count;
             mean_queue_len += ss.mean_queue_length / stats.len() as f32;
             duration_s += (s.end_time - s.start_time).as_secs_f32() / stats.len() as f32;
-            resp_times_ns.0.add(&ss.resp_times_ns).unwrap();
+            request_latency.add(&ss.resp_times_ns);
 
             for fs in &s.function_stats {
                 cycle_count += fs.call_count;
                 cycle_error_count = fs.error_count;
-                cycle_times_ns.0.add(&fs.call_times_ns).unwrap();
-                cycle_times_ns_per_fn
+                cycle_latency.add(&fs.cycle_latency);
+                cycle_latency_per_fn
                     .entry(fs.function.name.clone())
-                    .or_insert_with(create_histogram)
-                    .0
-                    .add(&fs.call_times_ns)
-                    .unwrap();
+                    .or_default()
+                    .add(&fs.cycle_latency);
             }
-        }
-        let resp_time_percentiles = percentiles_ms(&resp_times_ns.0);
-        let cycle_time_percentiles = percentiles_ms(&cycle_times_ns.0);
-
-        let mut cycle_time_percentiles_per_fn = HashMap::new();
-        for (fn_name, histogram) in &cycle_times_ns_per_fn {
-            cycle_time_percentiles_per_fn.insert(fn_name.to_owned(), percentiles_ms(&histogram.0));
         }
 
         Sample {
@@ -349,17 +257,18 @@ impl Sample {
             req_error_count,
             row_count,
             mean_queue_len: not_nan_f32(mean_queue_len).unwrap_or(0.0),
+
             cycle_throughput: cycle_count as f32 / duration_s,
             req_throughput: request_count as f32 / duration_s,
             row_throughput: row_count as f32 / duration_s,
-            mean_cycle_time_ms: cycle_times_ns.0.mean() as f32 / 1000000.0,
-            mean_resp_time_ms: resp_times_ns.0.mean() as f32 / 1000000.0,
-            resp_time_percentiles,
-            resp_time_histogram_ns: resp_times_ns,
-            cycle_time_percentiles,
-            cycle_time_percentiles_by_fn: cycle_time_percentiles_per_fn,
-            cycle_time_histograms_ns: cycle_times_ns,
-            cycle_time_histograms_ns_by_fn: cycle_times_ns_per_fn,
+
+            cycle_latency: cycle_latency.distribution(),
+            cycle_latency_by_fn: cycle_latency_per_fn
+                .into_iter()
+                .map(|(k, v)| (k, v.distribution()))
+                .collect(),
+
+            request_latency: request_latency.distribution(),
         }
     }
 }
@@ -379,10 +288,6 @@ impl Log {
     fn append(&mut self, sample: Sample) -> &Sample {
         self.samples.push(sample);
         self.samples.last().unwrap()
-    }
-
-    fn weights_by_call_count(&self) -> Vec<f32> {
-        self.samples.iter().map(|s| s.cycle_count as f32).collect()
     }
 
     fn weights_by_request_count(&self) -> Vec<f32> {
@@ -410,38 +315,6 @@ impl Log {
         Mean::compute(t.as_slice(), w.as_slice())
     }
 
-    fn resp_time_ms(&self) -> Mean {
-        let t: Vec<f32> = self.samples.iter().map(|s| s.mean_resp_time_ms).collect();
-        let w = self.weights_by_request_count();
-        Mean::compute(t.as_slice(), w.as_slice())
-    }
-
-    fn resp_time_percentile(&self, p: Percentile) -> Mean {
-        let t: Vec<f32> = self
-            .samples
-            .iter()
-            .map(|s| s.resp_time_percentiles[p as usize])
-            .collect();
-        let w = self.weights_by_request_count();
-        Mean::compute(t.as_slice(), w.as_slice())
-    }
-
-    fn cycle_time_ms(&self) -> Mean {
-        let t: Vec<f32> = self.samples.iter().map(|s| s.mean_cycle_time_ms).collect();
-        let w = self.weights_by_call_count();
-        Mean::compute(t.as_slice(), w.as_slice())
-    }
-
-    fn cycle_time_percentile(&self, p: Percentile) -> Mean {
-        let t: Vec<f32> = self
-            .samples
-            .iter()
-            .map(|s| s.cycle_time_percentiles[p as usize])
-            .collect();
-        let w = self.weights_by_call_count();
-        Mean::compute(t.as_slice(), w.as_slice())
-    }
-
     fn mean_concurrency(&self) -> Mean {
         let p: Vec<f32> = self.samples.iter().map(|s| s.mean_queue_len).collect();
         let w = self.weights_by_request_count();
@@ -456,21 +329,6 @@ impl Log {
             m
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Bucket {
-    pub percentile: f64,
-    pub duration_ms: f64,
-    pub count: u64,
-    pub cumulative_count: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TimeDistribution {
-    pub mean: Mean,
-    pub percentiles: Vec<Mean>,
-    pub distribution: Vec<Bucket>,
 }
 
 /// Stores the final statistics of the test run.
@@ -495,8 +353,9 @@ pub struct BenchmarkStats {
     pub cycle_throughput_ratio: Option<f64>,
     pub req_throughput: Mean,
     pub row_throughput: Mean,
-    pub cycle_time_ms: TimeDistribution,
-    pub resp_time_ms: Option<TimeDistribution>,
+    pub cycle_latency: LatencyDistribution,
+    pub cycle_latency_by_fn: HashMap<String, LatencyDistribution>,
+    pub request_latency: Option<LatencyDistribution>,
     pub concurrency: Mean,
     pub concurrency_ratio: f64,
     pub log: Vec<Sample>,
@@ -550,13 +409,13 @@ impl BenchmarkCmp<'_> {
     // Checks if mean response time of two benchmark runs are significantly different.
     // Returns None if the second benchmark is unset.
     pub fn cmp_mean_resp_time(&self) -> Option<Significance> {
-        self.cmp(|s| s.resp_time_ms.as_ref().map(|r| r.mean))
+        self.cmp(|s| s.request_latency.as_ref().map(|r| r.mean))
     }
 
     // Checks corresponding response time percentiles of two benchmark runs
     // are statistically different. Returns None if the second benchmark is unset.
     pub fn cmp_resp_time_percentile(&self, p: Percentile) -> Option<Significance> {
-        self.cmp(|s| s.resp_time_ms.as_ref().map(|r| r.percentiles[p as usize]))
+        self.cmp(|s| s.request_latency.as_ref().map(|r| r.percentiles.get(p)))
     }
 }
 
@@ -578,8 +437,9 @@ pub struct Recorder {
     pub errors: HashSet<String>,
     pub cycle_error_count: u64,
     pub row_count: u64,
-    pub cycle_times_ns: Histogram<u64>,
-    pub resp_times_ns: Histogram<u64>,
+    pub cycle_latency: LatencyDistributionRecorder,
+    pub cycle_latency_by_fn: HashMap<String, LatencyDistributionRecorder>,
+    pub request_latency: LatencyDistributionRecorder,
     log: Log,
     rate_limit: Option<f64>,
     concurrency_limit: NonZeroUsize,
@@ -609,8 +469,9 @@ impl Recorder {
             row_count: 0,
             errors: HashSet::new(),
             cycle_error_count: 0,
-            cycle_times_ns: Histogram::new(3).unwrap(),
-            resp_times_ns: Histogram::new(3).unwrap(),
+            cycle_latency: LatencyDistributionRecorder::default(),
+            cycle_latency_by_fn: HashMap::new(),
+            request_latency: LatencyDistributionRecorder::default(),
         }
     }
 
@@ -619,25 +480,27 @@ impl Recorder {
     pub fn record(&mut self, samples: &[WorkloadStats]) -> &Sample {
         assert!(!samples.is_empty());
         for s in samples.iter() {
-            self.resp_times_ns
-                .add(&s.session_stats.resp_times_ns)
-                .unwrap();
+            self.request_latency.add(&s.session_stats.resp_times_ns);
 
             for fs in &s.function_stats {
-                self.cycle_times_ns.add(&fs.call_times_ns).unwrap();
+                self.cycle_latency.add(&fs.cycle_latency);
+                self.cycle_latency_by_fn
+                    .entry(fs.function.name.clone())
+                    .or_default()
+                    .add(&fs.cycle_latency);
             }
         }
-        let stats = Sample::new(self.start_instant, samples);
-        self.cycle_count += stats.cycle_count;
-        self.cycle_error_count += stats.cycle_error_count;
-        self.request_count += stats.request_count;
-        self.request_retry_count += stats.req_retry_count;
-        self.request_error_count += stats.req_error_count;
-        self.row_count += stats.row_count;
+        let sample = Sample::new(self.start_instant, samples);
+        self.cycle_count += sample.cycle_count;
+        self.cycle_error_count += sample.cycle_error_count;
+        self.request_count += sample.request_count;
+        self.request_retry_count += sample.req_retry_count;
+        self.request_error_count += sample.req_error_count;
+        self.row_count += sample.row_count;
         if self.errors.len() < MAX_KEPT_ERRORS {
-            self.errors.extend(stats.req_errors.iter().cloned());
+            self.errors.extend(sample.req_errors.iter().cloned());
         }
-        self.log.append(stats)
+        self.log.append(sample)
     }
 
     /// Stops the recording, computes the statistics and returns them as the new object.
@@ -645,31 +508,20 @@ impl Recorder {
         self.end_time = SystemTime::now();
         self.end_instant = Instant::now();
         self.end_cpu_time = ProcessTime::now();
-        self.stats()
-    }
 
-    /// Computes the final statistics based on collected data
-    /// and turn them into report that can be serialized
-    fn stats(self) -> BenchmarkStats {
         let elapsed_time_s = (self.end_instant - self.start_instant).as_secs_f64();
         let cpu_time_s = self
             .end_cpu_time
             .duration_since(self.start_cpu_time)
             .as_secs_f64();
         let cpu_util = 100.0 * cpu_time_s / elapsed_time_s / num_cpus::get() as f64;
+
         let cycle_throughput = self.log.call_throughput();
         let cycle_throughput_ratio = self.rate_limit.map(|r| 100.0 * cycle_throughput.value / r);
         let req_throughput = self.log.req_throughput();
         let row_throughput = self.log.row_throughput();
         let concurrency = self.log.mean_concurrency();
         let concurrency_ratio = 100.0 * concurrency.value / self.concurrency_limit.get() as f64;
-
-        let cycle_time_percentiles: Vec<Mean> = Percentile::iter()
-            .map(|p| self.log.cycle_time_percentile(p))
-            .collect();
-        let resp_time_percentiles: Vec<Mean> = Percentile::iter()
-            .map(|p| self.log.resp_time_percentile(p))
-            .collect();
 
         BenchmarkStats {
             start_time: self.start_time.into(),
@@ -693,17 +545,14 @@ impl Recorder {
             cycle_throughput_ratio,
             req_throughput,
             row_throughput,
-            cycle_time_ms: TimeDistribution {
-                mean: self.log.cycle_time_ms(),
-                percentiles: cycle_time_percentiles,
-                distribution: distribution(&self.cycle_times_ns),
-            },
-            resp_time_ms: if self.request_count > 0 {
-                Some(TimeDistribution {
-                    mean: self.log.resp_time_ms(),
-                    percentiles: resp_time_percentiles,
-                    distribution: distribution(&self.resp_times_ns),
-                })
+            cycle_latency: self.cycle_latency.distribution_with_errors(),
+            cycle_latency_by_fn: self
+                .cycle_latency_by_fn
+                .into_iter()
+                .map(|(k, v)| (k, v.distribution_with_errors()))
+                .collect(),
+            request_latency: if self.request_count > 0 {
+                Some(self.request_latency.distribution_with_errors())
             } else {
                 None
             },

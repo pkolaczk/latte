@@ -260,7 +260,7 @@ fn resp_time_series(report: &Report, color_index: usize, percentiles: &[f64]) ->
         for (i, p) in percentiles.iter().enumerate() {
             let time = s.time_s;
             let resp_time_ms =
-                s.resp_time_histogram_ns.0.value_at_percentile(*p) as f32 / 1_000_000.0;
+                s.request_latency.histogram.0.value_at_percentile(*p) as f32 / 1_000_000.0;
             series[i].data.push((time, resp_time_ms));
         }
     }
