@@ -1,102 +1,20 @@
 use chrono::{DateTime, Local};
-use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
+use std::ops::Mul;
 use std::time::{Instant, SystemTime};
 
 use crate::latency::{LatencyDistribution, LatencyDistributionRecorder};
 use crate::percentiles::Percentile;
+use crate::throughput::ThroughputMeter;
+use crate::timeseries::TimeSeriesStats;
 use crate::workload::WorkloadStats;
 use cpu_time::ProcessTime;
-use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{ContinuousCDF, StudentsT};
 
-/// Controls the maximum order of autocovariance taken into
-/// account when estimating the long run mean error. Higher values make the estimator
-/// capture more autocorrelation from the signal, but also make the results
-/// more random. Lower values increase the bias (underestimation) of error, but offer smoother
-/// results for small N and better performance for large N.
-/// The value has been established empirically.
-/// Probably anything between 0.2 and 0.8 is good enough.
-/// Valid range is 0.0 to 1.0.
-const BANDWIDTH_COEFF: f64 = 0.5;
-
-/// Arithmetic weighted mean of values in the vector
-pub fn mean(values: &[f32], weights: &[f32]) -> f64 {
-    let sum_values = values
-        .iter()
-        .zip(weights)
-        .map(|(&v, &w)| (v as f64) * (w as f64))
-        .sum::<f64>();
-    let sum_weights = weights.iter().map(|&v| v as f64).sum::<f64>();
-    sum_values / sum_weights
-}
-
-/// Estimates the variance of the mean of a time-series.
-/// Takes into account the fact that the observations can be dependent on each other
-/// (i.e. there is a non-zero amount of auto-correlation in the signal).
-///
-/// Contrary to the classic variance estimator, the order of the
-/// data points does matter here. If the observations are totally independent from each other,
-/// the expected return value of this function is close to the expected sample variance.
-pub fn long_run_variance(mean: f64, values: &[f32], weights: &[f32]) -> f64 {
-    if values.len() <= 1 {
-        return f64::NAN;
-    }
-    let len = values.len() as f64;
-
-    // Compute the variance:
-    let mut sum_weights = 0.0;
-    let mut var = 0.0;
-    for (&v, &w) in values.iter().zip(weights) {
-        let diff = v as f64 - mean;
-        let w = w as f64;
-        var += diff * diff * w;
-        sum_weights += w;
-    }
-    var /= sum_weights;
-
-    // Compute a sum of autocovariances of orders 1 to (cutoff - 1).
-    // Cutoff (bandwidth) and diminishing weights are needed to reduce random error
-    // introduced by higher order autocovariance estimates.
-    let bandwidth = len.powf(BANDWIDTH_COEFF);
-    let max_lag = min(values.len(), bandwidth.ceil() as usize);
-    let mut cov_sum = 0.0;
-    for lag in 1..max_lag {
-        let weight = 1.0 - lag as f64 / values.len() as f64;
-        let mut cov = 0.0;
-        let mut sum_weights = 0.0;
-        for i in lag..values.len() {
-            let diff_1 = values[i] as f64 - mean;
-            let diff_2 = values[i - lag] as f64 - mean;
-            let w = weights[i] as f64 * weights[i - lag] as f64;
-            sum_weights += w;
-            cov += 2.0 * diff_1 * diff_2 * weight * w;
-        }
-        cov_sum += cov / sum_weights;
-    }
-
-    // It is possible that we end up with a negative sum of autocovariances here.
-    // But we don't want that because we're trying to estimate
-    // the worst-case error and for small N this situation is likely a random coincidence.
-    // Additionally, `var + cov` must be at least 0.0.
-    cov_sum = cov_sum.max(0.0);
-
-    // Correct bias for small n:
-    let inflation = 1.0 + cov_sum / (var + f64::MIN_POSITIVE);
-    let bias_correction = (inflation / len).exp();
-    bias_correction * (var + cov_sum)
-}
-
-/// Estimates the error of the mean of a time-series.
-/// See `long_run_variance`.
-pub fn long_run_err(mean: f64, values: &[f32], weights: &[f32]) -> f64 {
-    (long_run_variance(mean, values, weights) / values.len() as f64).sqrt()
-}
-
 /// Holds a mean and its error together.
-/// Makes it more convenient to compare means and it also reduces the number
+/// Makes it more convenient to compare means, and it also reduces the number
 /// of fields, because we don't have to keep the values and the errors in separate fields.
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Mean {
@@ -105,25 +23,14 @@ pub struct Mean {
     pub std_err: Option<f64>,
 }
 
-impl Mean {
-    pub fn compute(v: &[f32], weights: &[f32]) -> Self {
-        let m = mean(v, weights);
-        Mean {
-            n: v.len() as u64,
-            value: m,
-            std_err: not_nan(long_run_err(m, v, weights)),
-        }
-    }
+impl Mul<f64> for Mean {
+    type Output = Mean;
 
-    pub fn from(h: &Histogram<u64>, scale: f64, effective_n: u64) -> Mean {
+    fn mul(self, rhs: f64) -> Self::Output {
         Mean {
-            n: effective_n,
-            value: h.mean() * scale,
-            std_err: if effective_n > 1 {
-                Some(h.stdev() * scale / (effective_n as f64 - 1.0).sqrt())
-            } else {
-                None
-            },
+            n: self.n,
+            value: self.value * rhs,
+            std_err: self.std_err.map(|e| e * rhs),
         }
     }
 }
@@ -238,11 +145,11 @@ impl Sample {
             for fs in &s.function_stats {
                 cycle_count += fs.call_count;
                 cycle_error_count = fs.error_count;
-                cycle_latency.add(&fs.cycle_latency);
+                cycle_latency.add(&fs.call_latency);
                 cycle_latency_per_fn
                     .entry(fs.function.name.clone())
                     .or_default()
-                    .add(&fs.cycle_latency);
+                    .add(&fs.call_latency);
             }
         }
 
@@ -269,64 +176,6 @@ impl Sample {
                 .collect(),
 
             request_latency: request_latency.distribution(),
-        }
-    }
-}
-
-/// Collects the samples and computes aggregate statistics
-struct Log {
-    samples: Vec<Sample>,
-}
-
-impl Log {
-    fn new() -> Log {
-        Log {
-            samples: Vec::new(),
-        }
-    }
-
-    fn append(&mut self, sample: Sample) -> &Sample {
-        self.samples.push(sample);
-        self.samples.last().unwrap()
-    }
-
-    fn weights_by_request_count(&self) -> Vec<f32> {
-        self.samples
-            .iter()
-            .map(|s| s.request_count as f32)
-            .collect()
-    }
-
-    fn call_throughput(&self) -> Mean {
-        let t: Vec<f32> = self.samples.iter().map(|s| s.cycle_throughput).collect();
-        let w: Vec<f32> = self.samples.iter().map(|s| s.duration_s).collect();
-        Mean::compute(t.as_slice(), w.as_slice())
-    }
-
-    fn req_throughput(&self) -> Mean {
-        let t: Vec<f32> = self.samples.iter().map(|s| s.req_throughput).collect();
-        let w: Vec<f32> = self.samples.iter().map(|s| s.duration_s).collect();
-        Mean::compute(t.as_slice(), w.as_slice())
-    }
-
-    fn row_throughput(&self) -> Mean {
-        let t: Vec<f32> = self.samples.iter().map(|s| s.row_throughput).collect();
-        let w: Vec<f32> = self.samples.iter().map(|s| s.duration_s).collect();
-        Mean::compute(t.as_slice(), w.as_slice())
-    }
-
-    fn mean_concurrency(&self) -> Mean {
-        let p: Vec<f32> = self.samples.iter().map(|s| s.mean_queue_len).collect();
-        let w = self.weights_by_request_count();
-        let m = Mean::compute(p.as_slice(), w.as_slice());
-        if m.value.is_nan() {
-            Mean {
-                n: 0,
-                value: 0.0,
-                std_err: None,
-            }
-        } else {
-            m
         }
     }
 }
@@ -434,13 +283,15 @@ pub struct Recorder {
     pub request_count: u64,
     pub request_retry_count: u64,
     pub request_error_count: u64,
+    pub throughput_meter: ThroughputMeter,
     pub errors: HashSet<String>,
     pub cycle_error_count: u64,
     pub row_count: u64,
     pub cycle_latency: LatencyDistributionRecorder,
     pub cycle_latency_by_fn: HashMap<String, LatencyDistributionRecorder>,
     pub request_latency: LatencyDistributionRecorder,
-    log: Log,
+    pub concurrency_meter: TimeSeriesStats,
+    log: Vec<Sample>,
     rate_limit: Option<f64>,
     concurrency_limit: NonZeroUsize,
 }
@@ -459,7 +310,7 @@ impl Recorder {
             end_instant: start_instant,
             start_cpu_time: ProcessTime::now(),
             end_cpu_time: ProcessTime::now(),
-            log: Log::new(),
+            log: Vec::new(),
             rate_limit,
             concurrency_limit,
             cycle_count: 0,
@@ -472,6 +323,8 @@ impl Recorder {
             cycle_latency: LatencyDistributionRecorder::default(),
             cycle_latency_by_fn: HashMap::new(),
             request_latency: LatencyDistributionRecorder::default(),
+            throughput_meter: ThroughputMeter::default(),
+            concurrency_meter: TimeSeriesStats::default(),
         }
     }
 
@@ -483,11 +336,11 @@ impl Recorder {
             self.request_latency.add(&s.session_stats.resp_times_ns);
 
             for fs in &s.function_stats {
-                self.cycle_latency.add(&fs.cycle_latency);
+                self.cycle_latency.add(&fs.call_latency);
                 self.cycle_latency_by_fn
                     .entry(fs.function.name.clone())
                     .or_default()
-                    .add(&fs.cycle_latency);
+                    .add(&fs.call_latency);
             }
         }
         let sample = Sample::new(self.start_instant, samples);
@@ -497,10 +350,14 @@ impl Recorder {
         self.request_retry_count += sample.req_retry_count;
         self.request_error_count += sample.req_error_count;
         self.row_count += sample.row_count;
+        self.throughput_meter.record(sample.cycle_count);
+        self.concurrency_meter
+            .record(sample.mean_queue_len as f64, sample.duration_s as f64);
         if self.errors.len() < MAX_KEPT_ERRORS {
             self.errors.extend(sample.req_errors.iter().cloned());
         }
-        self.log.append(sample)
+        self.log.push(sample);
+        self.log.last().unwrap()
     }
 
     /// Stops the recording, computes the statistics and returns them as the new object.
@@ -516,11 +373,12 @@ impl Recorder {
             .as_secs_f64();
         let cpu_util = 100.0 * cpu_time_s / elapsed_time_s / num_cpus::get() as f64;
 
-        let cycle_throughput = self.log.call_throughput();
+        let cycle_throughput = self.throughput_meter.throughput();
         let cycle_throughput_ratio = self.rate_limit.map(|r| 100.0 * cycle_throughput.value / r);
-        let req_throughput = self.log.req_throughput();
-        let row_throughput = self.log.row_throughput();
-        let concurrency = self.log.mean_concurrency();
+        let req_throughput =
+            cycle_throughput * (self.request_count as f64 / self.cycle_count as f64);
+        let row_throughput = cycle_throughput * (self.row_count as f64 / self.cycle_count as f64);
+        let concurrency = self.concurrency_meter.mean();
         let concurrency_ratio = 100.0 * concurrency.value / self.concurrency_limit.get() as f64;
 
         BenchmarkStats {
@@ -558,71 +416,14 @@ impl Recorder {
             },
             concurrency,
             concurrency_ratio,
-            log: self.log.samples,
+            log: self.log,
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use rand::distributions::Distribution;
-    use rand::prelude::StdRng;
-    use rand::SeedableRng;
-    use statrs::distribution::Normal;
-    use statrs::statistics::Statistics;
-
     use crate::stats::{t_test, Mean};
-
-    /// Returns a random sample of size `len`.
-    /// All data points i.i.d with N(`mean`, `std_dev`).
-    fn random_vector(seed: usize, len: usize, mean: f64, std_dev: f64) -> Vec<f32> {
-        let mut rng = StdRng::seed_from_u64(seed as u64);
-        let distrib = Normal::new(mean, std_dev).unwrap();
-        (0..len).map(|_| distrib.sample(&mut rng) as f32).collect()
-    }
-
-    /// Introduces a strong dependency between the observations,
-    /// making it an AR(1) process
-    fn make_autocorrelated(v: &mut [f32]) {
-        for i in 1..v.len() {
-            v[i] = 0.01 * v[i] + 0.99 * v[i - 1];
-        }
-    }
-
-    /// Traditional standard error assuming i.i.d variables
-    fn reference_err(v: &[f32]) -> f64 {
-        v.iter().map(|x| *x as f64).std_dev() / (v.len() as f64).sqrt()
-    }
-
-    #[test]
-    fn mean_err_no_auto_correlation() {
-        let run_len = 10000;
-        let mean = 1.0;
-        let std_dev = 1.0;
-        let weights = [1.0; 10000];
-        for i in 0..10 {
-            let v = random_vector(i, run_len, mean, std_dev);
-            let err = super::long_run_err(mean, &v, &weights);
-            let ref_err = reference_err(&v);
-            assert!(err > 0.99 * ref_err);
-            assert!(err < 1.2 * ref_err);
-        }
-    }
-
-    #[test]
-    fn mean_err_with_auto_correlation() {
-        let run_len = 10000;
-        let mean = 1.0;
-        let std_dev = 1.0;
-        let weights = [1.0; 10000];
-        for i in 0..10 {
-            let mut v = random_vector(i, run_len, mean, std_dev);
-            make_autocorrelated(&mut v);
-            let mean_err = super::long_run_err(mean, &v, &weights);
-            let ref_err = reference_err(&v);
-            assert!(mean_err > 6.0 * ref_err);
-        }
-    }
 
     #[test]
     fn t_test_same() {
