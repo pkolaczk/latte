@@ -65,10 +65,12 @@ fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> 
 /// Configures connection to Cassandra.
 pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
     let mut policy_builder = DefaultPolicy::builder().token_aware(true);
+    let mut dc_str = "".to_string();
     if let Some(dc) = &conf.datacenter {
         policy_builder = policy_builder
             .prefer_datacenter(dc.to_owned())
             .permit_dc_failover(true);
+        dc_str = dc.to_string();
     }
     let profile = ExecutionProfile::builder()
         .consistency(conf.consistency.scylla_consistency())
@@ -87,6 +89,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
     Ok(Context::new(
         scylla_session,
+        dc_str,
         conf.retries,
         conf.retry_interval,
     ))
@@ -404,6 +407,8 @@ pub struct Context {
     #[rune(get, set, add_assign, copy)]
     pub load_cycle_count: u64,
     #[rune(get)]
+    pub preferred_datacenter: String,
+    #[rune(get)]
     pub data: Value,
     pub rng: ThreadRng,
 }
@@ -418,7 +423,12 @@ unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    pub fn new(session: scylla::Session, retry_number: u64, retry_interval: RetryDelay) -> Context {
+    pub fn new(
+        session: scylla::Session,
+        preferred_datacenter: String,
+        retry_number: u64,
+        retry_interval: RetryDelay
+    ) -> Context {
         Context {
             start_time: TryLock::new(Instant::now()),
             session: Arc::new(session),
@@ -427,6 +437,7 @@ impl Context {
             retry_number,
             retry_interval,
             load_cycle_count: 0,
+            preferred_datacenter: preferred_datacenter,
             data: Value::Object(Shared::new(Object::new()).unwrap()),
             rng: rand::thread_rng(),
         }
@@ -443,6 +454,7 @@ impl Context {
             session: self.session.clone(),
             statements: self.statements.clone(),
             stats: TryLock::new(SessionStats::default()),
+            preferred_datacenter: self.preferred_datacenter.clone(),
             data: deserialized,
             start_time: TryLock::new(*self.start_time.try_lock().unwrap()),
             rng: rand::thread_rng(),
@@ -469,6 +481,12 @@ impl Context {
             }
         }
         Ok(None)
+    }
+
+    /// Returns list of datacenters used by nodes
+    pub async fn get_datacenters(&self) -> Result<Vec<String>, CassError> {
+        let dc_info = self.session.get_cluster_data().get_datacenters_info();
+        return Ok(dc_info.keys().cloned().collect());
     }
 
     /// Prepares a statement and stores it in an internal statement map for future use.
@@ -1039,6 +1057,11 @@ pub fn read_resource_lines(path: &str) -> io::Result<Vec<String>> {
         .split('\n')
         .map(|s| s.to_string())
         .collect_vec())
+}
+
+#[rune::function(instance)]
+pub async fn get_datacenters(ctx: Mut<Context>) -> Result<Vec<String>, CassError> {
+    ctx.get_datacenters().await
 }
 
 #[rune::function(instance)]

@@ -117,6 +117,7 @@ impl Program {
     pub fn new(source: Source, params: HashMap<String, String>) -> Result<Program, LatteError> {
         let mut context_module = Module::default();
         context_module.ty::<Context>().unwrap();
+        context_module.function_meta(context::get_datacenters).unwrap();
         context_module.function_meta(context::execute).unwrap();
         context_module.function_meta(context::prepare).unwrap();
         context_module
