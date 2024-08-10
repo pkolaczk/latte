@@ -1,7 +1,7 @@
-use crate::autocorrelation::EffectiveSampleSizeEstimator;
 use crate::histogram::SerializableHistogram;
 use crate::percentiles::Percentiles;
 use crate::stats::Mean;
+use crate::timeseries::TimeSeriesStats;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -18,7 +18,7 @@ pub struct LatencyDistribution {
 #[derive(Clone, Debug)]
 pub struct LatencyDistributionRecorder {
     histogram_ns: Histogram<u64>,
-    ess_estimator: EffectiveSampleSizeEstimator,
+    ess_estimator: TimeSeriesStats,
 }
 
 impl LatencyDistributionRecorder {
@@ -26,7 +26,7 @@ impl LatencyDistributionRecorder {
         self.histogram_ns
             .record(time.as_nanos().clamp(1, u64::MAX as u128) as u64)
             .unwrap();
-        self.ess_estimator.record(time.as_secs_f64());
+        self.ess_estimator.record(time.as_secs_f64(), 1.0);
     }
 
     pub fn add(&mut self, other: &LatencyDistributionRecorder) {
@@ -41,17 +41,31 @@ impl LatencyDistributionRecorder {
 
     pub fn distribution(&self) -> LatencyDistribution {
         LatencyDistribution {
-            mean: Mean::from(&self.histogram_ns, 1e-6, 1),
+            mean: self.mean(1),
             percentiles: Percentiles::compute(&self.histogram_ns, 1e-6),
             histogram: SerializableHistogram(self.histogram_ns.clone()),
         }
     }
+
     pub fn distribution_with_errors(&self) -> LatencyDistribution {
         let ess = self.ess_estimator.effective_sample_size();
         LatencyDistribution {
-            mean: Mean::from(&self.histogram_ns, 1e-6, ess),
+            mean: self.mean(ess),
             percentiles: Percentiles::compute_with_errors(&self.histogram_ns, 1e-6, ess),
             histogram: SerializableHistogram(self.histogram_ns.clone()),
+        }
+    }
+
+    fn mean(&self, effective_n: u64) -> Mean {
+        let scale = 1e-6;
+        Mean {
+            n: effective_n,
+            value: self.histogram_ns.mean() * scale,
+            std_err: if effective_n > 1 {
+                Some(self.histogram_ns.stdev() * scale / (effective_n as f64 - 1.0).sqrt())
+            } else {
+                None
+            },
         }
     }
 }

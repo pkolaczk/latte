@@ -376,7 +376,7 @@ pub struct FnStats {
     pub function: FnRef,
     pub call_count: u64,
     pub error_count: u64,
-    pub cycle_latency: LatencyDistributionRecorder,
+    pub call_latency: LatencyDistributionRecorder,
 }
 
 impl FnStats {
@@ -385,25 +385,25 @@ impl FnStats {
             function,
             call_count: 0,
             error_count: 0,
-            cycle_latency: LatencyDistributionRecorder::default(),
+            call_latency: LatencyDistributionRecorder::default(),
         }
     }
 
     pub fn reset(&mut self) {
         self.call_count = 0;
         self.error_count = 0;
-        self.cycle_latency.clear();
+        self.call_latency.clear();
     }
 
     pub fn operation_completed(&mut self, duration: Duration) {
         self.call_count += 1;
-        self.cycle_latency.record(duration)
+        self.call_latency.record(duration)
     }
 
     pub fn operation_failed(&mut self, duration: Duration) {
         self.call_count += 1;
         self.error_count += 1;
-        self.cycle_latency.record(duration);
+        self.call_latency.record(duration);
     }
 }
 

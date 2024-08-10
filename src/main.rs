@@ -39,7 +39,6 @@ use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
 use crate::table::{Alignment, Table};
 use crate::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN};
 
-mod autocorrelation;
 mod chunks;
 mod config;
 mod context;
@@ -54,6 +53,8 @@ mod progress;
 mod report;
 mod stats;
 mod table;
+mod throughput;
+mod timeseries;
 mod workload;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
