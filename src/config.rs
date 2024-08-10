@@ -408,7 +408,20 @@ pub struct RunCommand {
     #[clap(short('p'), long, default_value = "128", value_name = "COUNT")]
     pub concurrency: NonZeroUsize,
 
-    /// Throughput sampling period, in seconds.
+    /// Sampling period, in seconds.
+    ///
+    /// While running the workload, periodically takes a snapshot of the statistics
+    /// and records it as a separate data point in the log. At the end, the log gets saved to
+    /// the final report. The sampling log can be used later for generating plots
+    /// or HDR histogram logs for further detailed data analysis.
+    ///
+    /// Sampling period does not affect the value of the final statistics computed
+    /// for the whole run. You'll not get more accurate measurements by sampling more frequently
+    /// (assuming the same total length of the run).   
+    ///
+    /// The sampling log is used for analyzing throughput fluctuations and the number of samples
+    /// does affect the accuracy of estimating the throughput error to some degree.
+    /// The throughput error estimate may be inaccurate if you collect less than 10 samples.  
     #[clap(
         short('s'),
         long("sampling"),
@@ -416,6 +429,17 @@ pub struct RunCommand {
         value_name = "TIME | COUNT"
     )]
     pub sampling_interval: Interval,
+
+    /// Doesn't keep the sampling log in the report
+    ///
+    /// Use this option when you want to run the workload for a very long time, to keep memory
+    /// usage low and steady. The sample log will still be printed while running, but its data won't
+    /// be kept in memory nor saved to the final report.
+    ///
+    /// Caution: you will not be able to later generate plots nor HDR histogram logs from the
+    /// report if you enable this option.   
+    #[clap(long)]
+    pub drop_sampling_log: bool,
 
     /// Label that will be added to the report to help identifying the test
     #[clap(long("tag"), value_delimiter = ',')]

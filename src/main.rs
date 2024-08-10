@@ -203,6 +203,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
         config::Interval::Unbounded,
         loader,
         !conf.quiet,
+        false,
     )
     .await?;
 
@@ -265,6 +266,7 @@ async fn run(conf: RunCommand) -> Result<()> {
             Interval::Unbounded,
             runner.clone()?,
             !conf.quiet,
+            false,
         )
         .await?;
     }
@@ -294,6 +296,7 @@ async fn run(conf: RunCommand) -> Result<()> {
         conf.sampling_interval,
         runner,
         !conf.quiet,
+        !conf.drop_sampling_log,
     )
     .await
     {
