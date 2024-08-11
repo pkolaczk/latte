@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use chrono::Utc;
 use clap::builder::PossibleValue;
-use clap::{Parser, ValueEnum};
+use clap::{Args, Parser, ValueEnum};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -180,15 +180,31 @@ pub struct ConnectionConf {
     #[clap(long("request-timeout"), default_value = "5s", value_name = "DURATION", value_parser = parse_duration::parse)]
     pub request_timeout: Duration,
 
+    #[clap(flatten)]
+    pub retry_strategy: RetryStrategy,
+}
+
+#[derive(Args, Copy, Clone, Debug, Serialize, Deserialize)]
+pub struct RetryStrategy {
+    /// Maximum number of times to retry a failed query
+    ///
+    /// Unless `retry-on-all-errors` flag is set, retries happens only for
+    /// timeout / overload errors.
     #[clap(long("retries"), default_value = "3", value_name = "COUNT")]
     pub retries: u64,
 
-    #[clap(
-        long("retry-delay"),
-        default_value = "100ms,5s",
-        value_name = "MIN[,MAX]"
-    )]
-    pub retry_interval: RetryDelay,
+    /// Controls the delay to apply before each retry
+    ///
+    /// If the maximum delay is unspecified, the same delay is used for each retry.
+    /// If the maximum delay is not specified, the retries use exponential back-off delay strategy.
+    /// The first retry uses the minimum delay, and each subsequent retry doubles the delay until
+    /// it reaches the max delay specified.
+    #[clap(long, default_value = "100ms,5s", value_name = "MIN[,MAX]")]
+    pub retry_delay: RetryDelay,
+
+    /// Retries queries after all errors, even it the error is considered non-recoverable.   
+    #[clap(long)]
+    pub retry_on_all_errors: bool,
 }
 
 #[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Serialize, Deserialize)]
