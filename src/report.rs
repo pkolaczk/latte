@@ -565,13 +565,17 @@ impl<'a> Display for RunConfigCmp<'a> {
                 Quantity::from(conf.connection.request_timeout.as_secs_f64())
             }),
             self.line("Retries", "", |conf| {
-                Quantity::from(conf.connection.retries)
+                Quantity::from(conf.connection.retry_strategy.retries)
             }),
             self.line("├─ min delay", "ms", |conf| {
-                Quantity::from(conf.connection.retry_interval.min.as_secs_f64() * 1000.0)
+                Quantity::from(
+                    conf.connection.retry_strategy.retry_delay.min.as_secs_f64() * 1000.0,
+                )
             }),
             self.line("└─ max delay", "ms", |conf| {
-                Quantity::from(conf.connection.retry_interval.max.as_secs_f64() * 1000.0)
+                Quantity::from(
+                    conf.connection.retry_strategy.retry_delay.max.as_secs_f64() * 1000.0,
+                )
             }),
         ];
 

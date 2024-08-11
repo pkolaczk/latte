@@ -40,7 +40,7 @@ use tracing::error;
 use try_lock::TryLock;
 use uuid::{Variant, Version};
 
-use crate::config::{ConnectionConf, RetryDelay};
+use crate::config::{ConnectionConf, RetryStrategy};
 use crate::latency::LatencyDistributionRecorder;
 use crate::LatteError;
 
@@ -85,11 +85,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
-    Ok(Context::new(
-        scylla_session,
-        conf.retries,
-        conf.retry_interval,
-    ))
+    Ok(Context::new(scylla_session, conf.retry_strategy))
 }
 
 pub struct ClusterInfo {
@@ -399,8 +395,7 @@ pub struct Context {
     session: Arc<scylla::Session>,
     statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
-    retry_number: u64,
-    retry_interval: RetryDelay,
+    retry_strategy: RetryStrategy,
     #[rune(get, set, add_assign, copy)]
     pub load_cycle_count: u64,
     #[rune(get)]
@@ -418,14 +413,13 @@ unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    pub fn new(session: scylla::Session, retry_number: u64, retry_interval: RetryDelay) -> Context {
+    pub fn new(session: scylla::Session, retry_strategy: RetryStrategy) -> Context {
         Context {
             start_time: TryLock::new(Instant::now()),
             session: Arc::new(session),
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
-            retry_number,
-            retry_interval,
+            retry_strategy,
             load_cycle_count: 0,
             data: Value::Object(Shared::new(Object::new()).unwrap()),
             rng: rand::thread_rng(),
@@ -521,11 +515,12 @@ impl Context {
 
         let mut rs: Result<QueryResult, QueryError> = Err(QueryError::TimeoutError);
         let mut attempts = 0;
-        while attempts <= self.retry_number && Self::should_retry(&rs) {
+        let retry_strategy = &self.retry_strategy;
+        while attempts <= retry_strategy.retries && Self::should_retry(&rs, retry_strategy) {
             if attempts > 0 {
                 let current_retry_interval = get_exponential_retry_interval(
-                    self.retry_interval.min,
-                    self.retry_interval.max,
+                    retry_strategy.retry_delay.min,
+                    retry_strategy.retry_delay.max,
                     attempts,
                 );
                 tokio::time::sleep(current_retry_interval).await;
@@ -546,7 +541,13 @@ impl Context {
         self.start_time.try_lock().unwrap().elapsed().as_secs_f64()
     }
 
-    fn should_retry<R>(result: &Result<R, QueryError>) -> bool {
+    fn should_retry<R>(result: &Result<R, QueryError>, retry_strategy: &RetryStrategy) -> bool {
+        if !result.is_err() {
+            return false;
+        }
+        if retry_strategy.retry_on_all_errors {
+            return true;
+        }
         matches!(
             result,
             Err(QueryError::RequestTimeout(_))
