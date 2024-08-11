@@ -156,7 +156,7 @@ fn percentiles(hist: &Histogram<u64>, scale: f64) -> [f64; Percentile::COUNT] {
 
 #[cfg(test)]
 mod test {
-    use crate::percentiles::{Percentile, Percentiles};
+    use crate::stats::percentiles::{Percentile, Percentiles};
     use assert_approx_eq::assert_approx_eq;
     use hdrhistogram::Histogram;
     use rand::{thread_rng, Rng};

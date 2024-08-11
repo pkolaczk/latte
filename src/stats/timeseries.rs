@@ -214,7 +214,7 @@ impl Stats {
 
 #[cfg(test)]
 mod test {
-    use crate::timeseries::{Stats, TimeSeriesStats};
+    use crate::stats::timeseries::{Stats, TimeSeriesStats};
     use assert_approx_eq::assert_approx_eq;
     use more_asserts::{assert_gt, assert_le};
     use rand::rngs::SmallRng;

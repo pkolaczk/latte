@@ -1,5 +1,5 @@
+use crate::stats::timeseries::TimeSeriesStats;
 use crate::stats::Mean;
-use crate::timeseries::TimeSeriesStats;
 use std::time::Instant;
 
 pub struct ThroughputMeter {

@@ -1,6 +1,6 @@
 use crate::config::PlotCommand;
 use crate::load_report_or_abort;
-use crate::plot::SeriesKind::{ResponseTime, Throughput};
+use crate::report::plot::SeriesKind::{ResponseTime, Throughput};
 use crate::report::Report;
 use crate::Result;
 use itertools::Itertools;

@@ -117,7 +117,7 @@ impl BoundedCycleCounter {
 
 #[cfg(test)]
 mod test {
-    use crate::cycle::{CycleCounter, BATCH_SIZE};
+    use crate::exec::cycle::{CycleCounter, BATCH_SIZE};
     use itertools::Itertools;
     use std::collections::BTreeSet;
 

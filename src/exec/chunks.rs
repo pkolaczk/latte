@@ -171,7 +171,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::chunks::{ChunksAggregated, ChunksExt};
+    use crate::exec::chunks::{ChunksAggregated, ChunksExt};
     use futures::{stream, FutureExt, StreamExt};
     use std::time::Duration;
     use tokio::time::interval;

@@ -7,6 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::error::LatteError;
+use crate::scripting::cass_error::{CassError, CassErrorKind};
+use crate::scripting::context::Context;
+use crate::stats::latency::LatencyDistributionRecorder;
+use crate::stats::session::SessionStats;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -15,13 +20,9 @@ use rune::compile::meta::Kind;
 use rune::compile::{CompileVisitor, MetaError, MetaRef};
 use rune::runtime::{AnyObj, Args, RuntimeContext, Shared, VmError, VmResult};
 use rune::termcolor::{ColorChoice, StandardStream};
-use rune::{vm_try, Any, Diagnostics, Module, Source, Sources, ToValue, Unit, Value, Vm};
+use rune::{vm_try, Any, Diagnostics, Source, Sources, ToValue, Unit, Value, Vm};
 use serde::{Deserialize, Serialize};
 use try_lock::TryLock;
-
-use crate::error::LatteError;
-use crate::latency::LatencyDistributionRecorder;
-use crate::{context, CassError, CassErrorKind, Context, SessionStats};
 
 /// Wraps a reference to Session that can be converted to a Rune `Value`
 /// and passed as one of `Args` arguments to a function.
@@ -115,69 +116,8 @@ impl Program {
     /// - `script`: source code in Rune language
     /// - `params`: parameter values that will be exposed to the script by the `params!` macro
     pub fn new(source: Source, params: HashMap<String, String>) -> Result<Program, LatteError> {
-        let mut context_module = Module::default();
-        context_module.ty::<Context>().unwrap();
-        context_module.function_meta(context::execute).unwrap();
-        context_module.function_meta(context::prepare).unwrap();
-        context_module
-            .function_meta(context::execute_prepared)
-            .unwrap();
-        context_module.function_meta(context::elapsed_secs).unwrap();
-
-        let mut err_module = Module::default();
-        err_module.ty::<CassError>().unwrap();
-        err_module.function_meta(CassError::string_display).unwrap();
-
-        let mut uuid_module = Module::default();
-        uuid_module.ty::<context::Uuid>().unwrap();
-        uuid_module
-            .function_meta(context::Uuid::string_display)
-            .unwrap();
-
-        let mut latte_module = Module::with_crate("latte").unwrap();
-        latte_module
-            .macro_("param", move |ctx, ts| context::param(ctx, &params, ts))
-            .unwrap();
-
-        latte_module.function_meta(context::blob).unwrap();
-        latte_module.function_meta(context::text).unwrap();
-        latte_module.function_meta(context::now_timestamp).unwrap();
-        latte_module.function_meta(context::hash).unwrap();
-        latte_module.function_meta(context::hash2).unwrap();
-        latte_module.function_meta(context::hash_range).unwrap();
-        latte_module.function_meta(context::hash_select).unwrap();
-        latte_module.function_meta(context::uuid).unwrap();
-        latte_module.function_meta(context::normal).unwrap();
-        latte_module.function_meta(context::uniform).unwrap();
-
-        latte_module.function_meta(context::i64::to_i32).unwrap();
-        latte_module.function_meta(context::i64::to_i16).unwrap();
-        latte_module.function_meta(context::i64::to_i8).unwrap();
-        latte_module.function_meta(context::i64::to_f32).unwrap();
-        latte_module.function_meta(context::i64::clamp).unwrap();
-
-        latte_module.function_meta(context::f64::to_i8).unwrap();
-        latte_module.function_meta(context::f64::to_i16).unwrap();
-        latte_module.function_meta(context::f64::to_i32).unwrap();
-        latte_module.function_meta(context::f64::to_f32).unwrap();
-        latte_module.function_meta(context::f64::clamp).unwrap();
-
-        let mut fs_module = Module::with_crate("fs").unwrap();
-        fs_module.function_meta(context::read_to_string).unwrap();
-        fs_module.function_meta(context::read_lines).unwrap();
-        fs_module
-            .function_meta(context::read_resource_to_string)
-            .unwrap();
-        fs_module
-            .function_meta(context::read_resource_lines)
-            .unwrap();
-
         let mut context = rune::Context::with_default_modules().unwrap();
-        context.install(&context_module).unwrap();
-        context.install(&err_module).unwrap();
-        context.install(&uuid_module).unwrap();
-        context.install(&latte_module).unwrap();
-        context.install(&fs_module).unwrap();
+        crate::scripting::install(&mut context, params);
 
         let mut options = rune::Options::default();
         options.debug_info(true);
