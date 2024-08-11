@@ -1,7 +1,6 @@
 use crate::config::{RunCommand, WeightedFunction};
-use crate::percentiles::Percentile;
+use crate::stats::percentiles::Percentile;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Mean, Sample, Significance};
-use crate::table::Row;
 use chrono::{DateTime, Local, TimeZone};
 use console::{pad_str, style, Alignment};
 use core::fmt;
@@ -15,6 +14,10 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 use strum::IntoEnumIterator;
+use table::Row;
+
+pub mod plot;
+pub mod table;
 
 /// A standard error is multiplied by this factor to get the error margin.
 /// For a normally distributed random variable,

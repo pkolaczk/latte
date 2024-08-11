@@ -121,7 +121,7 @@ impl<R: Row> Display for Table<R> {
 
 #[cfg(test)]
 mod test {
-    use crate::table::{Alignment, Row, Table};
+    use crate::report::table::{Alignment, Row, Table};
 
     #[test]
     fn render_table() {

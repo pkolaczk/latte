@@ -16,11 +16,16 @@ use tokio::signal::ctrl_c;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::chunks::ChunksExt;
 use crate::error::{LatteError, Result};
 use crate::{
     BenchmarkStats, BoundedCycleCounter, Interval, Progress, Recorder, Workload, WorkloadStats,
 };
+use chunks::ChunksExt;
+
+mod chunks;
+pub mod cycle;
+pub mod progress;
+pub mod workload;
 
 /// Returns a stream emitting `rate` events per second.
 fn interval_stream(rate: f64) -> IntervalStream {

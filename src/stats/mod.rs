@@ -4,14 +4,21 @@ use std::num::NonZeroUsize;
 use std::ops::Mul;
 use std::time::{Instant, SystemTime};
 
-use crate::latency::{LatencyDistribution, LatencyDistributionRecorder};
-use crate::percentiles::Percentile;
-use crate::throughput::ThroughputMeter;
-use crate::timeseries::TimeSeriesStats;
-use crate::workload::WorkloadStats;
+use crate::exec::workload::WorkloadStats;
+use crate::stats::latency::{LatencyDistribution, LatencyDistributionRecorder};
 use cpu_time::ProcessTime;
+use percentiles::Percentile;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{ContinuousCDF, StudentsT};
+use throughput::ThroughputMeter;
+use timeseries::TimeSeriesStats;
+
+pub mod histogram;
+pub mod latency;
+pub mod percentiles;
+pub mod session;
+pub mod throughput;
+pub mod timeseries;
 
 /// Holds a mean and its error together.
 /// Makes it more convenient to compare means, and it also reduces the number

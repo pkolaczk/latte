@@ -1,7 +1,7 @@
-use crate::histogram::SerializableHistogram;
-use crate::percentiles::Percentiles;
+use crate::stats::histogram::SerializableHistogram;
+use crate::stats::percentiles::Percentiles;
+use crate::stats::timeseries::TimeSeriesStats;
 use crate::stats::Mean;
-use crate::timeseries::TimeSeriesStats;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

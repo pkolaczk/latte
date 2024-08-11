@@ -27,35 +27,24 @@ use crate::config::{
     AppConfig, Command, ConnectionConf, EditCommand, HdrCommand, Interval, ListCommand,
     LoadCommand, SchemaCommand, ShowCommand,
 };
-use crate::context::*;
-use crate::context::{CassError, CassErrorKind, Context, SessionStats};
-use crate::cycle::BoundedCycleCounter;
 use crate::error::{LatteError, Result};
 use crate::exec::{par_execute, ExecutionOptions};
-use crate::plot::plot_graph;
-use crate::progress::Progress;
 use crate::report::{PathAndSummary, Report, RunConfigCmp};
+use crate::scripting::connect::ClusterInfo;
+use crate::scripting::context::Context;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
-use crate::table::{Alignment, Table};
-use crate::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN};
+use exec::cycle::BoundedCycleCounter;
+use exec::progress::Progress;
+use exec::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN};
+use report::plot::plot_graph;
+use report::table::{Alignment, Table};
 
-mod chunks;
 mod config;
-mod context;
-mod cycle;
 mod error;
 mod exec;
-mod histogram;
-mod latency;
-mod percentiles;
-mod plot;
-mod progress;
 mod report;
+mod scripting;
 mod stats;
-mod table;
-mod throughput;
-mod timeseries;
-mod workload;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -122,7 +111,7 @@ fn find_workload(workload: &Path) -> PathBuf {
 /// Connects to the server and returns the session
 async fn connect(conf: &ConnectionConf) -> Result<(Context, Option<ClusterInfo>)> {
     eprintln!("info: Connecting to {:?}... ", conf.addresses);
-    let session = context::connect(conf).await?;
+    let session = scripting::connect::connect(conf).await?;
     let cluster_info = session.cluster_info().await?;
     eprintln!(
         "info: Connected to {} running Cassandra version {}",
