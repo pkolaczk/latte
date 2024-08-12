@@ -5,7 +5,7 @@ use crate::scripting::Resources;
 use chrono::Utc;
 use metrohash::MetroHash64;
 use rand::distributions::Distribution;
-use rand::prelude::StdRng;
+use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
@@ -91,7 +91,7 @@ pub fn hash_range(i: i64, max: i64) -> i64 {
 /// Generates a floating point value with normal distribution
 #[rune::function]
 pub fn normal(i: i64, mean: f64, std_dev: f64) -> VmResult<f64> {
-    let mut rng = StdRng::seed_from_u64(i as u64);
+    let mut rng = SmallRng::seed_from_u64(i as u64);
     let distribution =
         vm_try!(Normal::new(mean, std_dev).map_err(|e| VmError::panic(format!("{e}"))));
     VmResult::Ok(distribution.sample(&mut rng))
@@ -99,7 +99,7 @@ pub fn normal(i: i64, mean: f64, std_dev: f64) -> VmResult<f64> {
 
 #[rune::function]
 pub fn uniform(i: i64, min: f64, max: f64) -> VmResult<f64> {
-    let mut rng = StdRng::seed_from_u64(i as u64);
+    let mut rng = SmallRng::seed_from_u64(i as u64);
     let distribution = vm_try!(Uniform::new(min, max).map_err(|e| VmError::panic(format!("{e}"))));
     VmResult::Ok(distribution.sample(&mut rng))
 }
@@ -108,7 +108,7 @@ pub fn uniform(i: i64, min: f64, max: f64) -> VmResult<f64> {
 /// Parameter `seed` is used to seed the RNG.
 #[rune::function]
 pub fn blob(seed: i64, len: usize) -> Vec<u8> {
-    let mut rng = StdRng::seed_from_u64(seed as u64);
+    let mut rng = SmallRng::seed_from_u64(seed as u64);
     (0..len).map(|_| rng.gen::<u8>()).collect()
 }
 
@@ -117,7 +117,7 @@ pub fn blob(seed: i64, len: usize) -> Vec<u8> {
 /// the RNG.
 #[rune::function]
 pub fn text(seed: i64, len: usize) -> String {
-    let mut rng = StdRng::seed_from_u64(seed as u64);
+    let mut rng = SmallRng::seed_from_u64(seed as u64);
     (0..len)
         .map(|_| {
             let code_point = rng.gen_range(0x0061u32..=0x007Au32); // Unicode range for 'a-z'
