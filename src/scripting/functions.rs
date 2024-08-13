@@ -11,7 +11,7 @@ use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
 use rune::runtime::{Function, Mut, Ref, VmError, VmResult};
 use rune::{ast, vm_try, Value};
-use statrs::distribution::{Normal, Uniform};
+use statrs::distribution::Normal;
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
@@ -100,8 +100,23 @@ pub fn normal(i: i64, mean: f64, std_dev: f64) -> VmResult<f64> {
 #[rune::function]
 pub fn uniform(i: i64, min: f64, max: f64) -> VmResult<f64> {
     let mut rng = SmallRng::seed_from_u64(i as u64);
-    let distribution = vm_try!(Uniform::new(min, max).map_err(|e| VmError::panic(format!("{e}"))));
-    VmResult::Ok(distribution.sample(&mut rng))
+    VmResult::Ok(rng.gen_range(min..max))
+}
+
+#[rune::function]
+pub fn uniform_vec(i: i64, len: usize, min: f64, max: f64) -> VmResult<Vec<f64>> {
+    let mut rng = SmallRng::seed_from_u64(i as u64);
+    let vec: Vec<f64> = (0..len).map(|_| rng.gen_range(min..max)).collect();
+    VmResult::Ok(vec)
+}
+
+#[rune::function]
+pub fn normal_vec(i: i64, len: usize, mean: f64, std_dev: f64) -> VmResult<Vec<f64>> {
+    let mut rng = SmallRng::seed_from_u64(i as u64);
+    let distribution =
+        vm_try!(Normal::new(mean, std_dev).map_err(|e| VmError::panic(format!("{e}"))));
+    let vec: Vec<f64> = (0..len).map(|_| rng.sample(distribution)).collect();
+    VmResult::Ok(vec)
 }
 
 /// Generates random blob of data of given length.
@@ -127,7 +142,7 @@ pub fn text(seed: i64, len: usize) -> String {
 }
 
 #[rune::function]
-pub fn vector(len: usize, generator: Function) -> VmResult<Vec<Value>> {
+pub fn vec(len: usize, generator: Function) -> VmResult<Vec<Value>> {
     let mut result = Vec::with_capacity(len);
     for i in 0..len {
         let value = vm_try!(generator.call((i,)));

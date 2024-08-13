@@ -43,7 +43,7 @@ fn try_install(
 
     latte_module.function_meta(functions::blob)?;
     latte_module.function_meta(functions::text)?;
-    latte_module.function_meta(functions::vector)?;
+    latte_module.function_meta(functions::vec)?;
     latte_module.function_meta(functions::join)?;
     latte_module.function_meta(functions::now_timestamp)?;
     latte_module.function_meta(functions::hash)?;
@@ -52,7 +52,9 @@ fn try_install(
     latte_module.function_meta(functions::hash_select)?;
     latte_module.function_meta(functions::uuid)?;
     latte_module.function_meta(functions::normal)?;
+    latte_module.function_meta(functions::normal_vec)?;
     latte_module.function_meta(functions::uniform)?;
+    latte_module.function_meta(functions::uniform_vec)?;
 
     latte_module.function_meta(cql_types::i64::to_i32)?;
     latte_module.function_meta(cql_types::i64::to_i16)?;
