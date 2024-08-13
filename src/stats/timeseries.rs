@@ -83,7 +83,8 @@ impl TimeSeriesStats {
     }
 
     pub fn effective_sample_size(&self) -> u64 {
-        if self.n <= 1 {
+        // variances and means must be defined and level-0 must exist
+        if self.n < 2 {
             return self.n;
         }
 
@@ -96,6 +97,8 @@ impl TimeSeriesStats {
         // - the number of batches should be also large enough for the variance
         //   of the mean be accurate
         let sample_variance = self.levels[0].stats.variance();
+        assert!(!sample_variance.is_nan());
+
         let autocorrelation_time = self
             .levels
             .iter()
@@ -107,8 +110,7 @@ impl TimeSeriesStats {
             })
             .take_while(|(batch_len, time)| *time > 0.2 * *batch_len as f64)
             .map(|(_, time)| time)
-            .reduce(f64::max)
-            .unwrap();
+            .fold(1.0, f64::max);
 
         (self.n as f64 / autocorrelation_time) as u64
     }
