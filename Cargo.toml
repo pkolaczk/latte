@@ -70,7 +70,7 @@ panic = "abort"
 
 [profile.dev-opt]
 inherits = "dev"
-opt-level = 2
+opt-level = 3
 
 [package.metadata.deb]
 name = "latte"
