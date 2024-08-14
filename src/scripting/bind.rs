@@ -9,8 +9,6 @@ use scylla::frame::value::CqlTimeuuid;
 use std::net::IpAddr;
 use std::str::FromStr;
 
-use itertools::*;
-
 fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
     // TODO: add support for the following native CQL types:
     //       'counter', 'date', 'decimal', 'duration', 'inet', 'time',
@@ -73,29 +71,29 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
         },
         (Value::Vec(v), ColumnType::List(elt)) => {
             let v = v.borrow_ref().unwrap();
-            let elements = v
-                .as_ref()
-                .iter()
-                .map(|v| to_scylla_value(v, elt))
-                .try_collect()?;
+            let mut elements = Vec::with_capacity(v.len());
+            for elem in v.iter() {
+                let elem = to_scylla_value(elem, elt)?;
+                elements.push(elem);
+            }
             Ok(CqlValue::List(elements))
         }
         (Value::Vec(v), ColumnType::Vector(elt, _dim)) => {
             let v = v.borrow_ref().unwrap();
-            let elements = v
-                .as_ref()
-                .iter()
-                .map(|v| to_scylla_value(v, elt))
-                .try_collect()?;
+            let mut elements = Vec::with_capacity(v.len());
+            for elem in v.iter() {
+                let elem = to_scylla_value(elem, elt)?;
+                elements.push(elem);
+            }
             Ok(CqlValue::Vector(elements))
         }
         (Value::Vec(v), ColumnType::Set(elt)) => {
             let v = v.borrow_ref().unwrap();
-            let elements = v
-                .as_ref()
-                .iter()
-                .map(|v| to_scylla_value(v, elt))
-                .try_collect()?;
+            let mut elements = Vec::with_capacity(v.len());
+            for elem in v.iter() {
+                let elem = to_scylla_value(elem, elt)?;
+                elements.push(elem);
+            }
             Ok(CqlValue::Set(elements))
         }
         (Value::Vec(v), ColumnType::Map(key_elt, value_elt)) => {
