@@ -3,7 +3,7 @@
 use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::cql_types::Uuid;
 use rune::{Any, ToValue, Value};
-use scylla::_macro_internal::ColumnType;
+use scylla::_macro_internal::{ColumnType, DropOptimizedVec};
 use scylla::frame::response::result::{ColumnSpec, CqlValue};
 use scylla::frame::value::CqlTimeuuid;
 use std::net::IpAddr;
@@ -81,11 +81,13 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
         (Value::Vec(v), ColumnType::Vector(elt, _dim)) => {
             let v = v.borrow_ref().unwrap();
             let mut elements = Vec::with_capacity(v.len());
+            let mut must_drop = false;
             for elem in v.iter() {
                 let elem = to_scylla_value(elem, elt)?;
+                must_drop |= !matches!(elem, CqlValue::Float(_));
                 elements.push(elem);
             }
-            Ok(CqlValue::Vector(elements))
+            Ok(CqlValue::Vector(DropOptimizedVec::new(elements, must_drop)))
         }
         (Value::Vec(v), ColumnType::Set(elt)) => {
             let v = v.borrow_ref().unwrap();
