@@ -6,8 +6,9 @@ use crate::scripting::connect::ClusterInfo;
 use crate::scripting::rng::Rng;
 use crate::stats::session::SessionStats;
 use rand::random;
-use rune::runtime::{AnyObj, BorrowRef, Object, Shared};
-use rune::{Any, Value};
+use rand::rngs::SmallRng;
+use rune::runtime::{AnyObj, BorrowRef, Object, Shared, VmResult};
+use rune::{vm_try, Any, ToValue, Value};
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, QueryError};
 use scylla::QueryResult;
@@ -204,11 +205,11 @@ impl GlobalContext {
 }
 
 impl LocalContext {
-    pub fn new(cycle: i64, global: Value) -> Self {
+    pub fn new(cycle: i64, global: GlobalContextRef, rng: SmallRng) -> Self {
         Self {
             cycle,
-            global,
-            rng: Value::Any(Shared::new(AnyObj::new(Rng::with_seed(cycle)).unwrap()).unwrap()),
+            global: global.to_value().into_result().unwrap(),
+            rng: Value::Any(Shared::new(AnyObj::new(Rng::with_rng(rng)).unwrap()).unwrap()),
         }
     }
 
@@ -217,6 +218,53 @@ impl LocalContext {
             panic!("global must be an object")
         };
         obj.downcast_borrow_ref().unwrap()
+    }
+}
+
+/// Wraps a reference to `Context` that can be converted to a Rune `Value`
+/// and passed as one of `Args` arguments to a function.
+pub struct GlobalContextRef<'a> {
+    context: &'a GlobalContext,
+}
+
+impl GlobalContextRef<'_> {
+    pub fn new(context: &GlobalContext) -> GlobalContextRef {
+        GlobalContextRef { context }
+    }
+}
+
+/// We need this to be able to pass a reference to `Session` as an argument
+/// to Rune function.
+///
+/// Caution! Be careful using this trait. Undefined Behaviour possible.
+/// This is unsound - it is theoretically
+/// possible that the underlying `Session` gets dropped before the `Value` produced by this trait
+/// implementation and the compiler is not going to catch that.
+/// The receiver of a `Value` must ensure that it is dropped before `Session`!
+impl<'a> ToValue for GlobalContextRef<'a> {
+    fn to_value(self) -> VmResult<Value> {
+        let obj = unsafe { AnyObj::from_ref(self.context) };
+        VmResult::Ok(Value::from(vm_try!(Shared::new(obj))))
+    }
+}
+
+/// Wraps a mutable reference to Session that can be converted to a Rune `Value` and passed
+/// as one of `Args` arguments to a function.
+pub struct GlobalContextRefMut<'a> {
+    context: &'a mut GlobalContext,
+}
+
+impl GlobalContextRefMut<'_> {
+    pub fn new(context: &mut GlobalContext) -> GlobalContextRefMut {
+        GlobalContextRefMut { context }
+    }
+}
+
+/// Caution! See `impl ToValue for SessionRef`.
+impl<'a> ToValue for GlobalContextRefMut<'a> {
+    fn to_value(self) -> VmResult<Value> {
+        let obj = unsafe { AnyObj::from_mut(self.context) };
+        VmResult::Ok(Value::from(vm_try!(Shared::new(obj))))
     }
 }
 
