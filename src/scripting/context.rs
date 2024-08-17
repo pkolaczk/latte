@@ -3,10 +3,10 @@ use crate::error::LatteError;
 use crate::scripting::bind;
 use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::connect::ClusterInfo;
+use crate::scripting::rng::Rng;
 use crate::stats::session::SessionStats;
-use rand::prelude::ThreadRng;
 use rand::random;
-use rune::runtime::{Object, Shared};
+use rune::runtime::{AnyObj, BorrowRef, Object, Shared};
 use rune::{Any, Value};
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::{DbError, QueryError};
@@ -22,7 +22,23 @@ use try_lock::TryLock;
 /// This is the main object that a workload script uses to interface with the outside world.
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
 #[derive(Any)]
-pub struct Context {
+pub struct LocalContext {
+    #[rune(get)]
+    pub cycle: i64,
+    #[rune(get)]
+    pub rng: Value,
+    #[rune(get)]
+    pub global: Value,
+}
+
+impl From<LocalContext> for Value {
+    fn from(value: LocalContext) -> Self {
+        Value::Any(Shared::new(AnyObj::new(value).unwrap()).unwrap())
+    }
+}
+
+#[derive(Any)]
+pub struct GlobalContext {
     start_time: TryLock<Instant>,
     session: Arc<scylla::Session>,
     statements: HashMap<String, Arc<PreparedStatement>>,
@@ -32,7 +48,6 @@ pub struct Context {
     pub load_cycle_count: u64,
     #[rune(get)]
     pub data: Value,
-    pub rng: ThreadRng,
 }
 
 // Needed, because Rune `Value` is !Send, as it may contain some internal pointers.
@@ -41,12 +56,14 @@ pub struct Context {
 // To make it safe, the same `Context` is never used by more than one thread at once, and
 // we make sure in `clone` to make a deep copy of the `data` field by serializing
 // and deserializing it, so no pointers could get through.
-unsafe impl Send for Context {}
-unsafe impl Sync for Context {}
+unsafe impl Send for LocalContext {}
+unsafe impl Sync for LocalContext {}
+unsafe impl Send for GlobalContext {}
+unsafe impl Sync for GlobalContext {}
 
-impl Context {
-    pub fn new(session: scylla::Session, retry_strategy: RetryStrategy) -> Context {
-        Context {
+impl GlobalContext {
+    pub fn new(session: scylla::Session, retry_strategy: RetryStrategy) -> Self {
+        Self {
             start_time: TryLock::new(Instant::now()),
             session: Arc::new(session),
             statements: HashMap::new(),
@@ -54,7 +71,6 @@ impl Context {
             retry_strategy,
             load_cycle_count: 0,
             data: Value::Object(Shared::new(Object::new()).unwrap()),
-            rng: rand::thread_rng(),
         }
     }
 
@@ -65,13 +81,12 @@ impl Context {
     pub fn clone(&self) -> Result<Self, LatteError> {
         let serialized = rmp_serde::to_vec(&self.data)?;
         let deserialized: Value = rmp_serde::from_slice(&serialized)?;
-        Ok(Context {
+        Ok(Self {
             session: self.session.clone(),
             statements: self.statements.clone(),
             stats: TryLock::new(SessionStats::default()),
             data: deserialized,
             start_time: TryLock::new(*self.start_time.try_lock().unwrap()),
-            rng: rand::thread_rng(),
             ..*self
         })
     }
@@ -185,6 +200,23 @@ impl Context {
     pub fn reset(&self) {
         self.stats.try_lock().unwrap().reset();
         *self.start_time.try_lock().unwrap() = Instant::now();
+    }
+}
+
+impl LocalContext {
+    pub fn new(cycle: i64, global: Value) -> Self {
+        Self {
+            cycle,
+            global,
+            rng: Value::Any(Shared::new(AnyObj::new(Rng::with_seed(cycle)).unwrap()).unwrap()),
+        }
+    }
+
+    pub fn global(&self) -> BorrowRef<GlobalContext> {
+        let Value::Any(obj) = &self.global else {
+            panic!("global must be an object")
+        };
+        obj.downcast_borrow_ref().unwrap()
     }
 }
 

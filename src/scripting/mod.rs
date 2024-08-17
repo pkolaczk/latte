@@ -1,5 +1,6 @@
 use crate::scripting::cass_error::CassError;
-use crate::scripting::context::Context;
+use crate::scripting::context::{GlobalContext, LocalContext};
+use crate::scripting::rng::Rng;
 use rune::{ContextError, Module};
 use rust_embed::RustEmbed;
 use std::collections::HashMap;
@@ -10,6 +11,7 @@ pub mod connect;
 pub mod context;
 mod cql_types;
 mod functions;
+mod rng;
 
 #[derive(RustEmbed)]
 #[folder = "resources/"]
@@ -24,11 +26,22 @@ fn try_install(
     params: HashMap<String, String>,
 ) -> Result<(), ContextError> {
     let mut context_module = Module::default();
-    context_module.ty::<Context>()?;
-    context_module.function_meta(functions::execute)?;
-    context_module.function_meta(functions::prepare)?;
-    context_module.function_meta(functions::execute_prepared)?;
-    context_module.function_meta(functions::elapsed_secs)?;
+    context_module.ty::<GlobalContext>()?;
+    context_module.ty::<LocalContext>()?;
+    context_module.ty::<Rng>()?;
+
+    context_module.function_meta(functions::local::execute)?;
+    context_module.function_meta(functions::local::execute_prepared)?;
+    context_module.function_meta(functions::local::elapsed_secs)?;
+
+    context_module.function_meta(functions::global::execute)?;
+    context_module.function_meta(functions::global::prepare)?;
+    context_module.function_meta(functions::global::execute_prepared)?;
+    context_module.function_meta(functions::global::elapsed_secs)?;
+
+    context_module.function_meta(Rng::gen_range)?;
+    context_module.function_meta(Rng::gen_i64)?;
+    context_module.function_meta(Rng::gen_f64)?;
 
     let mut err_module = Module::default();
     err_module.ty::<CassError>()?;

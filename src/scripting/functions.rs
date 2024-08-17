@@ -1,5 +1,5 @@
 use crate::scripting::cass_error::CassError;
-use crate::scripting::context::Context;
+use crate::scripting::context::LocalContext;
 use crate::scripting::cql_types::{Int8, Uuid};
 use crate::scripting::Resources;
 use chrono::Utc;
@@ -9,7 +9,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rune::macros::{quote, MacroContext, TokenStream};
 use rune::parse::Parser;
-use rune::runtime::{Function, Mut, Ref, VmError, VmResult};
+use rune::runtime::{Function, Ref, VmError, VmResult};
 use rune::{ast, vm_try, Value};
 use statrs::distribution::{Normal, Uniform};
 use std::collections::HashMap;
@@ -236,26 +236,58 @@ pub fn read_resource_words(path: &str) -> io::Result<Vec<String>> {
         .collect())
 }
 
-#[rune::function(instance)]
-pub async fn prepare(mut ctx: Mut<Context>, key: Ref<str>, cql: Ref<str>) -> Result<(), CassError> {
-    ctx.prepare(&key, &cql).await
+pub mod local {
+    use super::*;
+
+    #[rune::function(instance)]
+    pub async fn execute(ctx: Ref<LocalContext>, cql: Ref<str>) -> Result<(), CassError> {
+        ctx.global().execute(cql.deref()).await
+    }
+
+    #[rune::function(instance)]
+    pub async fn execute_prepared(
+        ctx: Ref<LocalContext>,
+        key: Ref<str>,
+        params: Value,
+    ) -> Result<(), CassError> {
+        ctx.global().execute_prepared(&key, params).await
+    }
+
+    #[rune::function(instance)]
+    pub fn elapsed_secs(ctx: &LocalContext) -> f64 {
+        ctx.global().elapsed_secs()
+    }
 }
 
-#[rune::function(instance)]
-pub async fn execute(ctx: Ref<Context>, cql: Ref<str>) -> Result<(), CassError> {
-    ctx.execute(cql.deref()).await
-}
+pub mod global {
+    use super::*;
+    use crate::scripting::context::GlobalContext;
+    use rune::runtime::Mut;
+    #[rune::function(instance)]
+    pub async fn prepare(
+        mut ctx: Mut<GlobalContext>,
+        key: Ref<str>,
+        cql: Ref<str>,
+    ) -> Result<(), CassError> {
+        ctx.prepare(&key, &cql).await
+    }
 
-#[rune::function(instance)]
-pub async fn execute_prepared(
-    ctx: Ref<Context>,
-    key: Ref<str>,
-    params: Value,
-) -> Result<(), CassError> {
-    ctx.execute_prepared(&key, params).await
-}
+    #[rune::function(instance)]
+    pub async fn execute(ctx: Ref<GlobalContext>, cql: Ref<str>) -> Result<(), CassError> {
+        ctx.execute(cql.deref()).await
+    }
 
-#[rune::function(instance)]
-pub fn elapsed_secs(ctx: &Context) -> f64 {
-    ctx.elapsed_secs()
+    #[rune::function(instance)]
+    pub async fn execute_prepared(
+        ctx: Ref<GlobalContext>,
+        key: Ref<str>,
+        params: Value,
+    ) -> Result<(), CassError> {
+        ctx.execute_prepared(&key, params).await
+    }
+
+    #[rune::function(instance)]
+    pub fn elapsed_secs(ctx: &GlobalContext) -> f64 {
+        ctx.elapsed_secs()
+    }
 }

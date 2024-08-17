@@ -31,7 +31,7 @@ use crate::error::{LatteError, Result};
 use crate::exec::{par_execute, ExecutionOptions};
 use crate::report::{PathAndSummary, Report, RunConfigCmp};
 use crate::scripting::connect::ClusterInfo;
-use crate::scripting::context::Context;
+use crate::scripting::context::GlobalContext;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Recorder};
 use exec::cycle::BoundedCycleCounter;
 use exec::progress::Progress;
@@ -109,7 +109,7 @@ fn find_workload(workload: &Path) -> PathBuf {
 }
 
 /// Connects to the server and returns the session
-async fn connect(conf: &ConnectionConf) -> Result<(Context, Option<ClusterInfo>)> {
+async fn connect(conf: &ConnectionConf) -> Result<(GlobalContext, Option<ClusterInfo>)> {
     eprintln!("info: Connecting to {:?}... ", conf.addresses);
     let session = scripting::connect::connect(conf).await?;
     let cluster_info = session.cluster_info().await?;

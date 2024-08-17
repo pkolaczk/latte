@@ -1,6 +1,6 @@
 use crate::config::ConnectionConf;
 use crate::scripting::cass_error::{CassError, CassErrorKind};
-use crate::scripting::context::Context;
+use crate::scripting::context::GlobalContext;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
 use scylla::load_balancing::DefaultPolicy;
 use scylla::transport::session::PoolSize;
@@ -25,7 +25,7 @@ fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> 
 }
 
 /// Configures connection to Cassandra.
-pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
+pub async fn connect(conf: &ConnectionConf) -> Result<GlobalContext, CassError> {
     let mut policy_builder = DefaultPolicy::builder().token_aware(true);
     if let Some(dc) = &conf.datacenter {
         policy_builder = policy_builder
@@ -47,7 +47,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
-    Ok(Context::new(scylla_session, conf.retry_strategy))
+    Ok(GlobalContext::new(scylla_session, conf.retry_strategy))
 }
 
 pub struct ClusterInfo {

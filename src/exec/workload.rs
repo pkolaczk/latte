@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::error::LatteError;
 use crate::scripting::cass_error::{CassError, CassErrorKind};
-use crate::scripting::context::Context;
+use crate::scripting::context::{GlobalContext, LocalContext};
 use crate::stats::latency::LatencyDistributionRecorder;
 use crate::stats::session::SessionStats;
 use rand::distributions::{Distribution, WeightedIndex};
@@ -24,15 +24,15 @@ use rune::{vm_try, Any, Diagnostics, Source, Sources, ToValue, Unit, Value, Vm};
 use serde::{Deserialize, Serialize};
 use try_lock::TryLock;
 
-/// Wraps a reference to Session that can be converted to a Rune `Value`
+/// Wraps a reference to `Context` that can be converted to a Rune `Value`
 /// and passed as one of `Args` arguments to a function.
-struct SessionRef<'a> {
-    context: &'a Context,
+struct ContextRef<'a> {
+    context: &'a GlobalContext,
 }
 
-impl SessionRef<'_> {
-    pub fn new(context: &Context) -> SessionRef {
-        SessionRef { context }
+impl ContextRef<'_> {
+    pub fn new(context: &GlobalContext) -> ContextRef {
+        ContextRef { context }
     }
 }
 
@@ -44,7 +44,7 @@ impl SessionRef<'_> {
 /// possible that the underlying `Session` gets dropped before the `Value` produced by this trait
 /// implementation and the compiler is not going to catch that.
 /// The receiver of a `Value` must ensure that it is dropped before `Session`!
-impl<'a> ToValue for SessionRef<'a> {
+impl<'a> ToValue for ContextRef<'a> {
     fn to_value(self) -> VmResult<Value> {
         let obj = unsafe { AnyObj::from_ref(self.context) };
         VmResult::Ok(Value::from(vm_try!(Shared::new(obj))))
@@ -54,11 +54,11 @@ impl<'a> ToValue for SessionRef<'a> {
 /// Wraps a mutable reference to Session that can be converted to a Rune `Value` and passed
 /// as one of `Args` arguments to a function.
 struct ContextRefMut<'a> {
-    context: &'a mut Context,
+    context: &'a mut GlobalContext,
 }
 
 impl ContextRefMut<'_> {
-    pub fn new(context: &mut Context) -> ContextRefMut {
+    pub fn new(context: &mut GlobalContext) -> ContextRefMut {
         ContextRefMut { context }
     }
 }
@@ -264,7 +264,7 @@ impl Program {
     /// Calls the script's `init` function.
     /// Called once at the beginning of the benchmark.
     /// Typically used to prepare statements.
-    pub async fn prepare(&mut self, context: &mut Context) -> Result<(), LatteError> {
+    pub async fn prepare(&mut self, context: &mut GlobalContext) -> Result<(), LatteError> {
         let context = ContextRefMut::new(context);
         self.async_call(&FnRef::new(PREPARE_FN), (context,)).await?;
         Ok(())
@@ -272,7 +272,7 @@ impl Program {
 
     /// Calls the script's `schema` function.
     /// Typically used to create database schema.
-    pub async fn schema(&mut self, context: &mut Context) -> Result<(), LatteError> {
+    pub async fn schema(&mut self, context: &mut GlobalContext) -> Result<(), LatteError> {
         let context = ContextRefMut::new(context);
         self.async_call(&FnRef::new(SCHEMA_FN), (context,)).await?;
         Ok(())
@@ -280,7 +280,7 @@ impl Program {
 
     /// Calls the script's `erase` function.
     /// Typically used to remove the data from the database before running the benchmark.
-    pub async fn erase(&mut self, context: &mut Context) -> Result<(), LatteError> {
+    pub async fn erase(&mut self, context: &mut GlobalContext) -> Result<(), LatteError> {
         let context = ContextRefMut::new(context);
         self.async_call(&FnRef::new(ERASE_FN), (context,)).await?;
         Ok(())
@@ -412,14 +412,14 @@ impl FnStatsCollector {
 }
 
 pub struct Workload {
-    context: Context,
+    context: GlobalContext,
     program: Program,
     router: FunctionRouter,
     state: TryLock<FnStatsCollector>,
 }
 
 impl Workload {
-    pub fn new(context: Context, program: Program, functions: &[(FnRef, f64)]) -> Workload {
+    pub fn new(context: GlobalContext, program: Program, functions: &[(FnRef, f64)]) -> Workload {
         let state = FnStatsCollector::new(functions.iter().map(|x| x.0.clone()));
         Workload {
             context,
@@ -448,9 +448,10 @@ impl Workload {
     pub async fn run(&self, cycle: i64) -> Result<(i64, Instant), LatteError> {
         let start_time = Instant::now();
         let mut rng = SmallRng::seed_from_u64(cycle as u64);
-        let context = SessionRef::new(&self.context);
+        let global_ctx = ContextRef::new(&self.context);
+        let local_ctx = LocalContext::new(cycle, global_ctx.to_value().into_result().unwrap());
         let function = self.router.select(&mut rng);
-        let result = self.program.async_call(function, (context, cycle)).await;
+        let result = self.program.async_call(function, (local_ctx, cycle)).await;
         let end_time = Instant::now();
         let mut state = self.state.try_lock().unwrap();
         let duration = end_time - start_time;
@@ -474,7 +475,7 @@ impl Workload {
 
     /// Returns the reference to the contained context.
     /// Allows to e.g. access context stats.
-    pub fn context(&self) -> &Context {
+    pub fn context(&self) -> &GlobalContext {
         &self.context
     }
 
