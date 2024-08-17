@@ -12,7 +12,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
+use tokio::runtime::Builder;
 use tokio::signal::ctrl_c;
+use tokio::task::LocalSet;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::wrappers::IntervalStream;
 
@@ -107,35 +109,40 @@ fn spawn_stream(
 ) -> Receiver<Result<WorkloadStats>> {
     let (tx, rx) = channel(1);
 
-    tokio::spawn(async move {
-        match rate {
-            Some(rate) => {
-                let stream = interval_stream(rate);
-                run_stream(
-                    stream,
-                    workload,
-                    iter_counter,
-                    concurrency,
-                    sampling,
-                    progress,
-                    tx,
-                )
-                .await
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
+    std::thread::spawn(move || {
+        let local = LocalSet::new();
+        local.spawn_local(async move {
+            match rate {
+                Some(rate) => {
+                    let stream = interval_stream(rate);
+                    run_stream(
+                        stream,
+                        workload,
+                        iter_counter,
+                        concurrency,
+                        sampling,
+                        progress,
+                        tx,
+                    )
+                    .await
+                }
+                None => {
+                    let stream = futures::stream::repeat_with(|| ());
+                    run_stream(
+                        stream,
+                        workload,
+                        iter_counter,
+                        concurrency,
+                        sampling,
+                        progress,
+                        tx,
+                    )
+                    .await
+                }
             }
-            None => {
-                let stream = futures::stream::repeat_with(|| ());
-                run_stream(
-                    stream,
-                    workload,
-                    iter_counter,
-                    concurrency,
-                    sampling,
-                    progress,
-                    tx,
-                )
-                .await
-            }
-        }
+        });
+        rt.block_on(local);
     });
     rx
 }

@@ -54,13 +54,9 @@ pub struct GlobalContext {
 // Needed, because Rune `Value` is !Send, as it may contain some internal pointers.
 // Therefore, it is not safe to pass a `Value` to another thread by cloning it, because
 // both objects could accidentally share some unprotected, `!Sync` data.
-// To make it safe, the same `Context` is never used by more than one thread at once, and
-// we make sure in `clone` to make a deep copy of the `data` field by serializing
+// To make it safe, we make sure in `clone` to make a deep copy of the `data` field by serializing
 // and deserializing it, so no pointers could get through.
-unsafe impl Send for LocalContext {}
-unsafe impl Sync for LocalContext {}
 unsafe impl Send for GlobalContext {}
-unsafe impl Sync for GlobalContext {}
 
 impl GlobalContext {
     pub fn new(session: scylla::Session, retry_strategy: RetryStrategy) -> Self {

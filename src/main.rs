@@ -507,15 +507,8 @@ fn edit_workload(workload: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn init_runtime(thread_count: usize) -> std::io::Result<Runtime> {
-    if thread_count == 1 {
-        Builder::new_current_thread().enable_all().build()
-    } else {
-        Builder::new_multi_thread()
-            .worker_threads(thread_count)
-            .enable_all()
-            .build()
-    }
+fn init_runtime() -> std::io::Result<Runtime> {
+    Builder::new_current_thread().enable_all().build()
 }
 
 fn setup_logging(run_id: &str, config: &AppConfig) -> Result<WorkerGuard> {
@@ -560,12 +553,7 @@ fn main() {
     };
 
     let command = config.command;
-    let thread_count = match &command {
-        Command::Run(cmd) => cmd.threads.get(),
-        Command::Load(cmd) => cmd.threads.get(),
-        _ => 1,
-    };
-    let runtime = init_runtime(thread_count);
+    let runtime = init_runtime();
     if let Err(e) = runtime.unwrap().block_on(async_main(run_id, command)) {
         eprintln!("error: {e}");
         exit(128);

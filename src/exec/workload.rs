@@ -177,17 +177,14 @@ impl Program {
     /// If execution fails, emits diagnostic messages, e.g. stacktrace to standard error stream.
     /// Also signals an error if the function execution succeeds, but the function returns
     /// an error value.
-    pub async fn async_call(
-        &self,
-        fun: &FnRef,
-        args: impl Args + Send,
-    ) -> Result<Value, LatteError> {
+    pub async fn async_call(&self, fun: &FnRef, args: impl Args) -> Result<Value, LatteError> {
         let handle_err = |e: VmError| {
             let mut out = StandardStream::stderr(ColorChoice::Auto);
             let _ = e.emit(&mut out, &self.sources);
             LatteError::ScriptExecError(fun.name.to_string(), e)
         };
-        let execution = self.vm().send_execute(fun.hash, args).map_err(handle_err)?;
+        let mut vm = self.vm();
+        let mut execution = vm.execute(fun.hash, args).map_err(handle_err)?;
         let result = execution
             .async_complete()
             .await
