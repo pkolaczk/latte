@@ -526,7 +526,9 @@ impl Context {
     /// Returns list of datacenters used by nodes
     pub async fn get_datacenters(&self) -> Result<Vec<String>, CassError> {
         let dc_info = self.session.get_cluster_data().get_datacenters_info();
-        return Ok(dc_info.keys().cloned().collect());
+        let mut datacenters: Vec<String> = dc_info.keys().cloned().collect();
+        datacenters.sort();
+        Ok(datacenters)
     }
 
     /// Prepares a statement and stores it in an internal statement map for future use.
