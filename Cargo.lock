@@ -1050,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "latte-cli"
-version = "0.26.2-scylladb"
+version = "0.26.3-scylladb"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
