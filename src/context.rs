@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use chrono::Utc;
 use hdrhistogram::Histogram;
-use itertools::Itertools;
+use itertools::{enumerate, Itertools};
 use metrohash::{MetroHash128, MetroHash64};
 use openssl::error::ErrorStack;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
@@ -228,6 +228,7 @@ pub enum CassErrorKind {
     SslConfiguration(ErrorStack),
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
+    PartitionRowPresetNotFound(String),
     QueryRetriesExceeded(String),
     QueryParamConversion(TypeInfo, ColumnType),
     ValueOutOfRange(String, ColumnType),
@@ -237,6 +238,7 @@ pub enum CassErrorKind {
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
     QueryExecution(QueryInfo, QueryError),
+    Error(String),
 }
 
 impl CassError {
@@ -251,6 +253,9 @@ impl CassError {
             }
             CassErrorKind::PreparedStatementNotFound(s) => {
                 write!(buf, "Prepared statement not found: {s}")
+            }
+            CassErrorKind::PartitionRowPresetNotFound(s) => {
+                write!(buf, "Partition-row preset not found: {s}")
             }
             CassErrorKind::QueryRetriesExceeded(s) => {
                 write!(buf, "QueryRetriesExceeded: {s}")
@@ -281,6 +286,9 @@ impl CassError {
             }
             CassErrorKind::QueryExecution(q, e) => {
                 write!(buf, "Failed to execute query {q}: {e}")
+            }
+            CassErrorKind::Error(s) => {
+                write!(buf, "Error: {s}")
             }
         }
     }
@@ -430,6 +438,153 @@ pub async fn handle_retry_error(
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct PartitionGroup {
+    pub n_rows_per_group: u64,
+    pub n_partitions: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct RowDistribution {
+    pub n_cycles: u64,
+    pub n_rows_for_left: u64,
+    pub n_rows_for_right: u64,
+    pub n_rows_for_left_and_right: u64,
+    pub n_rows_for_all_cycles: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct RowDistributionPreset {
+    pub total_rows: u64,
+    pub partition_groups: Vec<PartitionGroup>,
+    pub row_distributions: Vec<(RowDistribution, RowDistribution)>
+}
+
+impl RowDistributionPreset {
+    pub fn new(partition_groups: Vec<PartitionGroup>) -> RowDistributionPreset {
+        let total_rows: u64 = partition_groups.iter().map(|pg| pg.n_rows_per_group).sum();
+        RowDistributionPreset{
+            total_rows,
+            partition_groups,
+            row_distributions: vec![],
+        }
+    }
+
+    pub fn generate_row_distributions(&mut self) {
+        let mut other_rows: u64 = self.total_rows;
+        for partition_group in &self.partition_groups {
+            // NOTE: Calculate the greatest common divisor allowing it to split it to 2 groups
+            //       for getting better distribution results.
+            //       This "greatest common divisioner" will be used as a number of distribution cycles
+            //       based on the partition group proportions.
+            other_rows -= partition_group.n_rows_per_group;
+            let (cycles_num, (mult_n1, tail_n1), (mult_n2, tail_n2)) = max_gcd_with_tail(
+                partition_group.n_rows_per_group, other_rows,
+            );
+            let cycle_type_1 = (tail_n1 + tail_n2, (mult_n1 + (tail_n1 > 0) as u64), mult_n2 + (tail_n2 > 0) as u64);
+            let cycle_type_2 = ((cycles_num - tail_n1 - tail_n2), mult_n1, mult_n2);
+            self.row_distributions.push((
+                RowDistribution{
+                    n_cycles: cycle_type_1.0,
+                    n_rows_for_left: cycle_type_1.1,
+                    n_rows_for_right: cycle_type_1.2,
+                    n_rows_for_left_and_right: cycle_type_1.1 + cycle_type_1.2,
+                    n_rows_for_all_cycles: cycle_type_1.0 * cycle_type_1.1 + cycle_type_1.0 * cycle_type_1.2,
+                },
+                RowDistribution{
+                    n_cycles: cycle_type_2.0,
+                    n_rows_for_left: cycle_type_2.1,
+                    n_rows_for_right: cycle_type_2.2,
+                    n_rows_for_left_and_right: cycle_type_2.1 + cycle_type_2.2,
+                    n_rows_for_all_cycles: cycle_type_2.0 * cycle_type_2.1 + cycle_type_2.0 * cycle_type_2.2,
+                }
+            ));
+        }
+    }
+
+    pub async fn get_partition_idx(&self, idx: u64) -> u64 {
+        self._get_partition_idx(
+            idx % self.total_rows,
+            0,
+            self.partition_groups.clone(),
+            self.row_distributions.clone(),
+        ).await
+    }
+
+    async fn _get_partition_idx(
+        &self,
+        mut idx: u64,
+        mut partn_offset: u64,
+        partition_groups: Vec<PartitionGroup>,
+        row_distributions: Vec<(RowDistribution, RowDistribution)>,
+    ) -> u64 {
+        if partition_groups.is_empty() {
+            panic!("No partition groups found, cannot proceed");
+        }
+        if row_distributions.is_empty() {
+            panic!("No row_distributions found, cannot proceed");
+        }
+        for (loop_i, current_partn) in enumerate(partition_groups) {
+            let current_partn_count = current_partn.n_partitions;
+
+            let current_row_distribution = row_distributions[loop_i].clone();
+            let cycle_type_1 = current_row_distribution.0;
+            let cycle_type_2 = current_row_distribution.1;
+
+            let cycle_type_1_size = cycle_type_1.n_rows_for_left_and_right;
+            let done_cycle_type_1_num: u64;
+            let done_cycle_type_1_rows: u64;
+
+            let cycle_type_2_size: u64;
+            let mut done_cycle_type_2_num: u64 = 0;
+            let done_cycle_type_2_rows: u64;
+
+            if idx < cycle_type_1.n_rows_for_all_cycles {
+                // NOTE: we must add shift equal to the size of right group to make it's idx
+                //       be calculated correctly on the recursive call step.
+                done_cycle_type_1_num = (idx + cycle_type_1.n_rows_for_right) / cycle_type_1_size;
+                done_cycle_type_1_rows = done_cycle_type_1_num * cycle_type_1_size;
+                if done_cycle_type_1_rows <= idx && idx < cycle_type_1.n_rows_for_left + done_cycle_type_1_rows {
+                    let ret = partn_offset + (idx
+                        - done_cycle_type_1_rows
+                        + done_cycle_type_1_num * cycle_type_1.n_rows_for_left
+                    ) % current_partn_count;
+                    return ret
+                }
+            } else {
+                done_cycle_type_1_num = cycle_type_1.n_cycles;
+                done_cycle_type_1_rows = done_cycle_type_1_num * cycle_type_1_size;
+
+                cycle_type_2_size = cycle_type_2.n_rows_for_left_and_right;
+                // NOTE: exclude cumulative size of all the cycles of the first type because it's number
+                //       gets considered separately in other parts.
+                //       Also, we must add shift equal to the size of the right group to make it's idx
+                //       be calculated correctly on the recursive call step.
+                done_cycle_type_2_num = (idx - done_cycle_type_1_rows + cycle_type_2.n_rows_for_right) / cycle_type_2_size;
+                done_cycle_type_2_rows = done_cycle_type_2_num * cycle_type_2_size;
+
+                let total_done_rows = done_cycle_type_1_rows + done_cycle_type_2_rows;
+                if total_done_rows <= idx && idx < total_done_rows + cycle_type_2.n_rows_for_left {
+                    let ret = partn_offset + (idx
+                        - done_cycle_type_1_num * cycle_type_1.n_rows_for_right
+                        - done_cycle_type_2_rows
+                        + done_cycle_type_2_num * cycle_type_2.n_rows_for_left
+                    ) % current_partn_count;
+                    return ret
+                }
+            }
+            idx = idx
+                - done_cycle_type_1_num * cycle_type_1.n_rows_for_left
+                - done_cycle_type_2_num * cycle_type_2.n_rows_for_left;
+            partn_offset += current_partn_count;
+        }
+        panic!(
+            "Failed to match idx and partition idx! \
+            Most probably row distribution values were incorrectly calculated \
+            according to the partition groups data.");
+    }
+}
+
 /// This is the main object that a workload script uses to interface with the outside world.
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
 #[derive(Any)]
@@ -439,6 +594,7 @@ pub struct Context {
     stats: TryLock<SessionStats>,
     retry_number: u64,
     retry_interval: RetryInterval,
+    partition_row_presets: HashMap<String, RowDistributionPreset>,
     #[rune(get, set, add_assign, copy)]
     pub load_cycle_count: u64,
     #[rune(get)]
@@ -469,8 +625,9 @@ impl Context {
             stats: TryLock::new(SessionStats::new()),
             retry_number,
             retry_interval,
+            partition_row_presets: HashMap::new(),
             load_cycle_count: 0,
-            preferred_datacenter: preferred_datacenter,
+            preferred_datacenter,
             data: Value::Object(Shared::new(Object::new())),
         }
     }
@@ -488,6 +645,7 @@ impl Context {
             stats: TryLock::new(SessionStats::default()),
             retry_number: self.retry_number,
             retry_interval: self.retry_interval,
+            partition_row_presets: self.partition_row_presets.clone(),
             load_cycle_count: self.load_cycle_count,
             preferred_datacenter: self.preferred_datacenter.clone(),
             data: deserialized,
@@ -521,6 +679,208 @@ impl Context {
                 Ok(None)
             }
         }
+    }
+
+    /// Creates a preset for uneven row distribution among partitions
+    pub async fn init_partition_row_distribution_preset(
+        &mut self,
+        preset_name: &str,
+        row_count: u64,
+        rows_per_partitions_base: u64,
+        mut rows_per_partitions_groups: &str,  // "percent:base_multiplier, ..." -> "80:1,15:2,5:4"
+    ) -> Result<(), CassError> {
+        // Validate input data
+        if preset_name.is_empty() {
+            return Err(CassError(CassErrorKind::Error(
+                "init_partition_row_distribution_preset: 'preset_name' cannot be empty".to_string()
+            )))
+        }
+        if row_count < 1 {
+            return Err(CassError(CassErrorKind::Error(
+                "init_partition_row_distribution_preset: 'row_count' cannot be less than 1".to_string()
+            )))
+        }
+        if rows_per_partitions_base < 1 {
+            return Err(CassError(CassErrorKind::Error(
+                "init_partition_row_distribution_preset: 'rows_per_partitions_base' cannot be less than 1".to_string()
+            )))
+        }
+
+        // Parse the 'rows_per_partitions_groups' string parameter into a HashMap
+        let mut partn_multipliers: HashMap<String, (f64, f64)> = HashMap::new();
+        if rows_per_partitions_groups.is_empty() {
+            rows_per_partitions_groups = "95:1,4:2,1:4";
+        }
+        let mut summary_percentage: f64 = 0.0;
+        let mut duplicates_dump: Vec<String> = Vec::new();
+        for pair in rows_per_partitions_groups.split(',') {
+            let processed_pair = &pair.replace(" ", "");
+            if duplicates_dump.contains(processed_pair) {
+                return Err(CassError(CassErrorKind::Error(format!(
+                    "init_partition_row_distribution_preset: found duplicates pairs - '{processed_pair}'")
+                )))
+            }
+            let parts: Vec<&str> = processed_pair.split(':').collect();
+            if let (Some(key), Some(value)) = (parts.first(), parts.get(1)) {
+                if let (Ok(k), Ok(v)) = (key.parse::<f64>(), value.parse::<f64>()) {
+                    let current_pair_key = format!("{k}:{v}");
+                    partn_multipliers.insert(current_pair_key.clone(), (k, v));
+                    summary_percentage += k;
+                    duplicates_dump.push(current_pair_key);
+                } else {
+                    return Err(CassError(CassErrorKind::Error(format!(
+                        "init_partition_row_distribution_preset: \
+                        Wrong sub-value provided in the 'rows_per_partitions_groups' parameter: '{processed_pair}'. \
+                        It must be set of integer pairs separated with a ':' symbol. Example: '49.1:1,49:2,1.9:2.5'")
+                    )))
+                }
+            }
+        }
+        if (summary_percentage - 100.0).abs() > 0.01 {
+            return Err(CassError(CassErrorKind::Error(format!(
+                "init_partition_row_distribution_preset: \
+                summary of partition percentage must be '100'. Got '{summary_percentage}' instead")
+            )))
+        }
+
+        // Calculate values
+        let mut partn_sizes: HashMap<String, (f64, u64)> = HashMap::new();
+        let mut partn_counts: HashMap<String, (f64, u64)> = HashMap::new();
+        let mut partn_cycle_size: f64 = 0.0;
+        for (key, (partn_percent, partn_multiplier)) in &partn_multipliers {
+            partn_sizes.insert(
+                key.to_string(),
+                (*partn_percent, ((rows_per_partitions_base as f64) * partn_multiplier) as u64)
+            );
+            let partition_type_size: f64 = rows_per_partitions_base as f64 * partn_multiplier * partn_percent / 100.0;
+            partn_cycle_size += partition_type_size;
+        }
+        let mut partn_count: u64 = (row_count as f64 / partn_cycle_size) as u64;
+        for (key, (partn_percent, _partn_multiplier)) in &partn_multipliers {
+            let current_partn_count: u64 = ((partn_count as f64) * partn_percent / 100.0) as u64;
+            partn_counts.insert(key.to_string(), (*partn_percent, current_partn_count));
+        }
+        partn_count = partn_counts.values().map(|&(_, last)| last).sum();
+
+        // Combine calculated data into a vector of tuples
+        let mut actual_row_count: u64 = 0;
+        let mut partitions: Vec<(f64, u64, u64, f64)> = Vec::new();
+        for (key, (_partn_percent, partn_cnt)) in &partn_counts {
+            if let Some((_partn_percent, partn_size)) = partn_sizes.get(key) {
+                if let Some((partn_percent, partn_multiplier)) = partn_multipliers.get(key) {
+                    partitions.push((*partn_percent, *partn_cnt, *partn_size, *partn_multiplier));
+                    actual_row_count += partn_cnt * partn_size;
+                }
+            }
+        }
+        partitions.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+
+        // Adjust partitions based on the difference between requested and total row count
+        let mut row_count_diff: u64 = 0;
+        if row_count > actual_row_count {
+            row_count_diff = row_count - actual_row_count;
+            let smallest_partn_count_diff = row_count_diff / partitions[0].2;
+            if smallest_partn_count_diff > 0 {
+                partn_count += smallest_partn_count_diff;
+                partitions[0].1 += smallest_partn_count_diff;
+                let additional_rows: u64 = smallest_partn_count_diff * partitions[0].2;
+                actual_row_count += additional_rows;
+                row_count_diff -= additional_rows;
+            }
+        } else if row_count < actual_row_count {
+            row_count_diff = actual_row_count - row_count;
+            let mut smallest_partn_count_diff = row_count_diff / partitions[0].2;
+            if row_count_diff % partitions[0].2 > 0 {
+                smallest_partn_count_diff += 1;
+            }
+            if smallest_partn_count_diff > 0 {
+                partn_count -= smallest_partn_count_diff;
+                partitions[0].1 -= smallest_partn_count_diff;
+                actual_row_count -= smallest_partn_count_diff * partitions[0].2;
+                let additional_rows: u64 = smallest_partn_count_diff * partitions[0].2;
+                actual_row_count -= additional_rows;
+                row_count_diff = additional_rows - row_count_diff;
+            }
+        }
+        if row_count_diff > 0 {
+            partn_count += 1;
+            let mut same_size_exists = false;
+            for (i, partition) in enumerate(partitions.clone()) {
+                if partition.2 == row_count_diff {
+                    partitions[i].1 += 1;
+                    same_size_exists = true;
+                    break
+                }
+            }
+            if !same_size_exists {
+                partitions.push(((100000.0 / (partn_count as f64)).round() / 1000.0, 1, row_count_diff, 1.0));
+            }
+            actual_row_count += row_count_diff;
+        }
+        partitions.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+
+        // Print calculated values
+        let partitions_str = partitions
+            .iter()
+            .map(|(_percent, partns, rows, _multiplier)| {
+                let percent = *partns as f64 / partn_count as f64 * 100.0;
+                let percent_str = format!("{:.10}", percent);
+                let parts = percent_str.split('.').collect::<Vec<_>>();
+                if parts.len() == 2 {
+                    let int_part = parts[0];
+                    let mut frac_part: String = "".to_string();
+                    if parts[1].matches("0").count() != parts[1].len() {
+                        frac_part = parts[1].chars()
+                            .take_while(|&ch| ch == '0')
+                            .chain(parts[1].chars().filter(|&ch| ch != '0').take(2))
+                            .collect::<String>();
+                    }
+                    if !frac_part.is_empty() {
+                        frac_part = format!(".{}", frac_part);
+                    }
+                    format!("{}(~{}{}%):{}", partns, int_part, frac_part, rows)
+                } else {
+                    format!("{}(~{}%):{}", partns, parts[0], rows)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        println!(
+            "info: init_partition_row_distribution_preset: \
+             preset_name={preset_name}, total_partitions={partn_count}, total_rows={total_rows}\
+            , partitions/rows -> {partitions}",
+            preset_name=preset_name,
+            partn_count=partn_count,
+            total_rows=actual_row_count,
+            partitions=partitions_str,
+        );
+
+        // Save data for further usage
+        let mut partition_groups = vec![];
+        for partition in partitions {
+            if partition.1 > 0 {
+                partition_groups.push(
+                    PartitionGroup{ n_rows_per_group: partition.1 * partition.2, n_partitions: partition.1}
+                );
+            }
+        }
+        // NOTE: sort partition groups in the size descending order to minimize the cumulative
+        // computation cost for determining the stress_idx-partition_idx relations.
+        partition_groups.sort_by(|a, b| (b.n_rows_per_group).cmp(&(a.n_rows_per_group)));
+        let mut row_distribution_preset = RowDistributionPreset::new(partition_groups);
+        // NOTE: generate row distributions only after the partition groups are finished with changes
+        row_distribution_preset.generate_row_distributions();
+        self.partition_row_presets.insert(preset_name.to_string(), row_distribution_preset);
+
+        Ok(())
+    }
+
+    /// Returns a partition index based on the stress operation index and a preset of values
+    pub async fn get_partition_idx(&self, preset_name: &str, idx: u64) -> Result<u64, CassError> {
+        let preset = self.partition_row_presets
+            .get(preset_name)
+            .ok_or_else(|| CassError(CassErrorKind::PartitionRowPresetNotFound(preset_name.to_string())))?;
+        Ok(preset.get_partition_idx(idx).await)
     }
 
     /// Returns list of datacenters used by nodes
@@ -614,6 +974,56 @@ impl Context {
     pub fn reset_session_stats(&self) {
         self.stats.try_lock().unwrap().reset();
     }
+}
+
+/// Computes the greatest common divisor of 2 numbers, useful for rows distribution among DB partitions
+fn gcd(n1: u64, n2: u64) -> u64 {
+    if n2 == 0 {
+        n1
+    } else {
+        gcd(n2, n1 % n2)
+    }
+}
+
+/// Takes numbers of rows for 2 DB partition groups and calculates the best approach
+///   for getting the most dispered and the least clustered, by partition sizes, distribution.
+fn max_gcd_with_tail(n1: u64, n2: u64) -> (
+    u64,             // greatest common divisor
+    (u64, u64),      // (multiplier_based_on_n1, tail_n1)
+    (u64, u64),      // (multiplier_based_on_n2, tail_n2)
+) {
+    let mut max_gcd = 0;
+    let mut best_split_n1 = (0, 0);
+    let mut best_split_n2 = (0, 0);
+
+    // NOTE: allow to vary number by 1 percent of it's size for extending chances to bigger common divisor
+    // That 'tail'/'diff' which is taken out of rows number for computing greatest common divisor
+    // later will be used in one of two cycle types utilized for distribution of rows among DB partitions.
+    let max_tail_n1 = n1 / 100;
+    // Try to split 'n1'
+    for tail_n1 in 0..=max_tail_n1 {
+        let head_n1 = n1 - tail_n1;
+        let gcd_value = gcd(head_n1, n2);
+        if gcd_value > max_gcd {
+            max_gcd = gcd_value;
+            best_split_n1 = ((head_n1 / gcd_value), tail_n1);
+            best_split_n2 = ((n2 / gcd_value), 0);
+        }
+    }
+
+    let max_tail_n2 = n2 / 100;
+    // Try to split 'n2'
+    for tail_n2 in 0..=max_tail_n2 {
+        let head_n2 = n2 - tail_n2;
+        let gcd_value = gcd(n1, head_n2);
+        if gcd_value > max_gcd {
+            max_gcd = gcd_value;
+            best_split_n1 = ((n1 / gcd_value), 0);
+            best_split_n2 = ((head_n2 / gcd_value), tail_n2);
+        }
+    }
+
+    (max_gcd, best_split_n1, best_split_n2)
 }
 
 /// Functions for binding rune values to CQL parameters

@@ -102,6 +102,12 @@ impl Program {
         let mut context_module = Module::default();
         context_module.ty::<Context>().unwrap();
         context_module
+            .async_inst_fn("init_partition_row_distribution_preset", Context::init_partition_row_distribution_preset)
+            .unwrap();
+        context_module
+            .async_inst_fn("get_partition_idx", Context::get_partition_idx)
+            .unwrap();
+        context_module
             .async_inst_fn("get_datacenters", Context::get_datacenters)
             .unwrap();
         context_module
