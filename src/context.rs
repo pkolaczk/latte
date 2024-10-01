@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use chrono::Utc;
 use hdrhistogram::Histogram;
-use itertools::Itertools;
+use itertools::{Itertools, enumerate};
 use metrohash::{MetroHash128, MetroHash64};
 use openssl::error::ErrorStack;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
@@ -228,6 +228,7 @@ pub enum CassErrorKind {
     SslConfiguration(ErrorStack),
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
+    PartitionRowPresetNotFound(String),
     QueryRetriesExceeded(String),
     QueryParamConversion(TypeInfo, ColumnType),
     ValueOutOfRange(String, ColumnType),
@@ -237,6 +238,7 @@ pub enum CassErrorKind {
     Prepare(String, QueryError),
     Overloaded(QueryInfo, QueryError),
     QueryExecution(QueryInfo, QueryError),
+    Error(String),
 }
 
 impl CassError {
@@ -251,6 +253,9 @@ impl CassError {
             }
             CassErrorKind::PreparedStatementNotFound(s) => {
                 write!(buf, "Prepared statement not found: {s}")
+            }
+            CassErrorKind::PartitionRowPresetNotFound(s) => {
+                write!(buf, "Partition-row preset not found: {s}")
             }
             CassErrorKind::QueryRetriesExceeded(s) => {
                 write!(buf, "QueryRetriesExceeded: {s}")
@@ -281,6 +286,9 @@ impl CassError {
             }
             CassErrorKind::QueryExecution(q, e) => {
                 write!(buf, "Failed to execute query {q}: {e}")
+            }
+            CassErrorKind::Error(s) => {
+                write!(buf, "Error: {s}")
             }
         }
     }
@@ -439,6 +447,7 @@ pub struct Context {
     stats: TryLock<SessionStats>,
     retry_number: u64,
     retry_interval: RetryInterval,
+    partition_row_presets: HashMap<String, (u64, Vec<(f64, u64, u64, f64)>)>,
     #[rune(get, set, add_assign, copy)]
     pub load_cycle_count: u64,
     #[rune(get)]
@@ -469,6 +478,7 @@ impl Context {
             stats: TryLock::new(SessionStats::new()),
             retry_number,
             retry_interval,
+            partition_row_presets: HashMap::new(),
             load_cycle_count: 0,
             preferred_datacenter: preferred_datacenter,
             data: Value::Object(Shared::new(Object::new())),
@@ -488,6 +498,7 @@ impl Context {
             stats: TryLock::new(SessionStats::default()),
             retry_number: self.retry_number,
             retry_interval: self.retry_interval,
+            partition_row_presets: self.partition_row_presets.clone(),
             load_cycle_count: self.load_cycle_count,
             preferred_datacenter: self.preferred_datacenter.clone(),
             data: deserialized,
@@ -521,6 +532,211 @@ impl Context {
                 Ok(None)
             }
         }
+    }
+
+    /// Creates a preset for uneven row distribution among partitions
+    pub async fn init_partition_row_distribution_preset(
+        &mut self,
+        preset_name: &str,
+        row_count: u64,
+        rows_per_partitions_base: u64,
+        mut rows_per_partitions_groups: &str,  // "percent:base_multiplier, ..." -> "80:1,15:2,5:4"
+    ) -> Result<(), CassError> {
+        // Validate input data
+        if preset_name.is_empty() {
+            return Err(CassError(CassErrorKind::Error(
+                "init_partition_row_distribution_preset: 'preset_name' cannot be empty".to_string()
+            )))
+        }
+        if row_count < 1 {
+            return Err(CassError(CassErrorKind::Error(
+                "init_partition_row_distribution_preset: 'row_count' cannot be less than '1'.".to_string()
+            )))
+        }
+        if rows_per_partitions_base < 1 {
+            return Err(CassError(CassErrorKind::Error(
+                "init_partition_row_distribution_preset: 'rows_per_partitions_base' cannot be less than '1'.".to_string()
+            )))
+        }
+
+        // Parse the 'rows_per_partitions_groups' string parameter into a HashMap
+        let mut partn_multipliers: HashMap<String, (f64, f64)> = HashMap::new();
+        if rows_per_partitions_groups.is_empty() {
+            rows_per_partitions_groups = "95:1,4:2,1:4";
+        }
+        let mut summary_percentage: f64 = 0.0;
+        let mut duplicates_dump: Vec<String> = Vec::new();
+        for pair in rows_per_partitions_groups.split(',') {
+            let processed_pair = &pair.replace(" ", "");
+            if duplicates_dump.contains(processed_pair) {
+                return Err(CassError(CassErrorKind::Error(format!(
+                    "init_partition_row_distribution_preset: found duplicates pairs - '{processed_pair}'")
+                )))
+            }
+            let parts: Vec<&str> = processed_pair.split(':').collect();
+            if let (Some(key), Some(value)) = (parts.get(0), parts.get(1)) {
+                if let (Ok(k), Ok(v)) = (key.parse::<f64>(), value.parse::<f64>()) {
+                    let current_pair_key = format!("{k}:{v}");
+                    partn_multipliers.insert(current_pair_key.clone(), (k, v));
+                    summary_percentage += k;
+                    duplicates_dump.push(current_pair_key);
+                } else {
+                    return Err(CassError(CassErrorKind::Error(format!(
+                        "init_partition_row_distribution_preset: \
+                        Wrong sub-value provided in the 'rows_per_partitions_groups' parameter: '{processed_pair}'. \
+                        It must be set of integer pairs separated with a ':' symbol. Example: '49.1:1,49:2,1.9:2.5'")
+                    )))
+                }
+            }
+        }
+        if (summary_percentage - 100.0).abs() > 0.01 {
+            return Err(CassError(CassErrorKind::Error(format!(
+                "init_partition_row_distribution_preset: \
+                summary of partition percentage must be '100'. Got '{summary_percentage}' instead")
+            )))
+        }
+
+        // Calculate values
+        let mut partn_sizes: HashMap<String, (f64, u64)> = HashMap::new();
+        let mut partn_counts: HashMap<String, (f64, u64)> = HashMap::new();
+        let mut partn_cycle_size: f64 = 0.0;
+        for (key, (partn_percent, partn_multiplier)) in &partn_multipliers {
+            partn_sizes.insert(
+                key.to_string(),
+                (*partn_percent, ((rows_per_partitions_base as f64) * partn_multiplier) as u64)
+            );
+            let partition_type_size: f64 = rows_per_partitions_base as f64 * partn_multiplier * partn_percent / 100.0;
+            partn_cycle_size += partition_type_size;
+        }
+        let mut partn_count: u64 = (row_count as f64 / partn_cycle_size) as u64;
+        for (key, (partn_percent, _partn_multiplier)) in &partn_multipliers {
+            let current_partn_count: u64 = ((partn_count as f64) * partn_percent / 100.0) as u64;
+            partn_counts.insert(key.to_string(), (*partn_percent, current_partn_count));
+        }
+        partn_count = partn_counts.values().map(|&(_, last)| last).sum();
+
+        // Combine calculated data into a vector of tuples
+        let mut actual_row_count: u64 = 0;
+        let mut partitions: Vec<(f64, u64, u64, f64)> = Vec::new();
+        for (key, (_partn_percent, partn_cnt)) in &partn_counts {
+            if let Some((_partn_percent, partn_size)) = partn_sizes.get(key) {
+                if let Some((partn_percent, partn_multiplier)) = partn_multipliers.get(key) {
+                    partitions.push((*partn_percent, *partn_cnt, *partn_size, *partn_multiplier));
+                    actual_row_count += partn_cnt * partn_size;
+                }
+            }
+        }
+        partitions.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+
+        // Adjust partitions based on the difference between requested and total row count
+        let mut row_count_diff: u64 = 0;
+        if row_count > actual_row_count {
+            row_count_diff = row_count - actual_row_count;
+            let smallest_partn_count_diff = row_count_diff / partitions[0].2;
+            if smallest_partn_count_diff > 0 {
+                partn_count += smallest_partn_count_diff;
+                partitions[0].1 += smallest_partn_count_diff;
+                let additional_rows: u64 = smallest_partn_count_diff * partitions[0].2;
+                actual_row_count += additional_rows;
+                row_count_diff -= additional_rows;
+            }
+        } else if row_count < actual_row_count {
+            row_count_diff = actual_row_count - row_count;
+            let mut smallest_partn_count_diff = row_count_diff / partitions[0].2;
+            if row_count_diff % partitions[0].2 > 0 {
+                smallest_partn_count_diff += 1;
+            }
+            if smallest_partn_count_diff > 0 {
+                partn_count -= smallest_partn_count_diff;
+                partitions[0].1 -= smallest_partn_count_diff;
+                actual_row_count -= smallest_partn_count_diff * partitions[0].2;
+                let additional_rows: u64 = smallest_partn_count_diff * partitions[0].2;
+                actual_row_count -= additional_rows;
+                row_count_diff = additional_rows - row_count_diff;
+            }
+        }
+        if row_count_diff > 0 {
+            partn_count += 1;
+            let mut same_size_exists = false;
+            for (i, partition) in enumerate(partitions.clone()) {
+                if partition.2 == row_count_diff {
+                    partitions[i].1 += 1;
+                    same_size_exists = true;
+                    break
+                }
+            }
+            if !same_size_exists {
+                partitions.push(((100000.0 / (partn_count as f64)).round() / 1000.0, 1, row_count_diff, 1.0));
+            }
+            actual_row_count += row_count_diff;
+        }
+        partitions.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+
+        // Print calculated values
+        let partitions_str = partitions
+            .iter()
+            .map(|(_percent, partns, rows, _multiplier)| {
+                let percent = *partns as f64 / partn_count as f64 * 100.0;
+                let percent_str = format!("{:.10}", percent);
+                let parts = percent_str.split('.').collect::<Vec<_>>();
+                if parts.len() == 2 {
+                    let int_part = parts[0];
+                    let mut frac_part: String = "".to_string();
+                    if parts[1].matches("0").count() != parts[1].len() {
+                        frac_part = parts[1].chars()
+                            .take_while(|&ch| ch == '0')
+                            .chain(parts[1].chars().filter(|&ch| ch != '0').take(2))
+                            .collect::<String>();
+                    }
+                    if frac_part.len() > 0 {
+                        frac_part = format!(".{}", frac_part);
+                    }
+                    format!("{}(~{}{}%):{}", partns, int_part, frac_part, rows)
+                } else {
+                    format!("{}(~{}%):{}", partns, parts[0], rows)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        println!(
+            "info: init_partition_row_distribution_preset: \
+             preset_name={preset_name}, total_partitions={partn_count}, total_rows={total_rows}\
+            , partitions/rows -> {partitions}",
+            preset_name=preset_name,
+            partn_count=partn_count,
+            total_rows=actual_row_count,
+            partitions=partitions_str,
+        );
+
+        // Save data for further usage
+        partitions.retain(|&(_, current_partn_count, _, _)| current_partn_count != 0);
+        self.partition_row_presets.insert(preset_name.to_string(), (actual_row_count, partitions.clone()));
+
+        Ok(())
+    }
+
+    /// Returns a partition index based on the stress operation index and a preset of values
+    pub async fn get_partition_idx(&self, preset_name: &str, idx: u64) -> Result<u64, CassError> {
+        let preset = self.partition_row_presets
+            .get(preset_name)
+            .ok_or_else(|| CassError(CassErrorKind::PartitionRowPresetNotFound(preset_name.to_string())))?;
+        let row_count = preset.0;
+        let partitions = &preset.1;
+        let current_idx = idx - ((idx / row_count) * row_count);
+
+        let mut idx_offset: u64 = 0;
+        let mut partition_offset: u64 = 0;
+        for current_partition in partitions {
+            let current_partition_count = current_partition.1;
+            let current_partition_size = current_partition.2;
+            if current_idx < current_partition_count * current_partition_size + idx_offset {
+                return Ok(partition_offset + ((current_idx - idx_offset) / current_partition_size))
+            }
+            idx_offset += current_partition_count * current_partition_size;
+            partition_offset += current_partition_count;
+        }
+
+        Ok(partition_offset)
     }
 
     /// Returns list of datacenters used by nodes
