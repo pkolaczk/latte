@@ -82,7 +82,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
     Ok(Context::new(
-        scylla_session,
+        Some(scylla_session),
         dc.to_string(),
         conf.retry_number,
         conf.retry_interval,
@@ -442,7 +442,9 @@ pub async fn handle_retry_error(
 /// It also tracks query execution metrics such as number of requests, rows, response times etc.
 #[derive(Any)]
 pub struct Context {
-    session: Arc<scylla::Session>,
+    // NOTE: 'session' is defined as optional for being able to test methods
+    // which don't 'depend on'/'use' the 'session' object.
+    session: Option<Arc<scylla::Session>>,
     statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
     retry_number: u64,
@@ -467,13 +469,13 @@ unsafe impl Sync for Context {}
 
 impl Context {
     pub fn new(
-        session: scylla::Session,
+        session: Option<scylla::Session>,
         preferred_datacenter: String,
         retry_number: u64,
         retry_interval: RetryInterval,
     ) -> Context {
         Context {
-            session: Arc::new(session),
+            session: session.map(Arc::new),
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
             retry_number,
@@ -508,29 +510,34 @@ impl Context {
     /// Returns cluster metadata such as cluster name and cassandra version.
     pub async fn cluster_info(&self) -> Result<Option<ClusterInfo>, CassError> {
         let cql = "SELECT cluster_name, release_version FROM system.local";
-        let rs = self
-            .session
-            .query(cql, ())
-            .await
-            .map_err(|e| CassError::query_execution_error(cql, &[], e));
-        match rs {
-            Ok(rs) => {
-                if let Some(rows) = rs.rows {
-                    if let Some(row) = rows.into_iter().next() {
-                        if let Ok((name, cassandra_version)) = row.into_typed() {
-                            return Ok(Some(ClusterInfo {
-                                name,
-                                cassandra_version,
-                            }));
+
+        match &self.session {
+            Some(session) => {
+                let rs = session
+                    .query(cql, ())
+                    .await
+                    .map_err(|e| CassError::query_execution_error(cql, &[], e));
+                match rs {
+                    Ok(rs) => {
+                        if let Some(rows) = rs.rows {
+                            if let Some(row) = rows.into_iter().next() {
+                                if let Ok((name, cassandra_version)) = row.into_typed() {
+                                    return Ok(Some(ClusterInfo {
+                                        name,
+                                        cassandra_version,
+                                    }));
+                                }
+                            }
                         }
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        eprintln!("WARNING: {e}", e=e);
+                        Ok(None)
                     }
                 }
-                Ok(None)
-            }
-            Err(e) => {
-                eprintln!("WARNING: {e}", e=e);
-                Ok(None)
-            }
+            },
+            None => Err(CassError(CassErrorKind::Error("'session' is not defined".to_string())))
         }
     }
 
@@ -741,45 +748,59 @@ impl Context {
 
     /// Returns list of datacenters used by nodes
     pub async fn get_datacenters(&self) -> Result<Vec<String>, CassError> {
-        let dc_info = self.session.get_cluster_data().get_datacenters_info();
-        let mut datacenters: Vec<String> = dc_info.keys().cloned().collect();
-        datacenters.sort();
-        Ok(datacenters)
+        match &self.session {
+            Some(session) => {
+                let dc_info = session.get_cluster_data().get_datacenters_info();
+                let mut datacenters: Vec<String> = dc_info.keys().cloned().collect();
+                datacenters.sort();
+                Ok(datacenters)
+            },
+            None => Err(CassError(CassErrorKind::Error("'session' is not defined".to_string()))),
+        }
     }
 
     /// Prepares a statement and stores it in an internal statement map for future use.
     pub async fn prepare(&mut self, key: &str, cql: &str) -> Result<(), CassError> {
-        let statement = self
-            .session
-            .prepare(cql)
-            .await
-            .map_err(|e| CassError::prepare_error(cql, e))?;
-        self.statements.insert(key.to_string(), Arc::new(statement));
-        Ok(())
+        match &self.session {
+            Some(session) => {
+                let statement = session
+                    .prepare(cql)
+                    .await
+                    .map_err(|e| CassError::prepare_error(cql, e))?;
+                self.statements.insert(key.to_string(), Arc::new(statement));
+                Ok(())
+            },
+            None => Err(CassError(CassErrorKind::Error("'session' is not defined".to_string()))),
+        }
     }
 
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
-        for current_attempt_num in 0..self.retry_number + 1 {
-            let start_time = self.stats.try_lock().unwrap().start_request();
-            let rs = self.session.query(cql, ()).await;
-            let duration = Instant::now() - start_time;
-            match rs {
-                Ok(_) => {}
-                Err(e) => {
-                    let current_error = CassError::query_execution_error(cql, &[], e.clone());
-                    handle_retry_error(self, current_attempt_num, current_error).await;
-                    continue;
+        match &self.session {
+            Some(session) => {
+                for current_attempt_num in 0..self.retry_number + 1 {
+                    let start_time = self.stats.try_lock().unwrap().start_request();
+                    let rs = session.query(cql, ()).await;
+                    let duration = Instant::now() - start_time;
+                    match rs {
+                        Ok(_) => {}
+                        Err(e) => {
+                            let current_error = CassError::query_execution_error(cql, &[], e.clone());
+                            handle_retry_error(self, current_attempt_num, current_error).await;
+                            continue;
+                        }
+                    }
+                    self.stats
+                        .try_lock()
+                        .unwrap()
+                        .complete_request(duration, &rs);
+                    rs.map_err(|e| CassError::query_execution_error(cql, &[], e.clone()))?;
+                    return Ok(());
                 }
-            }
-            self.stats
-                .try_lock()
-                .unwrap()
-                .complete_request(duration, &rs);
-            rs.map_err(|e| CassError::query_execution_error(cql, &[], e.clone()))?;
-            return Ok(());
+                Err(CassError::query_retries_exceeded(self.retry_number))
+            },
+            None => Err(CassError(CassErrorKind::Error("'session' is not defined".to_string()))),
         }
-        Err(CassError::query_retries_exceeded(self.retry_number))
     }
 
     /// Executes a statement prepared and registered earlier by a call to `prepare`.
@@ -790,32 +811,37 @@ impl Context {
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
 
         let params = bind::to_scylla_query_params(&params, statement.get_variable_col_specs())?;
-        for current_attempt_num in 0..self.retry_number + 1 {
-            let start_time = self.stats.try_lock().unwrap().start_request();
-            let rs = self.session.execute(statement, params.clone()).await;
-            let duration = Instant::now() - start_time;
-            match rs {
-                Ok(_) => {}
-                Err(e) => {
-                    let current_error = CassError::query_execution_error(
-                        statement.get_statement(),
-                        &params,
-                        e.clone(),
-                    );
-                    handle_retry_error(self, current_attempt_num, current_error).await;
-                    continue;
+        match &self.session {
+            Some(session) => {
+                for current_attempt_num in 0..self.retry_number + 1 {
+                    let start_time = self.stats.try_lock().unwrap().start_request();
+                    let rs = session.execute(statement, params.clone()).await;
+                    let duration = Instant::now() - start_time;
+                    match rs {
+                        Ok(_) => {}
+                        Err(e) => {
+                            let current_error = CassError::query_execution_error(
+                                statement.get_statement(),
+                                &params,
+                                e.clone(),
+                            );
+                            handle_retry_error(self, current_attempt_num, current_error).await;
+                            continue;
+                        }
+                    }
+                    self.stats
+                        .try_lock()
+                        .unwrap()
+                        .complete_request(duration, &rs);
+                    rs.map_err(|e| {
+                        CassError::query_execution_error(statement.get_statement(), &params, e)
+                    })?;
+                    return Ok(());
                 }
-            }
-            self.stats
-                .try_lock()
-                .unwrap()
-                .complete_request(duration, &rs);
-            rs.map_err(|e| {
-                CassError::query_execution_error(statement.get_statement(), &params, e)
-            })?;
-            return Ok(());
+                Err(CassError::query_retries_exceeded(self.retry_number))
+            },
+            None => Err(CassError(CassErrorKind::Error("'session' is not defined".to_string()))),
         }
-        Err(CassError::query_retries_exceeded(self.retry_number))
     }
 
     /// Returns the current accumulated request stats snapshot and resets the stats.
@@ -1336,4 +1362,232 @@ pub fn read_resource_lines(path: &str) -> io::Result<Vec<String>> {
         .split('\n')
         .map(|s| s.to_string())
         .collect_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // NOTE: if tests which use session object get added
+    // then need to define the 'SCYLLA_URI="172.17.0.2:9042"' env var
+    // and create a DB session like following:
+    //     let session = tokio::runtime::Runtime::new()
+    //         .unwrap()
+    //         .block_on(async {
+    //             let uri = std::env::var("SCYLLA_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string());
+    //             SessionBuilder::new().known_node(uri).build().await.unwrap()
+    //         });
+    //      let mut ctxt: Context = Context::new(Some(session), ...);
+
+    fn init_and_use_partition_row_distribution_preset(
+        row_count: u64,
+        rows_per_partitions_base: u64,
+        rows_per_partitions_groups: String,  // "95:1,4:2,1:4"
+        expected_result: (u64, Vec<(f64, u64, u64, f64)>),  // partn_percent, partn_cnt, partn_size, partn_multiplier
+        expected_idx_partition_idx_mapping: Vec<(u64, u64)>,
+    ) {
+        let mut ctxt: Context = Context::new(
+            None, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
+        );
+        let preset_name = "foo_name";
+
+        assert!(ctxt.partition_row_presets.is_empty(), "The 'partition_row_presets' HashMap should not be empty");
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let _ = ctxt.init_partition_row_distribution_preset(
+                &preset_name, row_count, rows_per_partitions_base, &rows_per_partitions_groups).await;
+        });
+
+        assert!(!ctxt.partition_row_presets.is_empty(), "The 'partition_row_presets' HashMap should not be empty");
+        let actual_value = ctxt.partition_row_presets.get(preset_name)
+            .expect(&format!("Preset with name '{}' was not found", preset_name));
+        assert_eq!(&expected_result, actual_value);
+
+        for (idx, expected_partition_idx) in expected_idx_partition_idx_mapping {
+            let partition_idx = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                ctxt.get_partition_idx(preset_name, idx).await
+            }).expect("Failed to get partition index");
+            assert_eq!(
+                expected_partition_idx, partition_idx, "{}",
+                format!(
+                    "Using '{}' idx expected partition_idx is '{}', but got '{}'",
+                    idx, expected_partition_idx, partition_idx
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_01_pos_single_group_evenly_divisible() {
+        // total_partitions=40, total_rows=1000, partitions/rows -> 40(~100.000000%):25
+        init_and_use_partition_row_distribution_preset(
+            1000, 25, "100:1".to_string(),
+            (1000, vec![(100.0, 40, 25, 1.0)]),
+            vec![
+                // The only partition group as 1st cycle
+                (0, 0), (24, 0), (25, 1), (49, 1), (50, 2), (999, 39),
+                // Next cycle
+                (1000, 0), (1001, 0), (1024, 0), (1025, 1),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_02_pos_single_group_unevenly_divisible() {
+        // total_partitions=77, total_rows=1000, partitions/rows -> 76(~98.71%):13, 1(~1.29%):12
+        init_and_use_partition_row_distribution_preset(
+            1000, 13, "100:1".to_string(),
+            (1000, vec![(100.0, 76, 13, 1.0), (1.299, 1, 12, 1.0)]),
+            vec![
+                // 1st partition group
+                (0, 0), (12, 0), (13, 1), (25, 1), (26, 2), (987, 75),
+                // 2nd partition group
+                (988, 76), (999, 76),
+                // Next cycle
+                (1000, 0), (1001, 0),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_03_pos_multiple_groups_with_implicit_one() {
+        // total_partitions=90, total_rows=1000,
+        //   partitions/rows -> 46(~51.11%):6, 26(~28.88%):12, 17(~18.88%):24, 1(~1.11%):4
+        init_and_use_partition_row_distribution_preset(
+            1000, 6, "50:1,30:2,20:4".to_string(),
+            (1000, vec![(50.0, 46, 6, 1.0), (30.0, 26, 12, 2.0), (20.0, 17, 24, 4.0), (1.111, 1, 4, 1.0)]),
+            vec![
+                // 1st cycle, 1st partition group
+                (0, 0), (5, 0), (6, 1), (11, 1), (12, 2), (275, 45),
+                // 1st cycle, 2nd partition group
+                (276, 46), (287, 46), (288, 47), (587, 71),
+                // 1st cycle, 3rd partition group
+                (588, 72), (611, 72), (612, 73), (995, 88),
+                // 1st cycle, 4th partition group
+                (996, 89), (997, 89), (998, 89), (999, 89),
+                // 2nd cycle, 1st partition group
+                (1000, 0), (1001, 0), (1005, 0), (1006, 1), (1999, 89),
+                // 3rd cycle, 2nd partition group
+                (2000, 0), (2001, 0), (2005, 0), (2006, 1),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_04_pos_multiple_groups_with_implicit_one_different_input_same_result() {
+        // total_partitions=90, total_rows=1000,
+        //   partitions/rows -> 46(~51.11%):6, 26(~28.88%):12, 17(~18.88%):24, 1(~1.11%):4
+        init_and_use_partition_row_distribution_preset(
+            // NOTE: this set of data differs from the test above with different value for
+            // the 'rows_per_partitions_base' and multipliers, but resulting values must be the same
+            1000, 12, "50:0.5,30:1,20:2".to_string(),
+            (1000, vec![(50.0, 46, 6, 0.5), (30.0, 26, 12, 1.0), (20.0, 17, 24, 2.0), (1.111, 1, 4, 1.0)]),
+            vec![
+                // 1st cycle, 1st partition group
+                (0, 0), (5, 0), (6, 1), (11, 1), (12, 2), (275, 45),
+                // 1st cycle, 2nd partition group
+                (276, 46), (287, 46), (288, 47), (587, 71),
+                // 1st cycle, 3rd partition group
+                (588, 72), (611, 72), (612, 73), (995, 88),
+                // 1st cycle, 4th partition group
+                (996, 89), (997, 89), (998, 89), (999, 89),
+                // 2nd cycle, 1st partition group
+                (1000, 0), (1001, 0), (1005, 0), (1006, 1), (1999, 89),
+                // 3rd cycle, 2nd partition group
+                (2000, 0), (2001, 0), (2005, 0), (2006, 1),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_05_pos_multiple_groups_without_implicit_one() {
+        // total_partitions=664, total_rows=10000,
+        //   partitions/rows -> 332(~50.0000000000%):20, 330(~49.69%):10, 1(~0.15%):50, 1(~0.15%):10
+        init_and_use_partition_row_distribution_preset(
+            10000, 10, "49.9:1,49.9:2, 0.2:5".to_string(),
+            (10000, vec![(49.9, 332, 20, 2.0), (49.9, 331, 10, 1.0), (0.2, 1, 50, 5.0)]),
+            vec![
+                (0, 0), (19, 0), (20, 1), (39, 1), (40, 2), (6639, 331),
+                (6640, 332), (9949, 662),
+                (9950, 663), (9999, 663),
+                (10000, 0), (10019, 0), (10020, 1),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_06_pos_multiple_presets() {
+        let name_foo: String = "foo".to_string();
+        let name_bar: String = "bar".to_string();
+        let mut ctxt: Context = Context::new(
+            None, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
+        );
+
+        assert!(ctxt.partition_row_presets.is_empty(), "The 'partition_row_presets' HashMap should be empty");
+        let foo_value = ctxt.partition_row_presets.get(&name_foo);
+        assert_eq!(None, foo_value);
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            ctxt.init_partition_row_distribution_preset(
+                &name_foo, 1000, 10, &"100:1").await
+        }).expect(&format!("The '{}' preset must have been created successfully", name_foo));
+        assert!(!ctxt.partition_row_presets.is_empty(), "The 'partition_row_presets' HashMap should not be empty");
+        ctxt.partition_row_presets.get(&name_foo).expect(&format!("Preset with name '{}' was not found", name_foo));
+
+        let absent_bar = ctxt.partition_row_presets.get(&name_bar);
+        assert_eq!(None, absent_bar, "{}", format!("The '{}' preset was expected to be absent", name_bar));
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            ctxt.init_partition_row_distribution_preset(
+                &name_bar, 1000, 10, &"90:1,10:2").await
+        }).expect(&format!("The '{}' preset must have been created successfully", name_bar));
+        ctxt.partition_row_presets.get(&name_bar).expect(&format!("Preset with name '{}' was not found", name_bar));
+    }
+
+    fn false_input_for_partition_row_distribution_preset(
+        preset_name: String,
+        row_count: u64,
+        rows_per_partitions_base: u64,
+        rows_per_partitions_groups: String,
+    ) {
+        let mut ctxt: Context = Context::new(
+            None, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
+        );
+        let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            ctxt.init_partition_row_distribution_preset(
+                &preset_name, row_count, rows_per_partitions_base, &rows_per_partitions_groups).await
+        });
+
+        assert!(matches!(result, Err(ref _e)), "Error result was expected, but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_07_neg_empty_preset_name() {
+        false_input_for_partition_row_distribution_preset("".to_string(), 1000, 10, "100:1".to_string())
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_08_neg_zero_rows() {
+        false_input_for_partition_row_distribution_preset("foo".to_string(), 0, 10, "100:1".to_string())
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_09_neg_zero_base() {
+        false_input_for_partition_row_distribution_preset("foo".to_string(), 1000, 0, "100:1".to_string())
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_10_neg_percentage_is_not_100() {
+        false_input_for_partition_row_distribution_preset("foo".to_string(), 1000, 10, "90:1,9:2".to_string())
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_11_neg_duplicated_percentages() {
+        false_input_for_partition_row_distribution_preset("foo".to_string(), 1000, 10, "50:1 , 50:1".to_string())
+    }
+
+    #[test]
+    fn test_partition_row_distribution_preset_12_neg_wrong_percentages() {
+        false_input_for_partition_row_distribution_preset("foo".to_string(), 1000, 10, "90:1,ten:1".to_string())
+    }
 }
