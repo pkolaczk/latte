@@ -9,6 +9,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use bytes::Bytes;
 use chrono::Utc;
 use hdrhistogram::Histogram;
 use itertools::{enumerate, Itertools};
@@ -30,6 +31,7 @@ use scylla::frame::response::result::CqlValue;
 use scylla::frame::value::CqlTimeuuid;
 use scylla::load_balancing::DefaultPolicy;
 use scylla::prepared_statement::PreparedStatement;
+use scylla::query::Query;
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use scylla::transport::session::PoolSize;
 use scylla::{ExecutionProfile, QueryResult, SessionBuilder};
@@ -83,6 +85,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
     Ok(Context::new(
         Some(scylla_session),
+        conf.page_size.get() as u64,
         dc.to_string(),
         conf.retry_number,
         conf.retry_interval,
@@ -337,13 +340,18 @@ impl SessionStats {
         Instant::now()
     }
 
-    pub fn complete_request(&mut self, duration: Duration, rs: &Result<QueryResult, QueryError>) {
+    pub fn complete_request(&mut self, duration: Duration, total_rows: Option<u64>, rs: &Result<QueryResult, QueryError>) {
         self.queue_length -= 1;
         let duration_ns = duration.as_nanos().clamp(1, u64::MAX as u128) as u64;
         self.resp_times_ns.record(duration_ns).unwrap();
         self.req_count += 1;
         match rs {
-            Ok(rs) => self.row_count += rs.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64,
+            Ok(rs) => {
+                match total_rows {
+                    Some(n) => self.row_count += n,
+                    None => self.row_count += rs.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64,
+                }
+            },
             Err(e) => {
                 self.req_error_count += 1;
                 self.req_errors.insert(format!("{e}"));
@@ -592,6 +600,7 @@ pub struct Context {
     // NOTE: 'session' is defined as optional for being able to test methods
     // which don't 'depend on'/'use' the 'session' object.
     session: Option<Arc<scylla::Session>>,
+    page_size: u64,
     statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
     retry_number: u64,
@@ -617,12 +626,14 @@ unsafe impl Sync for Context {}
 impl Context {
     pub fn new(
         session: Option<scylla::Session>,
+        page_size: u64,
         preferred_datacenter: String,
         retry_number: u64,
         retry_interval: RetryInterval,
     ) -> Context {
         Context {
             session: session.map(Arc::new),
+            page_size,
             statements: HashMap::new(),
             stats: TryLock::new(SessionStats::new()),
             retry_number,
@@ -643,6 +654,7 @@ impl Context {
         let deserialized: Value = rmp_serde::from_slice(&serialized)?;
         Ok(Context {
             session: self.session.clone(),
+            page_size: self.page_size.clone(),
             statements: self.statements.clone(),
             stats: TryLock::new(SessionStats::default()),
             retry_number: self.retry_number,
@@ -907,8 +919,9 @@ impl Context {
     pub async fn prepare(&mut self, key: &str, cql: &str) -> Result<(), CassError> {
         match &self.session {
             Some(session) => {
+                let query = Query::new(cql).with_page_size(self.page_size as i32);
                 let statement = session
-                    .prepare(cql)
+                    .prepare(query)
                     .await
                     .map_err(|e| CassError::prepare_error(cql, e))?;
                 self.statements.insert(key.to_string(), Arc::new(statement));
@@ -922,22 +935,36 @@ impl Context {
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
         match &self.session {
             Some(session) => {
-                for current_attempt_num in 0..self.retry_number + 1 {
+                let query = Query::new(cql).with_page_size(self.page_size as i32);
+                let mut all_pages_duration = Duration::ZERO;
+                let mut paging_state: Option<Bytes> = None;
+                let mut rows_cnt: u64 = 0;
+
+                let mut current_attempt_num = 0;
+                while current_attempt_num <= self.retry_number {
                     let start_time = self.stats.try_lock().unwrap().start_request();
-                    let rs = session.query(cql, ()).await;
-                    let duration = Instant::now() - start_time;
+                    let rs = session.query_paged(query.clone(), (), paging_state.clone()).await;
+                    let current_duration = Instant::now() - start_time;
                     match rs {
-                        Ok(_) => {}
+                        Ok(ref page) => {
+                            paging_state = page.paging_state.clone();
+                            rows_cnt += page.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64;
+                            all_pages_duration += current_duration;
+                        }
                         Err(e) => {
                             let current_error = CassError::query_execution_error(cql, &[], e.clone());
                             handle_retry_error(self, current_attempt_num, current_error).await;
+                            current_attempt_num += 1;
                             continue;
                         }
+                    }
+                    if paging_state != None {
+                        continue // get next page
                     }
                     self.stats
                         .try_lock()
                         .unwrap()
-                        .complete_request(duration, &rs);
+                        .complete_request(all_pages_duration, Some(rows_cnt), &rs);
                     rs.map_err(|e| CassError::query_execution_error(cql, &[], e.clone()))?;
                     return Ok(());
                 }
@@ -957,12 +984,21 @@ impl Context {
         let params = bind::to_scylla_query_params(&params, statement.get_variable_col_specs())?;
         match &self.session {
             Some(session) => {
-                for current_attempt_num in 0..self.retry_number + 1 {
+                let mut all_pages_duration = Duration::ZERO;
+                let mut paging_state: Option<Bytes> = None;
+                let mut rows_cnt: u64 = 0;
+
+                let mut current_attempt_num = 0;
+                while current_attempt_num <= self.retry_number {
                     let start_time = self.stats.try_lock().unwrap().start_request();
-                    let rs = session.execute(statement, params.clone()).await;
-                    let duration = Instant::now() - start_time;
+                    let rs = session.execute_paged(statement, params.clone(), paging_state.clone()).await;
+                    let current_duration = Instant::now() - start_time;
                     match rs {
-                        Ok(_) => {}
+                        Ok(ref page) => {
+                            paging_state = page.paging_state.clone();
+                            rows_cnt += page.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64;
+                            all_pages_duration += current_duration;
+                        }
                         Err(e) => {
                             let current_error = CassError::query_execution_error(
                                 statement.get_statement(),
@@ -970,13 +1006,17 @@ impl Context {
                                 e.clone(),
                             );
                             handle_retry_error(self, current_attempt_num, current_error).await;
+                            current_attempt_num += 1;
                             continue;
                         }
+                    }
+                    if paging_state != None {
+                        continue // get next page
                     }
                     self.stats
                         .try_lock()
                         .unwrap()
-                        .complete_request(duration, &rs);
+                        .complete_request(all_pages_duration, Some(rows_cnt), &rs);
                     rs.map_err(|e| {
                         CassError::query_execution_error(statement.get_statement(), &params, e)
                     })?;
