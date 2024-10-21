@@ -1,7 +1,7 @@
 [package]
 name = "latte-cli"
 description = "A database benchmarking tool for Apache Cassandra"
-version = "0.26.3-scylladb"
+version = "0.26.4-scylladb"
 authors = ["Piotr Kołaczkowski <pkolaczk@gmail.com>"]
 edition = "2021"
 readme = "README.md"
