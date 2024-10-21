@@ -192,6 +192,10 @@ pub struct ConnectionConf {
     #[clap(long("request-timeout"), default_value = "5", value_name = "COUNT")]
     pub request_timeout: NonZeroUsize,
 
+    /// Page size defines the number of rows to get in a single select-query
+    #[clap(long("page-size"), default_value = "501", value_name = "COUNT")]
+    pub page_size: NonZeroUsize,
+
     #[clap(long("retry-number"), default_value = "10", value_name = "COUNT")]
     pub retry_number: u64,
 

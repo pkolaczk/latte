@@ -283,6 +283,40 @@ Then you can set the parameter by using `-P`:
 latte run <workload> -P row_count=200
 ```
 
+### Multi-row partitions with different row count
+
+If there is a need to simulate real-life case where we have multi-row partitions
+and their sizes differ we can easily cover it with latte.
+
+First step is to define following function in the `prepare` section of a rune script:
+```
+  pub async fn prepare(db) {
+    ...
+    db.init_partition_row_distribution_preset(
+      "foo", ROW_COUNT, ROWS_PER_PARTITION, "70:1,20:2.5,10:3.5").await?;
+    ...
+  }
+```
+
+With this function we pre-create a preset with the `foo` name
+and instruct it to calculate number of partitions and their rows-sizes like following:
+- `70%` of partitions will be of the `ROWS_PER_PARTITION` size
+- `20%` of `2.5*ROWS_PER_PARTITION`
+- `10%` of the `3.5*ROWS_PER_PARTITION`.
+
+Then, in the target functions we can reuse it like following:
+```
+  pub async fn insert(db, i) {
+    let idx = i % ROW_COUNT + OFFSET;
+    let partition_idx = db.get_partition_idx("foo", idx).await? + OFFSET;
+    ...
+  }
+```
+
+As a result we will be able to get multi-row partitions in a requested size proportions.
+
+Number of presets is unlimited. Any rune script may use multiple different presets for different tables.
+
 ### Error handling
 
 Errors during execution of a workload script are divided into three classes:
