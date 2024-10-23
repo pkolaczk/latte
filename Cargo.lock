@@ -1045,6 +1045,7 @@ version = "0.26.4-scylladb"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "clap",
  "console",

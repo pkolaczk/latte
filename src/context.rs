@@ -1626,7 +1626,7 @@ mod tests {
     ) {
         for (rows_per_partitions_base, rows_per_partitions_groups) in rows_per_partitions_base_and_groups_mapping {
             let mut ctxt: Context = Context::new(
-                None, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
+                None, 501, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
             );
             let preset_name = "foo_name";
 
@@ -1805,7 +1805,7 @@ mod tests {
         let name_foo: String = "foo".to_string();
         let name_bar: String = "bar".to_string();
         let mut ctxt: Context = Context::new(
-            None, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
+            None, 501, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
         );
 
         assert!(ctxt.partition_row_presets.is_empty(), "The 'partition_row_presets' HashMap should be empty");
@@ -1838,7 +1838,7 @@ mod tests {
         rows_per_partitions_groups: String,
     ) {
         let mut ctxt: Context = Context::new(
-            None, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
+            None, 501, "foo-dc".to_string(), 0, RetryInterval::new("1,2").expect("REASON"),
         );
         let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
             ctxt.init_partition_row_distribution_preset(
