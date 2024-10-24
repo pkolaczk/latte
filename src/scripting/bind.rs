@@ -67,6 +67,14 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
             }
         }
         (Value::Bytes(v), ColumnType::Blob) => Ok(CqlValue::Blob(v.borrow_ref().unwrap().to_vec())),
+        (Value::Vec(v), ColumnType::Blob) => {
+            let v: Vec<Value> = v.borrow_ref().unwrap().to_vec();
+            let byte_vec: Vec<u8> = v
+                .into_iter()
+                .map(|value| value.as_byte().unwrap())
+                .collect();
+            Ok(CqlValue::Blob(byte_vec))
+        }
         (Value::Option(v), typ) => match v.borrow_ref().unwrap().as_ref() {
             Some(v) => to_scylla_value(v, typ),
             None => Ok(CqlValue::Empty),
