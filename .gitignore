@@ -1,3 +1,6 @@
 /target
 *.iml
 .idea
+
+# Linux swap files range from .saa to .swp (used by vim and some other apps)
+*.s[a-w][a-p]
