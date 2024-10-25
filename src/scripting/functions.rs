@@ -117,11 +117,15 @@ pub fn blob(seed: i64, len: usize) -> Vec<u8> {
 /// the RNG.
 #[rune::function]
 pub fn text(seed: i64, len: usize) -> String {
+    let charset: Vec<char> = ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".to_owned()
+        + "0123456789!@#$%^&*()_+-=[]{}|;:',.<>?/")
+        .chars()
+        .collect();
     let mut rng = SmallRng::seed_from_u64(seed as u64);
     (0..len)
         .map(|_| {
-            let code_point = rng.gen_range(0x0061u32..=0x007Au32); // Unicode range for 'a-z'
-            std::char::from_u32(code_point).unwrap()
+            let idx = rng.gen_range(0..charset.len());
+            charset[idx]
         })
         .collect()
 }
