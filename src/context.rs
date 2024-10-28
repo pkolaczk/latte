@@ -958,7 +958,8 @@ impl Context {
                             continue;
                         }
                     }
-                    if paging_state != None {
+                    if paging_state.is_some() {
+                        current_attempt_num = 0;
                         continue // get next page
                     }
                     self.stats
@@ -1010,7 +1011,8 @@ impl Context {
                             continue;
                         }
                     }
-                    if paging_state != None {
+                    if paging_state.is_some() {
+                        current_attempt_num = 0;
                         continue // get next page
                     }
                     self.stats
