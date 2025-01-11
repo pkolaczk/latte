@@ -1,0 +1,21 @@
+use common::{KEYSPACE, TABLE, READ_SIZE, ROW_COUNT, MC, HC};
+use latte::*;
+
+mod common;
+
+const READ = "read";
+
+pub async fn prepare(db) {
+    // common::prepare(db).await?;
+    db.prepare(READ, `SELECT * FROM ${KEYSPACE}.${TABLE} 
+        WHERE time1 >= ? AND time1 < ? AND mc > ? AND mc <? AND hc > ? AND hc < ? AND tag = 'text text text' AND time2 >= ? AND time2 < ?
+        ORDER BY vec ANN OF ? LIMIT ${READ_SIZE}`).await?;
+}
+
+pub async fn run(db, i) {
+    let point = hash_range(i, ROW_COUNT - READ_SIZE);
+    let mc = hash2(i, 33311) % MC;
+    let hc = hash2(i, 67633) % HC;
+    let vec = normal_vec(i, 2, 0.0, 1.0);
+    db.execute_prepared(READ, (point, point + READ_SIZE/10, mc, mc + READ_SIZE/10, hc, hc + READ_SIZE, point, point + READ_SIZE, vec)).await?;
+}
