@@ -6,74 +6,20 @@ pub const TABLE = latte::param!("table", "sai_vector");
 // Total number of rows in the table:
 pub const ROW_COUNT = latte::param!("rows", 100000);
 
-// Total number of partitions in the table:
-pub const PAR_COUNT = latte::param!("partitions", ROW_COUNT);
-
 // Column cardinalities:
 pub const LC = latte::param!("lc", 10);
 pub const MC = latte::param!("hc", 100);
 pub const HC = latte::param!("hc", 1000);
 
-pub const TIME_DELTA = latte::param!("time_delta", 1000);
-
 // Limit on the number of rows to fetch in a single query:
 pub const READ_SIZE = latte::param!("read_size", 100);
 
-const WRITE = "write";
+pub const HYBRID_QUERY_2 = `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE time1 >= ? AND time1 < ? AND mc > ? AND mc <?`;
+pub const HYBRID_QUERY_POSTFIX = `ORDER BY vec ANN OF ? LIMIT ${READ_SIZE}`;
 
-pub async fn init_schema(db) {
-    db.execute(`
-        CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE}
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1 }`).await?;
-    db.execute(`
-        DROP TABLE IF EXISTS ${KEYSPACE}.${TABLE}`).await?;
-    db.execute(`
-        CREATE TABLE ${KEYSPACE}.${TABLE} (
-            par_id bigint,
-            row_id uuid,
-            time1 timestamp,
-            time2 timestamp,
-            hc bigint,
-            mc bigint,
-            lc bigint,
-            tag text,
-            vec vector<float, 2>,
-            PRIMARY KEY (par_id, row_id)
-        )`).await?;
-
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time1) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time2) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(hc) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(mc) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(lc) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(tag) USING 'StorageAttachedIndex'`).await?;
-    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(vec) USING 'StorageAttachedIndex'`).await?;
-    Ok(())
-}
-
-pub async fn erase(db) {
-    db.execute(`TRUNCATE TABLE ${KEYSPACE}.${TABLE}`).await?;
-    Ok(())
-}
-
-pub async fn prepare(db) {
-    db.load_cycle_count = ROW_COUNT;
-    db.prepare(WRITE,
-        `INSERT INTO ${KEYSPACE}.${TABLE}(par_id, row_id, time1, time2, hc, mc, lc, tag)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).await?;
-    Ok(())
-}
-
-pub async fn insert_row(db, i) {
-    let par_id = hash_range(i, PAR_COUNT);
-    let row_id = uuid(i);
-    let time1 = i * 1000;
-    let time2 = (i + TIME_DELTA) * 1000;
-    let hc = hash2(i, 1) % HC;
-    let mc = hash2(i, 2) % MC;
-    let lc = hash2(i, 3) % LC;
-    let tag = "text text text";
+pub fn two_restrictions_params(i) {
+    let time1_point = hash_range(i, ROW_COUNT - READ_SIZE);
+    let mc = hash2(i, 33311) % MC;
     let vec = normal_vec(i, 2, 0.0, 1.0);
-    db.execute_prepared(WRITE, [par_id, row_id, time1, time2, hc, mc, lc, tag]).await?;
-    Ok(())
+    (time1_point, time1_point + READ_SIZE/10, mc, mc + READ_SIZE/10, vec)
 }
