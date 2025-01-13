@@ -1,5 +1,5 @@
 use crate::scripting::cass_error::CassError;
-use err_derive::*;
+use err_derive::Error;
 use hdrhistogram::serialization::interval_log::IntervalLogWriterError;
 use hdrhistogram::serialization::V2DeflateSerializeError;
 use rune::alloc;
@@ -49,7 +49,5 @@ pub enum LatteError {
     #[error(display = "Memory allocation failure: {}", _0)]
     OutOfMemory(#[source] alloc::Error),
 }
-
-impl LatteError {}
 
 pub type Result<T> = std::result::Result<T, LatteError>;
