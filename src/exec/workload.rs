@@ -44,7 +44,7 @@ impl SessionRef<'_> {
 /// possible that the underlying `Session` gets dropped before the `Value` produced by this trait
 /// implementation and the compiler is not going to catch that.
 /// The receiver of a `Value` must ensure that it is dropped before `Session`!
-impl<'a> ToValue for SessionRef<'a> {
+impl ToValue for SessionRef<'_> {
     fn to_value(self) -> VmResult<Value> {
         let obj = unsafe { AnyObj::from_ref(self.context) };
         VmResult::Ok(Value::from(vm_try!(Shared::new(obj))))
@@ -64,7 +64,7 @@ impl ContextRefMut<'_> {
 }
 
 /// Caution! See `impl ToValue for SessionRef`.
-impl<'a> ToValue for ContextRefMut<'a> {
+impl ToValue for ContextRefMut<'_> {
     fn to_value(self) -> VmResult<Value> {
         let obj = unsafe { AnyObj::from_mut(self.context) };
         VmResult::Ok(Value::from(vm_try!(Shared::new(obj))))

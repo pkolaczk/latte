@@ -471,7 +471,7 @@ impl RunConfigCmp<'_> {
     }
 }
 
-impl<'a> Display for RunConfigCmp<'a> {
+impl Display for RunConfigCmp<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("CONFIG"))?;
         if self.v2.is_some() {
@@ -635,7 +635,7 @@ impl BenchmarkCmp<'_> {
 }
 
 /// Formats all benchmark stats
-impl<'a> Display for BenchmarkCmp<'a> {
+impl Display for BenchmarkCmp<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", fmt_section_header("SUMMARY STATS"))?;
         if self.v2.is_some() {

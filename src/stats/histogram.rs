@@ -28,7 +28,7 @@ impl Serialize for SerializableHistogram {
 
 struct HistogramVisitor;
 
-impl<'de> Visitor<'de> for HistogramVisitor {
+impl Visitor<'_> for HistogramVisitor {
     type Value = SerializableHistogram;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
