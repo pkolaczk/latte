@@ -1,4 +1,5 @@
 /target
 *.iml
+latte-*
 .idea
 .vscode

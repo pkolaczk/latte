@@ -159,8 +159,10 @@ pub async fn schema(ctx) {
 ### Prepared statements
 
 Calling `ctx.execute` is not optimal, because it doesn't use prepared statements. You can prepare statements and
-register them on the context object in the `prepare`
-function:
+register them on the context object in the `prepare` function. 
+They will be executed during [the load step](#populating-the-database) before the actual database population 
+and the run step before executing the run function.
+An example of implementing and using prepare:
 
 ```rust
 const INSERT = "my_insert";
