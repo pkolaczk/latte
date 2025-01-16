@@ -1,0 +1,104 @@
+use latte::*;
+
+pub const KEYSPACE = latte::param!("keyspace", "latte");
+pub const TABLE = latte::param!("table", "sai_vector");
+
+// Total number of rows in the table:
+pub const ROW_COUNT = latte::param!("rows", 100000);
+
+// Column cardinalities:
+pub const LC = latte::param!("lc", 10);
+pub const MC = latte::param!("hc", 100);
+pub const HC = latte::param!("hc", 1000);
+
+// Limit on the number of rows to fetch in a single query:
+pub const READ_SIZE = latte::param!("read_size", 100);
+
+// Total number of partitions in the table:
+const PAR_COUNT = latte::param!("partitions", ROW_COUNT);
+
+const TIME_DELTA = latte::param!("time_delta", 1000);
+
+pub async fn schema(db) {
+    db.execute(`
+        CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE}
+            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1 }`).await?;
+    db.execute(`
+        DROP TABLE IF EXISTS ${KEYSPACE}.${TABLE}`).await?;
+    db.execute(`
+        CREATE TABLE ${KEYSPACE}.${TABLE} (
+            par_id bigint,
+            row_id uuid,
+            time1 timestamp,
+            time2 timestamp,
+            hc bigint,
+            mc bigint,
+            lc bigint,
+            tag text,
+            vec vector<float, 2>,
+            PRIMARY KEY (par_id, row_id)
+        )`).await?;
+
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time1) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(time2) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(hc) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(mc) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(lc) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(tag) USING 'StorageAttachedIndex'`).await?;
+    db.execute(`CREATE CUSTOM INDEX IF NOT EXISTS ON ${KEYSPACE}.${TABLE}(vec) USING 'StorageAttachedIndex'`).await?;
+}
+
+pub async fn erase(db) {
+    db.execute(`TRUNCATE TABLE ${KEYSPACE}.${TABLE}`).await?;
+}
+
+const INSERT_ROW = "insert_row";
+const HYBRID2 = "hybrid_2restrictions";
+const HYBRID_MANY = "hybrid_many_restrictions";
+
+pub async fn prepare(db) {
+    db.load_cycle_count = ROW_COUNT;
+    db.prepare(INSERT_ROW,
+        `INSERT INTO ${KEYSPACE}.${TABLE}(par_id, row_id, time1, time2, hc, mc, lc, tag)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).await?;
+    db.prepare(HYBRID2, `${HYBRID_QUERY_2} ${HYBRID_QUERY_POSTFIX}`).await?;
+    db.prepare(HYBRID_MANY, `${HYBRID_QUERY_2} 
+        AND hc > ? AND hc < ? AND tag = 'text text text' AND time2 >= ? AND time2 < ?
+        ${HYBRID_QUERY_POSTFIX}`).await?;
+}
+
+pub async fn load(db, i) {
+    let par_id = hash_range(i, PAR_COUNT);
+    let row_id = uuid(i);
+    let time1 = i * 1000;
+    let time2 = (i + TIME_DELTA) * 1000;
+    let hc = hash2(i, 1) % HC;
+    let mc = hash2(i, 2) % MC;
+    let lc = hash2(i, 3) % LC;
+    let tag = "text text text";
+    let vec = normal_vec(i, 2, 0.0, 1.0);
+    db.execute_prepared(INSERT_ROW, [par_id, row_id, time1, time2, hc, mc, lc, tag]).await?;
+}
+
+pub const HYBRID_QUERY_2 = `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE time1 >= ? AND time1 < ? AND mc > ? AND mc <?`;
+pub const HYBRID_QUERY_POSTFIX = `ORDER BY vec ANN OF ? LIMIT ${READ_SIZE}`;
+
+pub fn two_restrictions_params(i) {
+    let time1_point = hash_range(i, ROW_COUNT - READ_SIZE);
+    let mc = hash2(i, 33311) % MC;
+    let vec = normal_vec(i, 2, 0.0, 1.0);
+    (time1_point, time1_point + READ_SIZE/10, mc, mc + READ_SIZE/10, vec)
+}
+
+pub async fn run_two_restrictions(db, i) {
+    db.execute_prepared(HYBRID2, two_restrictions_params(i)).await?;
+}
+
+pub async fn run_many_restrictions(db, i) {
+    let params2 = two_restrictions_params(i);
+    let time2_point = params2[0];
+    let hc = hash2(i, 67633) % HC;
+    db.execute_prepared(HYBRID_MANY, 
+        (params2[0], params2[1], params2[2], params2[3], 
+        hc, hc + READ_SIZE, time2_point, time2_point + READ_SIZE, params2[4])).await?;
+}
