@@ -11,7 +11,7 @@ pub const PAR_COUNT = latte::param!("partitions", ROW_COUNT);
 
 // Column cardinalities:
 pub const LC = latte::param!("lc", 10);
-pub const MC = latte::param!("hc", 100);
+pub const MC = latte::param!("mc", 100);
 pub const HC = latte::param!("hc", 1000);
 
 pub const TIME_DELTA = latte::param!("time_delta", 1000);

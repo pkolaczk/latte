@@ -310,7 +310,7 @@ each function the weight which will determine how frequently the function should
 If unspecified, the default weight is 1. Weights don't have to sum to 1.
 
 Assuming the workload definition file contains functions `read` and `write`, the following
-invocation of latte will run a mix of 20% writes and 80% reads:
+invocation of latte will run a mix of 80% writes and 20% reads:
 
 ```
 latte run <workload> -f read:0.2 -f write:0.8
