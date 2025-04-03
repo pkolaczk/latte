@@ -39,6 +39,7 @@ use exec::workload::{FnRef, Program, Workload, WorkloadStats, LOAD_FN};
 use report::plot::plot_graph;
 use report::table::{Alignment, Table};
 
+mod adapters;
 mod config;
 mod error;
 mod exec;
@@ -112,19 +113,7 @@ fn find_workload(workload: &Path) -> PathBuf {
 async fn connect(conf: &ConnectionConf) -> Result<(Context, Option<ClusterInfo>)> {
     eprintln!("info: Connecting to {:?}... ", conf.addresses);
     let session = scripting::connect::connect(conf).await?;
-    let cluster_info = session.cluster_info().await?;
-    eprintln!(
-        "info: Connected to {} running Cassandra version {}",
-        cluster_info
-            .as_ref()
-            .map(|c| c.name.as_str())
-            .unwrap_or("unknown"),
-        cluster_info
-            .as_ref()
-            .map(|c| c.cassandra_version.as_str())
-            .unwrap_or("unknown")
-    );
-    Ok((session, cluster_info))
+    Ok((session, None))
 }
 
 /// Runs the `schema` function of the workload script.

@@ -4,11 +4,12 @@ use rune::{ContextError, Module};
 use rust_embed::RustEmbed;
 use std::collections::HashMap;
 
-mod bind;
+pub mod bind;
 pub mod cass_error;
 pub mod connect;
 pub mod context;
-mod cql_types;
+pub mod cql_types;
+pub mod executor;
 mod functions;
 
 #[derive(RustEmbed)]

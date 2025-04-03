@@ -1,6 +1,5 @@
 use crate::stats::latency::LatencyDistributionRecorder;
-use scylla::transport::errors::QueryError;
-use scylla::QueryResult;
+use anyhow::Error;
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -31,18 +30,13 @@ impl SessionStats {
         Instant::now()
     }
 
-    pub fn complete_request(
-        &mut self,
-        duration: Duration,
-        rs: &Result<QueryResult, QueryError>,
-        retries: u64,
-    ) {
+    pub fn complete_request(&mut self, duration: Duration, rs: &Result<u64, Error>, retries: u64) {
         self.queue_length -= 1;
         self.resp_times_ns.record(duration);
         self.req_count += 1;
         self.req_retry_count += retries;
         match rs {
-            Ok(rs) => self.row_count += rs.rows.as_ref().map(|r| r.len()).unwrap_or(0) as u64,
+            Ok(rs) => self.row_count += rs,
             Err(e) => {
                 self.req_error_count += 1;
                 self.req_errors.insert(format!("{e}"));

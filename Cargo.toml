@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
+aerospike = { git = "https://github.com/aerospike/aerospike-client-rust.git", branch = "v2", features = ["rt-tokio"] }
 anyhow = "1.0"
 base64 = "0.22"
 rmp = "0.8"
@@ -40,7 +41,7 @@ rand_distr = "0.4"
 regex = "1.5"
 rune = "0.13"
 rust-embed = "8"
-scylla = { version = "0.13", features = ["ssl"] }
+scylla = { version = "1.0.0" }
 search_path = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

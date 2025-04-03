@@ -1,4 +1,5 @@
-use crate::scripting::cass_error::CassError;
+use crate::adapters::Adapters;
+use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::context::Context;
 use crate::scripting::cql_types::{Int8, Uuid};
 use crate::scripting::Resources;
@@ -242,12 +243,18 @@ pub fn read_resource_words(path: &str) -> io::Result<Vec<String>> {
 
 #[rune::function(instance)]
 pub async fn prepare(mut ctx: Mut<Context>, key: Ref<str>, cql: Ref<str>) -> Result<(), CassError> {
-    ctx.prepare(&key, &cql).await
+    match ctx.adapter_mut() {
+        Adapters::Scylla(ref mut sc) => sc.prepare(&key, &cql).await,
+        _ => Err(CassError(CassErrorKind::Unsupported)),
+    }
 }
 
 #[rune::function(instance)]
 pub async fn execute(ctx: Ref<Context>, cql: Ref<str>) -> Result<(), CassError> {
-    ctx.execute(cql.deref()).await
+    match ctx.adapter() {
+        Adapters::Scylla(sc) => sc.execute(cql.deref()).await,
+        _ => Err(CassError(CassErrorKind::Unsupported)),
+    }
 }
 
 #[rune::function(instance)]
@@ -256,7 +263,10 @@ pub async fn execute_prepared(
     key: Ref<str>,
     params: Value,
 ) -> Result<(), CassError> {
-    ctx.execute_prepared(&key, params).await
+    match ctx.adapter() {
+        Adapters::Scylla(sc) => sc.execute_prepared(&key, params).await,
+        _ => Err(CassError(CassErrorKind::Unsupported)),
+    }
 }
 
 #[rune::function(instance)]

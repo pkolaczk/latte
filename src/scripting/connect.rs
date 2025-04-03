@@ -1,10 +1,14 @@
+use crate::adapters::scylla::ScyllaAdapter;
+use crate::adapters::Adapters;
 use crate::config::ConnectionConf;
 use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::context::Context;
+use crate::scripting::executor::Executor;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
-use scylla::load_balancing::DefaultPolicy;
-use scylla::transport::session::PoolSize;
-use scylla::{ExecutionProfile, SessionBuilder};
+use scylla::client::execution_profile::ExecutionProfile;
+use scylla::client::session_builder::SessionBuilder;
+use scylla::client::PoolSize;
+use scylla::policies::load_balancing::DefaultPolicy;
 
 fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
     if conf.ssl {
@@ -38,16 +42,22 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .request_timeout(Some(conf.request_timeout))
         .build();
 
+    let ssl_ctx = ssl_context(&conf)?;
+
     let scylla_session = SessionBuilder::new()
         .known_nodes(&conf.addresses)
         .pool_size(PoolSize::PerShard(conf.count))
         .user(&conf.user, &conf.password)
-        .ssl_context(ssl_context(&conf)?)
         .default_execution_profile_handle(profile.into_handle())
+        // TODO: find out why it works in doc, but does not compile in real world
+        //.tls_context(ssl_ctx)
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
-    Ok(Context::new(scylla_session, conf.retry_strategy))
+    Ok(Context::new(Adapters::Scylla(ScyllaAdapter::new(
+        scylla_session,
+        Executor::new(conf.retry_strategy, |_| true),
+    ))))
 }
 
 pub struct ClusterInfo {

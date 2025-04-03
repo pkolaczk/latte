@@ -2,30 +2,25 @@ use openssl::error::ErrorStack;
 use rune::alloc::fmt::TryWrite;
 use rune::runtime::{TypeInfo, VmResult};
 use rune::{vm_write, Any};
-use scylla::_macro_internal::{ColumnType, CqlValue};
-use scylla::transport::errors::{DbError, NewSessionError, QueryError};
+use scylla::errors::{ExecutionError, NewSessionError, PrepareError};
+use scylla::value::CqlValue;
 use std::fmt::{Display, Formatter};
 
 #[derive(Any, Debug)]
 pub struct CassError(pub CassErrorKind);
 
 impl CassError {
-    pub fn prepare_error(cql: &str, err: QueryError) -> CassError {
+    pub fn prepare_error(cql: &str, err: PrepareError) -> CassError {
         CassError(CassErrorKind::Prepare(cql.to_string(), err))
     }
 
-    pub fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
+    pub fn query_execution_error(cql: &str, params: &[CqlValue], err: ExecutionError) -> CassError {
         let query = QueryInfo {
             cql: cql.to_string(),
             params: params.iter().map(cql_value_obj_to_string).collect(),
         };
         let kind = match err {
-            QueryError::RequestTimeout(_)
-            | QueryError::TimeoutError
-            | QueryError::DbError(
-                DbError::Overloaded | DbError::ReadTimeout { .. } | DbError::WriteTimeout { .. },
-                _,
-            ) => CassErrorKind::Overloaded(query, err),
+            ExecutionError::RequestTimeout(_) => CassErrorKind::Overloaded(query, err),
             _ => CassErrorKind::QueryExecution(query, err),
         };
         CassError(kind)
@@ -38,13 +33,14 @@ pub enum CassErrorKind {
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
     QueryRetriesExceeded(String),
-    QueryParamConversion(String, ColumnType, Option<String>),
-    ValueOutOfRange(String, ColumnType),
+    QueryParamConversion(String, Option<String>),
+    ValueOutOfRange(String),
     InvalidNumberOfQueryParams,
     InvalidQueryParamsObject(TypeInfo),
-    Prepare(String, QueryError),
-    Overloaded(QueryInfo, QueryError),
-    QueryExecution(QueryInfo, QueryError),
+    Prepare(String, PrepareError),
+    Overloaded(QueryInfo, ExecutionError),
+    QueryExecution(QueryInfo, ExecutionError),
+    Unsupported,
 }
 
 #[derive(Debug)]
@@ -75,14 +71,14 @@ impl CassError {
             CassErrorKind::QueryRetriesExceeded(s) => {
                 write!(buf, "QueryRetriesExceeded: {s}")
             }
-            CassErrorKind::ValueOutOfRange(v, t) => {
-                write!(buf, "Value {v} out of range for Cassandra type {t:?}")
+            CassErrorKind::ValueOutOfRange(v) => {
+                write!(buf, "Value {v} out of range")
             }
-            CassErrorKind::QueryParamConversion(v, t, None) => {
-                write!(buf, "Cannot convert value {v} to Cassandra type {t:?}")
+            CassErrorKind::QueryParamConversion(v, None) => {
+                write!(buf, "Cannot convert value {v}")
             }
-            CassErrorKind::QueryParamConversion(v, t, Some(e)) => {
-                write!(buf, "Cannot convert value {v} to Cassandra type {t:?}: {e}")
+            CassErrorKind::QueryParamConversion(v, Some(e)) => {
+                write!(buf, "Cannot convert value {v}: {e}")
             }
             CassErrorKind::InvalidNumberOfQueryParams => {
                 write!(buf, "Incorrect number of query parameters")
@@ -98,6 +94,9 @@ impl CassError {
             }
             CassErrorKind::QueryExecution(q, e) => {
                 write!(buf, "Failed to execute query {q}: {e}")
+            }
+            CassErrorKind::Unsupported => {
+                write!(buf, "Unsupported query type")
             }
         }
     }
@@ -135,7 +134,7 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
         }
         CqlValue::UserDefinedType {
             keyspace,
-            type_name,
+            name: type_name,
             fields,
         } => {
             let mut result = format!(
