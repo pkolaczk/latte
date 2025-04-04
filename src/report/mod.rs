@@ -752,6 +752,23 @@ impl Display for BenchmarkCmp<'_> {
             }
         }
 
+        writeln!(f)?;
+        writeln!(f, "{}", fmt_section_header("RESPONSE LATENCY [ms]"))?;
+        if self.v2.is_some() {
+            writeln!(f, "{}", fmt_cmp_header(true))?;
+        }
+
+        for p in resp_time_percentiles.iter() {
+            let l = self
+                .line(p.name(), "", |s| {
+                    let rt = s.request_latency.as_ref().map(|l| l.percentiles.get(*p));
+                    Quantity::from(rt).with_precision(3)
+                })
+                .with_orientation(-1)
+                .with_significance(self.cmp_resp_time_percentile(*p));
+            writeln!(f, "{l}")?;
+        }
+
         if self.v1.error_count > 0 {
             writeln!(f)?;
             writeln!(f, "{}", fmt_section_header("ERRORS"))?;
