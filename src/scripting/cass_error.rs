@@ -1,3 +1,4 @@
+use anyhow::Error;
 use openssl::error::ErrorStack;
 use rune::alloc::fmt::TryWrite;
 use rune::runtime::{TypeInfo, VmResult};
@@ -40,7 +41,9 @@ pub enum CassErrorKind {
     Prepare(String, PrepareError),
     Overloaded(QueryInfo, ExecutionError),
     QueryExecution(QueryInfo, ExecutionError),
+    AerospikeError(aerospike::Error),
     Unsupported,
+    InitFailure(Error),
 }
 
 #[derive(Debug)]
@@ -97,6 +100,12 @@ impl CassError {
             }
             CassErrorKind::Unsupported => {
                 write!(buf, "Unsupported query type")
+            }
+            CassErrorKind::InitFailure(e) => {
+                write!(buf, "Failed to init: {e}")
+            }
+            CassErrorKind::AerospikeError(e) => {
+                write!(buf, "Failed to execute Aerospike query: {e}")
             }
         }
     }

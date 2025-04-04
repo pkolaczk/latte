@@ -33,14 +33,11 @@ impl AerospikeAdapter {
         }
     }
 
-    pub async fn get(&self, key: &String) -> Result<(), Error> {
+    pub async fn get(&self, key: &str) -> Result<(), Error> {
         let aero_key = as_key!(&self.namespace, &self.set, key);
         if let Err(err) = self
             .executor
-            .execute_inner(
-                || self.get_inner(&aero_key),
-                |_| 1,
-            )
+            .execute_inner(|| self.get_inner(&aero_key), |_| 1)
             .await
         {
             error!("{}", err);
@@ -51,10 +48,13 @@ impl AerospikeAdapter {
     }
 
     async fn get_inner(&self, aero_key: &Key) -> Result<(), Error> {
-        self.connection.get(&self.read_policy, aero_key, Bins::All).await.map(|_| ())
+        self.connection
+            .get(&self.read_policy, aero_key, Bins::All)
+            .await
+            .map(|_| ())
     }
 
-    pub async fn put(&self, key: &String, values: Vec<Bin>) -> Result<(), Error> {
+    pub async fn put(&self, key: &str, values: Vec<Bin>) -> Result<(), Error> {
         let aero_key = as_key!(&self.namespace, &self.set, key);
         if let Err(err) = self
             .executor

@@ -1,4 +1,4 @@
-use crate::config::{RunCommand, WeightedFunction};
+use crate::config::{DBEngine, RunCommand, WeightedFunction};
 use crate::stats::percentiles::Percentile;
 use crate::stats::{BenchmarkCmp, BenchmarkStats, Mean, Sample, Significance};
 use chrono::{DateTime, Local, TimeZone};
@@ -12,6 +12,7 @@ use std::fmt::{Display, Formatter};
 use std::io::{BufReader, BufWriter};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{fs, io};
 use strum::IntoEnumIterator;
 use table::Row;
@@ -485,7 +486,11 @@ impl Display for RunConfigCmp<'_> {
                 OptionDisplay(conf.cluster_name.clone())
             }),
             self.line("Datacenter", "", |conf| {
-                conf.connection.datacenter.clone().unwrap_or_default()
+                conf.connection
+                    .scylla_connection_conf
+                    .datacenter
+                    .clone()
+                    .unwrap_or_default()
             }),
             self.line("Cass. version", "", |conf| {
                 OptionDisplay(conf.cass_version.clone())
@@ -503,7 +508,11 @@ impl Display for RunConfigCmp<'_> {
                     .join(", ")
             }),
             self.line("Consistency", "", |conf| {
-                conf.connection.consistency.scylla_consistency().to_string()
+                conf.connection
+                    .scylla_connection_conf
+                    .consistency
+                    .scylla_consistency()
+                    .to_string()
             }),
             self.line("Tags", "", |conf| conf.tags.iter().join(", ")),
         ];
@@ -540,7 +549,7 @@ impl Display for RunConfigCmp<'_> {
         let lines: Vec<Box<dyn Display>> = vec![
             self.line("Threads", "", |conf| Quantity::from(conf.threads)),
             self.line("Connections", "", |conf| {
-                Quantity::from(conf.connection.count)
+                Quantity::from(get_connection_count(conf))
             }),
             self.line("Concurrency", "req", |conf| {
                 Quantity::from(conf.concurrency)
@@ -565,7 +574,7 @@ impl Display for RunConfigCmp<'_> {
                 Quantity::from(conf.sampling_interval.count())
             }),
             self.line("Request timeout", "s", |conf| {
-                Quantity::from(conf.connection.request_timeout.as_secs_f64())
+                Quantity::from(get_request_timeout(conf).as_secs_f64())
             }),
             self.line("Retries", "", |conf| {
                 Quantity::from(conf.connection.retry_strategy.retries)
@@ -631,6 +640,24 @@ impl BenchmarkCmp<'_> {
             self.v2,
             f,
         ))
+    }
+}
+
+pub fn get_request_timeout(conf: &RunCommand) -> Duration {
+    match conf.connection.db {
+        DBEngine::Scylla => conf.connection.request_timeout,
+        DBEngine::Aerospike => conf.connection.request_timeout,
+        DBEngine::Foundation => Duration::from_millis(0),
+        DBEngine::PostgreSQL => Duration::from_millis(0),
+    }
+}
+
+pub fn get_connection_count(conf: &RunCommand) -> NonZeroUsize {
+    match conf.connection.db {
+        DBEngine::Scylla => conf.connection.count,
+        DBEngine::Aerospike => conf.connection.count,
+        DBEngine::Foundation => NonZeroUsize::new(1).unwrap(),
+        DBEngine::PostgreSQL => NonZeroUsize::new(1).unwrap(),
     }
 }
 

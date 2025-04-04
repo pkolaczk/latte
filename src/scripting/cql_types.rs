@@ -39,6 +39,15 @@ impl Uuid {
     }
 }
 
+#[derive(Clone, Any)]
+pub struct Bin(pub aerospike::Bin);
+
+impl Bin {
+    pub fn new(name: String, value: String) -> Self {
+        Self(aerospike::Bin::new(name, aerospike::Value::String(value)))
+    }
+}
+
 pub mod i64 {
     use crate::scripting::cql_types::{Float32, Int16, Int32, Int8};
 

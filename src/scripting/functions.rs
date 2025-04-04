@@ -1,9 +1,10 @@
 use crate::adapters::Adapters;
 use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::context::Context;
-use crate::scripting::cql_types::{Int8, Uuid};
+use crate::scripting::cql_types::{Bin, Int8, Uuid};
 use crate::scripting::Resources;
 use chrono::Utc;
+use itertools::Itertools;
 use metrohash::MetroHash64;
 use rand::distributions::Distribution;
 use rand::rngs::SmallRng;
@@ -253,6 +254,28 @@ pub async fn prepare(mut ctx: Mut<Context>, key: Ref<str>, cql: Ref<str>) -> Res
 pub async fn execute(ctx: Ref<Context>, cql: Ref<str>) -> Result<(), CassError> {
     match ctx.adapter() {
         Adapters::Scylla(sc) => sc.execute(cql.deref()).await,
+        _ => Err(CassError(CassErrorKind::Unsupported)),
+    }
+}
+
+#[rune::function(instance)]
+pub async fn get(ctx: Ref<Context>, key: Ref<str>) -> Result<(), CassError> {
+    match ctx.adapter() {
+        Adapters::Aerospike(aero) => aero
+            .get(key.deref())
+            .await
+            .map_err(|e| CassError(CassErrorKind::AerospikeError(e))),
+        _ => Err(CassError(CassErrorKind::Unsupported)),
+    }
+}
+
+#[rune::function(instance)]
+pub async fn put(ctx: Ref<Context>, key: Ref<str>, value: Bin) -> Result<(), CassError> {
+    match ctx.adapter() {
+        Adapters::Aerospike(aero) => aero
+            .put(key.deref(), vec![value.0])
+            .await
+            .map_err(|e| CassError(CassErrorKind::AerospikeError(e))),
         _ => Err(CassError(CassErrorKind::Unsupported)),
     }
 }

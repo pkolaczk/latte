@@ -1,3 +1,4 @@
+use aerospike::{CommitLevel, ConsistencyLevel, Priority, RecordExistsAction};
 use anyhow::anyhow;
 use chrono::Utc;
 use clap::builder::PossibleValue;
@@ -131,28 +132,7 @@ impl FromStr for RetryDelay {
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize)]
-pub struct ConnectionConf {
-    /// Number of connections per Cassandra node / Scylla shard.
-    #[clap(
-        short('c'),
-        long("connections"),
-        default_value = "1",
-        value_name = "COUNT"
-    )]
-    pub count: NonZeroUsize,
-
-    /// List of Cassandra addresses to connect to.
-    #[clap(name = "addresses", default_value = "localhost")]
-    pub addresses: Vec<String>,
-
-    /// Cassandra user name
-    #[clap(long, env("CASSANDRA_USER"), default_value = "")]
-    pub user: String,
-
-    /// Password to use if password authentication is required by the server
-    #[clap(long, env("CASSANDRA_PASSWORD"), default_value = "")]
-    pub password: String,
-
+pub struct ScyllaConnectionConf {
     /// Enable SSL
     #[clap(long("ssl"))]
     pub ssl: bool,
@@ -176,9 +156,87 @@ pub struct ConnectionConf {
     /// Default CQL query consistency level
     #[clap(long("consistency"), required = false, default_value = "LOCAL_QUORUM")]
     pub consistency: Consistency,
+}
 
-    #[clap(long("request-timeout"), default_value = "5s", value_name = "DURATION", value_parser = parse_duration::parse)]
+#[derive(Parser, Debug, Serialize, Deserialize)]
+pub struct AerospikeConnectionConf {
+    #[clap(long("namespace"), default_value = "default")]
+    pub namespace: String,
+
+    #[clap(long("set"), default_value = "default")]
+    pub set: String,
+
+    #[clap(long("max-retries"), default_value = "2")]
+    pub max_retries: usize,
+
+    #[clap(long("sleep-between-retries"), default_value = "1ms", value_name = "DURATION", value_parser = parse_duration::parse
+    )]
+    pub sleep_between_retries: Duration,
+
+    #[clap(long("expiration-seconds"), default_value = "7200")]
+    pub expiration_seconds: u32,
+
+    /// Default CQL query consistency level
+    #[clap(long("read-priority"), required = false, default_value = "high")]
+    pub read_priority: CliPriority,
+
+    /// Default CQL query consistency level
+    #[clap(long("write-priority"), required = false, default_value = "medium")]
+    pub write_priority: CliPriority,
+
+    /// Default CQL query consistency level
+    #[clap(long("consistency-level"), required = false, default_value = "one")]
+    pub consistency_level: CliConsistencyLevel,
+
+    /// Default CQL query consistency level
+    #[clap(
+        long("record-exists-action"),
+        required = false,
+        default_value = "replace"
+    )]
+    pub record_exists_action: CliRecordExistsAction,
+
+    /// Default CQL query consistency level
+    #[clap(long("commit-level"), required = false, default_value = "all")]
+    pub commit_level: CliCommitLevel,
+}
+
+#[derive(Parser, Debug, Serialize, Deserialize)]
+pub struct ConnectionConf {
+    /// Number of connections per Cassandra node / Scylla shard.
+    #[clap(long("db"))]
+    pub db: DBEngine,
+
+    /// Number of connections per node.
+    #[clap(
+        short('c'),
+        long("connections"),
+        default_value = "1",
+        value_name = "COUNT"
+    )]
+    pub count: NonZeroUsize,
+
+    #[clap(long("request-timeout"), default_value = "50ms", value_name = "DURATION", value_parser = parse_duration::parse
+    )]
     pub request_timeout: Duration,
+
+    /// List of Cassandra addresses to connect to.
+    #[clap(name = "addresses", default_value = "localhost")]
+    pub addresses: Vec<String>,
+
+    /// Cassandra user name
+    #[clap(long, env("CASSANDRA_USER"), default_value = "")]
+    pub user: String,
+
+    /// Password to use if password authentication is required by the server
+    #[clap(long, env("CASSANDRA_PASSWORD"), default_value = "")]
+    pub password: String,
+
+    #[clap(flatten)]
+    pub scylla_connection_conf: ScyllaConnectionConf,
+
+    #[clap(flatten)]
+    pub aerospike_connection_conf: AerospikeConnectionConf,
 
     #[clap(flatten)]
     pub retry_strategy: RetryStrategy,
@@ -219,6 +277,14 @@ pub enum Consistency {
     #[default]
     LocalQuorum,
     EachQuorum,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
+pub enum DBEngine {
+    Scylla,
+    Aerospike,
+    Foundation,
+    PostgreSQL,
 }
 
 impl Consistency {
@@ -653,9 +719,9 @@ pub enum Command {
 
 #[derive(Parser, Debug)]
 #[command(
-name = "Cassandra Latency and Throughput Tester",
-author = "Piotr Kołaczkowski <pkolaczk@datastax.com>",
-version = clap::crate_version ! (),
+    name = "Cassandra Latency and Throughput Tester",
+    author = "Piotr Kołaczkowski <pkolaczk@datastax.com>",
+    version = clap::crate_version!(),
 )]
 pub struct AppConfig {
     /// Name of the log file.
@@ -720,4 +786,106 @@ pub struct WorkloadConfig {
     pub run: HashMap<String, RunConfig>,
     #[serde(default)]
     pub bindings: HashMap<String, String>,
+}
+
+/// CLI Priority of operations on database server.
+#[derive(Debug, Clone, clap::ValueEnum, Serialize, Deserialize)]
+pub enum CliPriority {
+    /// Default determines that the server defines the priority.
+    Default,
+
+    /// Low determines that the server should run the operation in a background thread.
+    Low,
+
+    /// Medium determines that the server should run the operation at medium priority.
+    Medium,
+
+    /// High determines that the server should run the operation at the highest priority.
+    High,
+}
+
+impl CliPriority {
+    /// Maps `CliPriority` to the SDK `Priority` enum.
+    pub fn to_sdk_priority(&self) -> Priority {
+        match self {
+            CliPriority::Default => Priority::Default,
+            CliPriority::Low => Priority::Low,
+            CliPriority::Medium => Priority::Medium,
+            CliPriority::High => Priority::High,
+        }
+    }
+}
+
+/// CLI consistency level for read operations.
+#[derive(Debug, Clone, clap::ValueEnum, Serialize, Deserialize)]
+pub enum CliConsistencyLevel {
+    /// ConsistencyOne indicates only a single replica should be consulted in the read operation.
+    One,
+
+    /// ConsistencyAll indicates that all replicas should be consulted in the read operation.
+    All,
+}
+
+impl CliConsistencyLevel {
+    /// Maps `CliConsistencyLevel` to the SDK `ConsistencyLevel` enum.
+    pub fn to_sdk_consistency_level(&self) -> ConsistencyLevel {
+        match self {
+            CliConsistencyLevel::One => ConsistencyLevel::ConsistencyOne,
+            CliConsistencyLevel::All => ConsistencyLevel::ConsistencyAll,
+        }
+    }
+}
+
+/// CLI action to perform when a record exists.
+#[derive(Debug, Clone, clap::ValueEnum, Serialize, Deserialize)]
+pub enum CliRecordExistsAction {
+    /// Update means: Create or update record.
+    /// Merge write command bins with existing bins.
+    Update,
+
+    /// UpdateOnly means: Update record only. Fail if record does not exist.
+    UpdateOnly,
+
+    /// Replace means: Create or replace record.
+    /// Delete existing bins not referenced by write command bins.
+    Replace,
+
+    /// ReplaceOnly means: Replace record only. Fail if record does not exist.
+    ReplaceOnly,
+
+    /// CreateOnly means: Create only. Fail if record exists.
+    CreateOnly,
+}
+
+impl CliRecordExistsAction {
+    /// Maps `CliRecordExistsAction` to the SDK `RecordExistsAction` enum.
+    pub fn to_sdk_record_exists_action(&self) -> RecordExistsAction {
+        match self {
+            CliRecordExistsAction::Update => RecordExistsAction::Update,
+            CliRecordExistsAction::UpdateOnly => RecordExistsAction::UpdateOnly,
+            CliRecordExistsAction::Replace => RecordExistsAction::Replace,
+            CliRecordExistsAction::ReplaceOnly => RecordExistsAction::ReplaceOnly,
+            CliRecordExistsAction::CreateOnly => RecordExistsAction::CreateOnly,
+        }
+    }
+}
+
+/// CLI commit level for record writes.
+#[derive(Debug, Clone, clap::ValueEnum, Serialize, Deserialize)]
+pub enum CliCommitLevel {
+    /// CommitAll indicates the server should wait until successfully committing master and all replicas.
+    All,
+
+    /// CommitMaster indicates the server should wait until successfully committing master only.
+    Master,
+}
+
+impl CliCommitLevel {
+    /// Maps `CliCommitLevel` to the SDK `CommitLevel` enum.
+    pub fn to_sdk_commit_level(&self) -> CommitLevel {
+        match self {
+            CliCommitLevel::All => CommitLevel::CommitAll,
+            CliCommitLevel::Master => CommitLevel::CommitMaster,
+        }
+    }
 }
