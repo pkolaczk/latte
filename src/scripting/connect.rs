@@ -7,12 +7,15 @@ use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::context::Context;
 use crate::scripting::executor::Executor;
 use aerospike::policy::BasePolicy;
-use aerospike::{Client, ClientPolicy, Expiration, GenerationPolicy, ReadPolicy, WritePolicy};
+use aerospike::{
+    Client, ClientPolicy, Error, Expiration, GenerationPolicy, ReadPolicy, ResultCode, WritePolicy,
+};
 use anyhow::anyhow;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
 use scylla::client::execution_profile::ExecutionProfile;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::client::PoolSize;
+use scylla::errors::ExecutionError;
 use scylla::policies::load_balancing::DefaultPolicy;
 
 fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
@@ -48,7 +51,13 @@ async fn connect_aerospike(conf: &ConnectionConf) -> Result<Context, CassError> 
 
     Ok(Context::new(Adapters::Aerospike(AerospikeAdapter::new(
         client,
-        Executor::new(conf.retry_strategy, |_| true),
+        Executor::new(conf.retry_strategy, |res| match res {
+            Ok(_) => false,
+            Err(e) => match e {
+                Error::ServerError(ResultCode::KeyNotFoundError, _, _) => false,
+                _ => true,
+            },
+        }),
         ReadPolicy {
             priority: conf
                 .aerospike_connection_conf
@@ -126,7 +135,10 @@ async fn connect_scylla(conf: &ConnectionConf) -> Result<Context, CassError> {
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
     Ok(Context::new(Adapters::Scylla(ScyllaAdapter::new(
         scylla_session,
-        Executor::new(conf.retry_strategy, |_| true),
+        Executor::new(conf.retry_strategy, |res| match res {
+            Err(ExecutionError::RequestTimeout(_)) => true,
+            _ => false,
+        }),
     ))))
 }
 
