@@ -2,7 +2,10 @@
 
 use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::cql_types::Uuid;
+use aerospike::Bin;
 use itertools::*;
+use rune::alloc::borrow::TryToOwned;
+use rune::runtime::Object;
 use rune::{Any, ToValue, Value};
 use scylla::_macro_internal::ColumnType;
 use scylla::cluster::metadata::{CollectionType, NativeType, UserDefinedType};
@@ -11,6 +14,7 @@ use scylla::value::{CqlTimestamp, CqlTimeuuid, CqlValue};
 use std::borrow::Cow;
 use std::net::IpAddr;
 use std::str::FromStr;
+use tokio_postgres::types::{ToSql, Type};
 
 fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
     // TODO: add support for the following native CQL types:
@@ -181,8 +185,8 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
         (
             val,
             ColumnType::UserDefinedType {
-                frozen: f,
-                definition: definition,
+                frozen: _f,
+                definition,
             },
         ) => {
             let non_arc_definition = UserDefinedType {
@@ -196,7 +200,7 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
                     UserDefinedType {
                         keyspace,
                         name: type_name,
-                        field_types: field_types,
+                        field_types,
                     },
                 ) => {
                     let obj = v.borrow_ref().unwrap();
@@ -212,7 +216,7 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
                     UserDefinedType {
                         keyspace,
                         name: type_name,
-                        field_types: field_types,
+                        field_types,
                     },
                 ) => {
                     let obj = v.borrow_ref().unwrap();
@@ -223,14 +227,125 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
                         fields,
                     })
                 }
-                (value, typ) => Err(CassError(CassErrorKind::QueryParamConversion(
+                (value, _) => Err(CassError(CassErrorKind::QueryParamConversion(
                     format!("{:?}", value),
                     None,
                 ))),
             }
         }
-        (value, typ) => Err(CassError(CassErrorKind::QueryParamConversion(
+        (value, _) => Err(CassError(CassErrorKind::QueryParamConversion(
             format!("{:?}", value),
+            None,
+        ))),
+    }
+}
+
+fn to_pg_value(v: &Value, typ: &Type) -> Result<Box<dyn ToSql + Sync>, CassError> {
+    // TODO: add type check too, it is complicated because the Inner type enum is not public in PG lib.
+    // TODO: support vec
+    match (v, typ.name()) {
+        (Value::Bool(v), "bool") => Ok(Box::new(*v)),
+        (Value::Byte(v), "char") => Ok(Box::new(*v as i8)),
+        (Value::Integer(v), "char") => Ok(Box::new(*v as i8)),
+        (Value::Integer(v), "int8") => Ok(Box::new(*v)),
+        (Value::Integer(v), "int4") => Ok(Box::new(*v as i32)),
+        (Value::Integer(v), "int2") => Ok(Box::new(*v as i16)),
+        (Value::Integer(v), "oid") => Ok(Box::new(*v as u32)),
+        (Value::Float(v), "float4") => Ok(Box::new(*v as f32)),
+        (Value::Float(v), "float8") => Ok(Box::new(*v)),
+        (Value::String(v), "text") => Ok(Box::new(v.borrow_ref().unwrap().to_string())),
+        (Value::String(v), "varchar") => Ok(Box::new(v.borrow_ref().unwrap().to_string())),
+        (Value::Bytes(v), "bytea") => Ok(Box::new(v.borrow_ref().unwrap().to_vec())),
+        (value, _) => Err(CassError(CassErrorKind::QueryParamConversion(
+            format!("{:?}", value),
+            Some(typ.name().to_string()),
+        ))),
+    }
+}
+
+pub fn to_aerospike_value(v: Value) -> Result<Vec<Bin>, CassError> {
+    match v {
+        Value::Vec(vec) => {
+            let (correct_bins, errors): (Vec<Result<Bin, CassError>>, Vec<Result<Bin, CassError>>) =
+                vec.borrow_ref()
+                    .unwrap()
+                    .to_vec()
+                    .into_iter()
+                    .map(|v| {
+                        rune::from_value(v)
+                            .map_err(|e| {
+                                CassError(CassErrorKind::QueryParamConversion(
+                                    format!("Failed to convert entry to Object: {:?}", e,),
+                                    None,
+                                ))
+                            })
+                            .map(object_to_bin)
+                            .and_then(|i| i)
+                    })
+                    .partition(|x| x.is_ok());
+
+            if !errors.is_empty() {
+                return Err(CassError(CassErrorKind::QueryParamConversion(
+                    format!(
+                        "Failed to map data. Errors: {:?}",
+                        errors
+                            .into_iter()
+                            .map(|e| format!("{:?}", e.err()))
+                            .join(", ")
+                    ),
+                    None,
+                )));
+            }
+
+            Ok(correct_bins.into_iter().map(|x| x.unwrap()).collect_vec())
+        }
+        Value::Object(obj) => {
+            let object = obj.borrow_ref().unwrap().try_to_owned().map_err(|e| {
+                CassError(CassErrorKind::QueryParamConversion(
+                    format!("{:?}", obj),
+                    Some(format!("{:?}", e)),
+                ))
+            })?;
+            let bin = object_to_bin(object)?;
+
+            Ok(vec![bin])
+        }
+        value => Err(CassError(CassErrorKind::QueryParamConversion(
+            format!("{:?}", value),
+            None,
+        ))),
+    }
+}
+
+fn object_to_bin(object: Object) -> Result<Bin, CassError> {
+    let name = object.get("name");
+    let value = object.get("value");
+    match (name, value) {
+        (Some(Value::String(name)), Some(value)) => {
+            let name = name.borrow_ref().unwrap().to_string();
+            match value {
+                Value::String(v) => Ok(Bin::new(
+                    name,
+                    aerospike::Value::String(v.borrow_ref().unwrap().to_string()),
+                )),
+                Value::Float(v) => Ok(Bin::new(
+                    name,
+                    aerospike::Value::Float(aerospike::FloatValue::from(v.to_owned())),
+                )),
+                Value::Bool(v) => Ok(Bin::new(name, aerospike::Value::Bool(v.to_owned()))),
+                Value::Byte(v) => Ok(Bin::new(name, aerospike::Value::Blob(vec![v.to_owned()]))),
+                Value::Bytes(v) => Ok(Bin::new(
+                    name,
+                    aerospike::Value::Blob(v.borrow_ref().unwrap().to_vec()),
+                )),
+                _ => Err(CassError(CassErrorKind::QueryParamConversion(
+                    format!("Unsupported value for bin: {:?}, {:?}", name, value),
+                    None,
+                ))),
+            }
+        }
+        _ => Err(CassError(CassErrorKind::QueryParamConversion(
+            format!("Invalid bin: {:?}, {:?}", name, value),
             None,
         ))),
     }
@@ -238,7 +353,7 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
 
 fn convert_int<T: TryFrom<i64>, R>(
     value: i64,
-    typ: ColumnType,
+    _typ: ColumnType,
     f: impl Fn(T) -> R,
 ) -> Result<R, CassError> {
     let converted = value
@@ -281,6 +396,41 @@ pub fn to_scylla_query_params(
         Value::Struct(obj) => {
             let obj = obj.borrow_ref().unwrap();
             read_params(|f| obj.get(f), types)?
+        }
+        other => {
+            return Err(CassError(CassErrorKind::InvalidQueryParamsObject(
+                other.type_info().unwrap(),
+            )));
+        }
+    })
+}
+
+/// Binds parameters passed as a single rune value to the arguments of the statement.
+/// The `params` value can be a tuple, a vector, a struct or an object.
+pub fn to_pg_query_params(
+    params: &Value,
+    types: &[Type],
+) -> Result<Vec<Box<dyn ToSql + Sync>>, CassError> {
+    Ok(match params {
+        Value::Tuple(tuple) => {
+            let mut values = Vec::new();
+            let tuple = tuple.borrow_ref().unwrap();
+            if tuple.len() != types.len() {
+                return Err(CassError(CassErrorKind::InvalidNumberOfQueryParams));
+            }
+            for (v, t) in tuple.iter().zip(types) {
+                values.push(to_pg_value(v, &t)?);
+            }
+            values
+        }
+        Value::Vec(vec) => {
+            let mut values = Vec::new();
+
+            let vec = vec.borrow_ref().unwrap();
+            for (v, t) in vec.iter().zip(types) {
+                values.push(to_pg_value(v, &t)?);
+            }
+            values
         }
         other => {
             return Err(CassError(CassErrorKind::InvalidQueryParamsObject(

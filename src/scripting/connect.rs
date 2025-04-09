@@ -1,4 +1,5 @@
 use crate::adapters::aerospike::AerospikeAdapter;
+use crate::adapters::postgres::PostgresAdapter;
 use crate::adapters::scylla::ScyllaAdapter;
 use crate::adapters::Adapters;
 use crate::config::{ConnectionConf, DBEngine};
@@ -17,7 +18,9 @@ use scylla::client::session_builder::SessionBuilder;
 use scylla::client::PoolSize;
 use scylla::errors::ExecutionError;
 use scylla::policies::load_balancing::DefaultPolicy;
+use tokio_postgres::{Config, NoTls};
 
+#[allow(unused)]
 fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
     if conf.scylla_connection_conf.ssl {
         let mut ssl = SslContextBuilder::new(SslMethod::tls())?;
@@ -121,15 +124,13 @@ async fn connect_scylla(conf: &ConnectionConf) -> Result<Context, CassError> {
         .request_timeout(Some(conf.request_timeout))
         .build();
 
-    let ssl_ctx = ssl_context(&conf)?;
-
     let scylla_session = SessionBuilder::new()
         .known_nodes(&conf.addresses)
         .pool_size(PoolSize::PerShard(conf.count))
         .user(&conf.user, &conf.password)
         .default_execution_profile_handle(profile.into_handle())
         // TODO: find out why it works in doc, but does not compile in real world
-        //.tls_context(ssl_ctx)
+        //.tls_context(ssl_context(&conf))
         .build()
         .await
         .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
@@ -142,13 +143,63 @@ async fn connect_scylla(conf: &ConnectionConf) -> Result<Context, CassError> {
     ))))
 }
 
+async fn connect_postgres(conf: &ConnectionConf) -> Result<Context, CassError> {
+    let mut config = Config::new();
+    let mut config = config
+        .user(conf.user.clone())
+        .password(conf.password.clone())
+        .dbname(conf.postgres_connection_conf.dbname.clone())
+        .ssl_mode(conf.postgres_connection_conf.ssl_mode.to_postgres_enum())
+        .ssl_negotiation(
+            conf.postgres_connection_conf
+                .ssl_negotiation
+                .to_postgres_enum(),
+        )
+        .channel_binding(
+            conf.postgres_connection_conf
+                .channel_binding
+                .to_postgres_enum(),
+        )
+        .load_balance_hosts(
+            conf.postgres_connection_conf
+                .load_balance_hosts
+                .to_postgres_enum(),
+        )
+        .port(conf.postgres_connection_conf.port);
+
+    for host in conf.addresses.clone() {
+        config = config.host(&host);
+    }
+
+    let (client, connection) = config
+        // TODO: support for TLS requires extra libs i.e. postgres-openssl or postgres-native-tls
+        .connect(NoTls)
+        .await
+        .map_err(|e| CassError(CassErrorKind::PgPrepare("Connecting to DB".to_string(), e)))?;
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
+    Ok(Context::new(Adapters::Postgres(PostgresAdapter::new(
+        client,
+        conf.request_timeout,
+        Executor::new(conf.retry_strategy, |res| match res {
+            Err(_) => true,
+            _ => false,
+        }),
+    ))))
+}
+
 /// Configures connection to Cassandra.
 pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
     match conf.db {
         DBEngine::Scylla => connect_scylla(conf).await,
         DBEngine::Aerospike => connect_aerospike(conf).await,
-        DBEngine::Foundation => Err(CassError(CassErrorKind::Unsupported)),
-        DBEngine::PostgreSQL => Err(CassError(CassErrorKind::Unsupported)),
+        DBEngine::Foundation => Err(CassError(CassErrorKind::UnsupportedEngine)),
+        DBEngine::PostgreSQL => connect_postgres(conf).await,
     }
 }
 

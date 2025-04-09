@@ -6,6 +6,7 @@ use rune::{vm_write, Any};
 use scylla::errors::{ExecutionError, NewSessionError, PrepareError};
 use scylla::value::CqlValue;
 use std::fmt::{Display, Formatter};
+use tokio_postgres::Error as pgError;
 
 #[derive(Any, Debug)]
 pub struct CassError(pub CassErrorKind);
@@ -13,6 +14,10 @@ pub struct CassError(pub CassErrorKind);
 impl CassError {
     pub fn prepare_error(cql: &str, err: PrepareError) -> CassError {
         CassError(CassErrorKind::Prepare(cql.to_string(), err))
+    }
+
+    pub fn pg_prepare_error(cql: &str, err: pgError) -> CassError {
+        CassError(CassErrorKind::PgPrepare(cql.to_string(), err))
     }
 
     pub fn query_execution_error(cql: &str, params: &[CqlValue], err: ExecutionError) -> CassError {
@@ -39,10 +44,13 @@ pub enum CassErrorKind {
     InvalidNumberOfQueryParams,
     InvalidQueryParamsObject(TypeInfo),
     Prepare(String, PrepareError),
+    PgPrepare(String, pgError),
+    PgExecution(String, pgError),
     Overloaded(QueryInfo, ExecutionError),
     QueryExecution(QueryInfo, ExecutionError),
     AerospikeError(aerospike::Error),
     Unsupported,
+    UnsupportedEngine,
     InitFailure(Error),
 }
 
@@ -92,6 +100,12 @@ impl CassError {
             CassErrorKind::Prepare(q, e) => {
                 write!(buf, "Failed to prepare query \"{q}\": {e}")
             }
+            CassErrorKind::PgPrepare(q, e) => {
+                write!(buf, "Failed to prepare query \"{q}\": {e}")
+            }
+            CassErrorKind::PgExecution(q, e) => {
+                write!(buf, "Failed to execute query \"{q}\": {e}")
+            }
             CassErrorKind::Overloaded(q, e) => {
                 write!(buf, "Overloaded when executing query {q}: {e}")
             }
@@ -100,6 +114,9 @@ impl CassError {
             }
             CassErrorKind::Unsupported => {
                 write!(buf, "Unsupported query type")
+            }
+            CassErrorKind::UnsupportedEngine => {
+                write!(buf, "Unsupported DB type")
             }
             CassErrorKind::InitFailure(e) => {
                 write!(buf, "Failed to init: {e}")

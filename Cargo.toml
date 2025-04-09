@@ -14,6 +14,7 @@ path = "src/main.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 aerospike = { git = "https://github.com/aerospike/aerospike-client-rust.git", branch = "v2", features = ["rt-tokio"] }
+tokio-postgres = "0.7.13"
 anyhow = "1.0"
 base64 = "0.22"
 rmp = "0.8"

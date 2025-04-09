@@ -1,10 +1,9 @@
 use crate::adapters::Adapters;
 use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::context::Context;
-use crate::scripting::cql_types::{Bin, Int8, Uuid};
+use crate::scripting::cql_types::{Int8, Uuid};
 use crate::scripting::Resources;
 use chrono::Utc;
-use itertools::Itertools;
 use metrohash::MetroHash64;
 use rand::distributions::Distribution;
 use rand::rngs::SmallRng;
@@ -20,6 +19,8 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::ops::Deref;
+
+use super::bind::to_aerospike_value;
 
 /// Returns the literal value stored in the `params` map under the key given as the first
 /// macro arg, and if not found, returns the expression from the second arg.
@@ -246,6 +247,7 @@ pub fn read_resource_words(path: &str) -> io::Result<Vec<String>> {
 pub async fn prepare(mut ctx: Mut<Context>, key: Ref<str>, cql: Ref<str>) -> Result<(), CassError> {
     match ctx.adapter_mut() {
         Adapters::Scylla(ref mut sc) => sc.prepare(&key, &cql).await,
+        Adapters::Postgres(ref mut sc) => sc.prepare(&key, &cql).await,
         _ => Err(CassError(CassErrorKind::Unsupported)),
     }
 }
@@ -254,6 +256,7 @@ pub async fn prepare(mut ctx: Mut<Context>, key: Ref<str>, cql: Ref<str>) -> Res
 pub async fn execute(ctx: Ref<Context>, cql: Ref<str>) -> Result<(), CassError> {
     match ctx.adapter() {
         Adapters::Scylla(sc) => sc.execute(cql.deref()).await,
+        Adapters::Postgres(sc) => sc.execute(cql.deref()).await,
         _ => Err(CassError(CassErrorKind::Unsupported)),
     }
 }
@@ -270,10 +273,10 @@ pub async fn get(ctx: Ref<Context>, key: Ref<str>) -> Result<(), CassError> {
 }
 
 #[rune::function(instance)]
-pub async fn put(ctx: Ref<Context>, key: Ref<str>, value: Bin) -> Result<(), CassError> {
+pub async fn put(ctx: Ref<Context>, key: Ref<str>, value: Value) -> Result<(), CassError> {
     match ctx.adapter() {
         Adapters::Aerospike(aero) => aero
-            .put(key.deref(), vec![value.0])
+            .put(key.deref(), to_aerospike_value(value)?)
             .await
             .map_err(|e| CassError(CassErrorKind::AerospikeError(e))),
         _ => Err(CassError(CassErrorKind::Unsupported)),
@@ -288,6 +291,28 @@ pub async fn execute_prepared(
 ) -> Result<(), CassError> {
     match ctx.adapter() {
         Adapters::Scylla(sc) => sc.execute_prepared(&key, params).await,
+        Adapters::Postgres(sc) => {
+            let res = sc.execute_prepared(&key, params).await;
+            if res.is_err() {
+                let err = res.err().unwrap();
+                print!("{}", err);
+
+                return Err(err);
+            }
+            res
+        }
+        _ => Err(CassError(CassErrorKind::Unsupported)),
+    }
+}
+
+#[rune::function(instance)]
+pub async fn query_prepared(
+    ctx: Ref<Context>,
+    key: Ref<str>,
+    params: Value,
+) -> Result<(), CassError> {
+    match ctx.adapter() {
+        Adapters::Postgres(sc) => sc.query_prepared(&key, params).await,
         _ => Err(CassError(CassErrorKind::Unsupported)),
     }
 }

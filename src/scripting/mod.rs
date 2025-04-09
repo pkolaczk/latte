@@ -29,6 +29,7 @@ fn try_install(
     context_module.function_meta(functions::execute)?;
     context_module.function_meta(functions::prepare)?;
     context_module.function_meta(functions::execute_prepared)?;
+    context_module.function_meta(functions::query_prepared)?;
     context_module.function_meta(functions::get)?;
     context_module.function_meta(functions::put)?;
     context_module.function_meta(functions::elapsed_secs)?;

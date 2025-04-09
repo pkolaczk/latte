@@ -1,6 +1,6 @@
 use crate::scripting::executor::Executor;
 use crate::stats::session::SessionStats;
-use aerospike::{as_key, Bin, Bins, Client, Error, Key, ReadPolicy, Record, WritePolicy};
+use aerospike::{as_key, Bin, Bins, Client, Error, Key, ReadPolicy, WritePolicy};
 use std::sync::Arc;
 use tracing::error;
 

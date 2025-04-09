@@ -12,6 +12,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
+use tokio_postgres::config::{ChannelBinding, LoadBalanceHosts, SslMode, SslNegotiation};
 
 /// Parse a single key-value pair
 fn parse_key_val<T, U>(s: &str) -> Result<(T, U), anyhow::Error>
@@ -159,6 +160,96 @@ pub struct ScyllaConnectionConf {
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize)]
+pub struct PostgresConnectionConf {
+    #[clap(long("dbname"), default_value = "postgres")]
+    pub dbname: String,
+
+    #[clap(long("port"), default_value = "5432")]
+    pub port: u16,
+
+    #[clap(long("ssl-mode"), default_value = "disable")]
+    pub ssl_mode: CliSslMode,
+
+    #[clap(long("ssl-negotiation"), default_value = "direct")]
+    pub ssl_negotiation: CliSslNegotiation,
+
+    #[clap(long("channel-binding"), default_value = "prefer")]
+    pub channel_binding: CliChannelBinding,
+
+    #[clap(long("load-balance-hosts"), default_value = "disable")]
+    pub load_balance_hosts: CliLoadBalanceHosts,
+}
+
+// CLI Enum for SslMode
+#[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
+pub enum CliSslMode {
+    Disable,
+    Prefer,
+    Require,
+}
+
+// CLI Enum for SslNegotiation
+#[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
+pub enum CliSslNegotiation {
+    Postgres,
+    Direct,
+}
+
+// CLI Enum for ChannelBinding
+#[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
+pub enum CliChannelBinding {
+    Disable,
+    Prefer,
+    Require,
+}
+
+// CLI Enum for LoadBalanceHosts
+#[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
+pub enum CliLoadBalanceHosts {
+    Disable,
+    Random,
+}
+
+// Mappers to Postgres Enums
+impl CliSslMode {
+    pub fn to_postgres_enum(&self) -> SslMode {
+        match self {
+            CliSslMode::Disable => SslMode::Disable,
+            CliSslMode::Prefer => SslMode::Prefer,
+            CliSslMode::Require => SslMode::Require,
+        }
+    }
+}
+
+impl CliSslNegotiation {
+    pub fn to_postgres_enum(&self) -> SslNegotiation {
+        match self {
+            CliSslNegotiation::Postgres => SslNegotiation::Postgres,
+            CliSslNegotiation::Direct => SslNegotiation::Direct,
+        }
+    }
+}
+
+impl CliChannelBinding {
+    pub fn to_postgres_enum(&self) -> ChannelBinding {
+        match self {
+            CliChannelBinding::Disable => ChannelBinding::Disable,
+            CliChannelBinding::Prefer => ChannelBinding::Prefer,
+            CliChannelBinding::Require => ChannelBinding::Require,
+        }
+    }
+}
+
+impl CliLoadBalanceHosts {
+    pub fn to_postgres_enum(&self) -> LoadBalanceHosts {
+        match self {
+            CliLoadBalanceHosts::Disable => LoadBalanceHosts::Disable,
+            CliLoadBalanceHosts::Random => LoadBalanceHosts::Random,
+        }
+    }
+}
+
+#[derive(Parser, Debug, Serialize, Deserialize)]
 pub struct AerospikeConnectionConf {
     #[clap(long("namespace"), default_value = "default")]
     pub namespace: String,
@@ -237,6 +328,9 @@ pub struct ConnectionConf {
 
     #[clap(flatten)]
     pub aerospike_connection_conf: AerospikeConnectionConf,
+
+    #[clap(flatten)]
+    pub postgres_connection_conf: PostgresConnectionConf,
 
     #[clap(flatten)]
     pub retry_strategy: RetryStrategy,
