@@ -276,7 +276,7 @@ pub async fn get(ctx: Ref<Context>, key: Ref<str>) -> Result<(), CassError> {
 pub async fn put(ctx: Ref<Context>, key: Ref<str>, value: Value) -> Result<(), CassError> {
     match ctx.adapter() {
         Adapters::Aerospike(aero) => aero
-            .put(key.deref(), to_aerospike_value(value)?)
+            .put(key.deref(), to_aerospike_value(value).unwrap())
             .await
             .map_err(|e| CassError(CassErrorKind::AerospikeError(e))),
         _ => Err(CassError(CassErrorKind::Unsupported)),

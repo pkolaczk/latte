@@ -78,7 +78,8 @@ impl PostgresAdapter {
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
 
-        let params = crate::scripting::bind::to_pg_query_params(&params, statement.params())?
+        let params = crate::scripting::bind::to_pg_query_params(&params, statement.params())
+            .unwrap()
             .into_iter()
             .map(|x| Box::leak(x) as &(dyn ToSql + Sync))
             .collect_vec();
@@ -121,7 +122,8 @@ impl PostgresAdapter {
             .get(key)
             .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
 
-        let params = crate::scripting::bind::to_pg_query_params(&params, statement.params())?
+        let params = crate::scripting::bind::to_pg_query_params(&params, statement.params())
+            .unwrap()
             .into_iter()
             .map(|x| Box::leak(x) as &(dyn ToSql + Sync))
             .collect_vec();

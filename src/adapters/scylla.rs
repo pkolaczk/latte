@@ -89,7 +89,9 @@ impl ScyllaAdapter {
         let params = crate::scripting::bind::to_scylla_query_params(
             &params,
             statement.get_variable_col_specs(),
-        )?;
+        )
+        .unwrap();
+
         let rs = self
             .executor
             .execute_inner(
