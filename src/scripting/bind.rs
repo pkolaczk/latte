@@ -241,7 +241,6 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
 }
 
 fn to_pg_value(v: &Value, typ: &Type) -> Result<Box<dyn ToSql + Sync>, CassError> {
-    // TODO: add type check too, it is complicated because the Inner type enum is not public in PG lib.
     // TODO: support vec
     match (v, typ.name()) {
         (Value::Bool(v), "bool") => Ok(Box::new(*v)),
