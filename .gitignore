@@ -1,5 +1,10 @@
 /target
 *.iml
-latte-*
 .idea
 .vscode
+
+latte-*.log
+latte-*.json
+
+# Linux swap files range from .saa to .swp (used by vim and some other apps)
+*.s[a-w][a-p]
