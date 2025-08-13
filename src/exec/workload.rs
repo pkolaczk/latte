@@ -31,7 +31,7 @@ struct SessionRef<'a> {
 }
 
 impl SessionRef<'_> {
-    pub fn new(context: &Context) -> SessionRef {
+    pub fn new(context: &Context) -> SessionRef<'_> {
         SessionRef { context }
     }
 }
@@ -58,7 +58,7 @@ struct ContextRefMut<'a> {
 }
 
 impl ContextRefMut<'_> {
-    pub fn new(context: &mut Context) -> ContextRefMut {
+    pub fn new(context: &mut Context) -> ContextRefMut<'_> {
         ContextRefMut { context }
     }
 }
