@@ -51,12 +51,3 @@ pub enum LatteError {
 }
 
 pub type Result<T> = std::result::Result<T, LatteError>;
-
-// Adding the necessary impl blocks
-impl std::fmt::Display for LatteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl std::error::Error for LatteError {}
