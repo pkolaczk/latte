@@ -8,9 +8,10 @@ use rand::prelude::ThreadRng;
 use rand::random;
 use rune::runtime::{Object, Shared};
 use rune::{Any, Value};
-use scylla::prepared_statement::PreparedStatement;
-use scylla::transport::errors::{DbError, QueryError};
-use scylla::QueryResult;
+use scylla::client::session::Session;
+use scylla::errors::{DbError, ExecutionError, RequestAttemptError};
+use scylla::response::query_result::QueryResult;
+use scylla::statement::prepared::PreparedStatement;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -24,7 +25,7 @@ use try_lock::TryLock;
 #[derive(Any)]
 pub struct Context {
     start_time: TryLock<Instant>,
-    session: Arc<scylla::Session>,
+    session: Arc<Session>,
     statements: HashMap<String, Arc<PreparedStatement>>,
     stats: TryLock<SessionStats>,
     retry_strategy: RetryStrategy,
@@ -45,7 +46,7 @@ unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    pub fn new(session: scylla::Session, retry_strategy: RetryStrategy) -> Context {
+    pub fn new(session: Session, retry_strategy: RetryStrategy) -> Context {
         Context {
             start_time: TryLock::new(Instant::now()),
             session: Arc::new(session),
@@ -82,17 +83,18 @@ impl Context {
         let cql = "SELECT cluster_name, release_version FROM system.local";
         let rs = self
             .session
-            .query(cql, ())
+            .query_unpaged(cql, ())
             .await
-            .map_err(|e| CassError::query_execution_error(cql, &[], e))?;
-        if let Some(rows) = rs.rows {
-            if let Some(row) = rows.into_iter().next() {
-                if let Ok((name, cassandra_version)) = row.into_typed() {
-                    return Ok(Some(ClusterInfo {
-                        name,
-                        cassandra_version,
-                    }));
-                }
+            .map_err(|e| CassError::query_execution_error(cql, &[], e))?
+            .into_rows_result()
+            .map_err(|e| CassError::result_set_conversion_error(cql, &[], e))?;
+
+        if let Ok(rows) = rs.rows() {
+            if let Some(Ok((name, cassandra_version))) = rows.into_iter().next() {
+                return Ok(Some(ClusterInfo {
+                    name,
+                    cassandra_version,
+                }));
             }
         }
         Ok(None)
@@ -111,7 +113,10 @@ impl Context {
 
     /// Executes an ad-hoc CQL statement with no parameters. Does not prepare.
     pub async fn execute(&self, cql: &str) -> Result<(), CassError> {
-        if let Err(err) = self.execute_inner(|| self.session.query(cql, ())).await {
+        if let Err(err) = self
+            .execute_inner(|| self.session.query_unpaged(cql, ()))
+            .await
+        {
             let err = CassError::query_execution_error(cql, &[], err);
             error!("{}", err);
             return Err(err);
@@ -125,9 +130,10 @@ impl Context {
             CassError::new(CassErrorKind::PreparedStatementNotFound(key.to_string()))
         })?;
 
-        let params = bind::to_scylla_query_params(&params, statement.get_variable_col_specs())?;
+        let params =
+            bind::to_scylla_query_params(&params, statement.get_variable_col_specs().as_slice())?;
         let rs = self
-            .execute_inner(|| self.session.execute(statement, params.clone()))
+            .execute_inner(|| self.session.execute_unpaged(statement, params.clone()))
             .await;
 
         if let Err(err) = rs {
@@ -139,34 +145,39 @@ impl Context {
         Ok(())
     }
 
-    async fn execute_inner<R>(&self, f: impl Fn() -> R) -> Result<QueryResult, QueryError>
+    async fn execute_inner<R>(&self, f: impl Fn() -> R) -> Result<(), ExecutionError>
     where
-        R: Future<Output = Result<QueryResult, QueryError>>,
+        R: Future<Output = Result<QueryResult, ExecutionError>>,
     {
         let start_time = self.stats.try_lock().unwrap().start_request();
 
-        let mut rs: Result<QueryResult, QueryError> = Err(QueryError::TimeoutError);
+        let mut rs: Result<QueryResult, ExecutionError>;
         let mut attempts = 0;
         let retry_strategy = &self.retry_strategy;
-        while attempts <= retry_strategy.retries && should_retry(&rs, retry_strategy) {
-            if attempts > 0 {
-                let current_retry_interval = get_exponential_retry_interval(
-                    retry_strategy.retry_delay.min,
-                    retry_strategy.retry_delay.max,
-                    attempts,
-                );
-                tokio::time::sleep(current_retry_interval).await;
-            }
+        loop {
             rs = f().await;
-            attempts += 1;
-        }
+            if rs.is_ok()
+                || attempts >= retry_strategy.retries
+                || !should_retry(&rs, retry_strategy)
+            {
+                break;
+            }
 
+            attempts += 1;
+
+            let current_retry_interval = get_exponential_retry_interval(
+                retry_strategy.retry_delay.min,
+                retry_strategy.retry_delay.max,
+                attempts,
+            );
+            tokio::time::sleep(current_retry_interval).await;
+        }
         let duration = Instant::now() - start_time;
         self.stats
             .try_lock()
             .unwrap()
-            .complete_request(duration, &rs, attempts - 1);
-        rs
+            .complete_request(duration, rs, attempts - 1);
+        Ok(())
     }
 
     pub fn elapsed_secs(&self) -> f64 {
@@ -204,7 +215,7 @@ pub fn get_exponential_retry_interval(
     Duration::from_secs_f64(current_interval.min(max_interval.as_secs_f64()))
 }
 
-fn should_retry<R>(result: &Result<R, QueryError>, retry_strategy: &RetryStrategy) -> bool {
+fn should_retry<R>(result: &Result<R, ExecutionError>, retry_strategy: &RetryStrategy) -> bool {
     if !result.is_err() {
         return false;
     }
@@ -213,11 +224,15 @@ fn should_retry<R>(result: &Result<R, QueryError>, retry_strategy: &RetryStrateg
     }
     matches!(
         result,
-        Err(QueryError::RequestTimeout(_))
-            | Err(QueryError::TimeoutError)
-            | Err(QueryError::DbError(
-                DbError::ReadTimeout { .. } | DbError::WriteTimeout { .. } | DbError::Overloaded,
-                _
+        Err(ExecutionError::RequestTimeout(_))
+            | Err(ExecutionError::LastAttemptError(
+                RequestAttemptError::DbError(
+                    DbError::ReadTimeout { .. }
+                        | DbError::WriteTimeout { .. }
+                        | DbError::Overloaded
+                        | DbError::RateLimitReached { .. },
+                    _
+                )
             ))
     )
 }

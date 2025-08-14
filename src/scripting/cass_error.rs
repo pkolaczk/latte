@@ -2,8 +2,12 @@ use openssl::error::ErrorStack;
 use rune::alloc::fmt::TryWrite;
 use rune::runtime::{TypeInfo, VmResult};
 use rune::{vm_write, Any};
-use scylla::_macro_internal::{ColumnType, CqlValue};
-use scylla::transport::errors::{DbError, NewSessionError, QueryError};
+use scylla::errors::{
+    DbError, ExecutionError, IntoRowsResultError, NewSessionError, PrepareError,
+    RequestAttemptError,
+};
+use scylla::frame::response::result::ColumnType;
+use scylla::value::CqlValue;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 
@@ -15,25 +19,36 @@ impl CassError {
         CassError(Box::new(kind))
     }
 
-    pub fn prepare_error(cql: &str, err: QueryError) -> CassError {
+    pub fn prepare_error(cql: &str, err: PrepareError) -> CassError {
         CassError(Box::new(CassErrorKind::Prepare(cql.to_string(), err)))
     }
 
-    pub fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
+    pub fn query_execution_error(cql: &str, params: &[CqlValue], err: ExecutionError) -> CassError {
         let query = QueryInfo {
             cql: cql.to_string(),
             params: params.iter().map(cql_value_obj_to_string).collect(),
         };
         let kind = match err {
-            QueryError::RequestTimeout(_)
-            | QueryError::TimeoutError
-            | QueryError::DbError(
+            ExecutionError::RequestTimeout(_)
+            | ExecutionError::LastAttemptError(RequestAttemptError::DbError(
                 DbError::Overloaded | DbError::ReadTimeout { .. } | DbError::WriteTimeout { .. },
                 _,
-            ) => CassErrorKind::Overloaded(query, err),
+            )) => CassErrorKind::Overloaded(query, err),
             _ => CassErrorKind::QueryExecution(query, err),
         };
         CassError(Box::new(kind))
+    }
+
+    pub fn result_set_conversion_error(
+        cql: &str,
+        params: &[CqlValue],
+        err: IntoRowsResultError,
+    ) -> CassError {
+        let query = QueryInfo {
+            cql: cql.to_string(),
+            params: params.iter().map(cql_value_obj_to_string).collect(),
+        };
+        CassError(Box::new(CassErrorKind::ResultSetConversion(query, err)))
     }
 }
 
@@ -43,13 +58,14 @@ pub enum CassErrorKind {
     FailedToConnect(Vec<String>, NewSessionError),
     PreparedStatementNotFound(String),
     QueryRetriesExceeded(String),
-    QueryParamConversion(String, ColumnType, Option<String>),
-    ValueOutOfRange(String, ColumnType),
+    QueryParamConversion(String, ColumnType<'static>, Option<String>),
+    ValueOutOfRange(String, ColumnType<'static>),
     InvalidNumberOfQueryParams,
     InvalidQueryParamsObject(TypeInfo),
-    Prepare(String, QueryError),
-    Overloaded(QueryInfo, QueryError),
-    QueryExecution(QueryInfo, QueryError),
+    Prepare(String, PrepareError),
+    Overloaded(QueryInfo, ExecutionError),
+    QueryExecution(QueryInfo, ExecutionError),
+    ResultSetConversion(QueryInfo, IntoRowsResultError),
 }
 
 #[derive(Debug)]
@@ -104,6 +120,10 @@ impl CassError {
             CassErrorKind::QueryExecution(q, e) => {
                 write!(buf, "Failed to execute query {q}: {e}")
             }
+            CassErrorKind::ResultSetConversion(q, e) => write!(
+                buf,
+                "Failed to convert the result set of query {q} to rows: {e}"
+            ),
         }
     }
 }
@@ -111,7 +131,7 @@ impl CassError {
 impl Display for CassError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut buf = String::new();
-        self.display(&mut buf).unwrap();
+        self.display(&mut buf)?;
         write!(f, "{buf}")
     }
 }
@@ -140,12 +160,12 @@ pub fn cql_value_obj_to_string(v: &CqlValue) -> String {
         }
         CqlValue::UserDefinedType {
             keyspace,
-            type_name,
+            name,
             fields,
         } => {
             let mut result = format!(
                 "UDT {{ keyspace: \"{}\", type_name: \"{}\", fields: [",
-                keyspace, type_name,
+                keyspace, name,
             );
             for (field_name, field_value) in fields {
                 let field_string = match field_value {
