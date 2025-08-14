@@ -1,7 +1,7 @@
 use crate::stats::Mean;
 use hdrhistogram::Histogram;
 use rand::rngs::SmallRng;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use statrs::statistics::Statistics;
 use strum::{EnumCount, EnumIter, IntoEnumIterator};
@@ -98,7 +98,7 @@ impl Percentiles {
         scale: f64,
         effective_sample_size: u64,
     ) -> Percentiles {
-        let mut rng = SmallRng::from_rng(thread_rng()).unwrap();
+        let mut rng = SmallRng::from_rng(rand::thread_rng()).unwrap();
 
         let mut samples: Vec<[f64; Percentile::COUNT]> = Vec::with_capacity(Self::POPULATION_SIZE);
         for _ in 0..Self::POPULATION_SIZE {
@@ -159,7 +159,7 @@ mod test {
     use crate::stats::percentiles::{Percentile, Percentiles};
     use assert_approx_eq::assert_approx_eq;
     use hdrhistogram::Histogram;
-    use rand::{thread_rng, Rng};
+    use rand::Rng;
     use statrs::distribution::Uniform;
 
     #[test]
@@ -182,7 +182,7 @@ mod test {
         const N: usize = 100000;
         for _ in 0..N {
             histogram
-                .record(thread_rng().sample(d).round() as u64)
+                .record(rand::thread_rng().sample(d).round() as u64)
                 .unwrap();
         }
 

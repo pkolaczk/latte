@@ -2,11 +2,12 @@ use crate::config::ConnectionConf;
 use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::context::Context;
 use openssl::ssl::{SslContext, SslContextBuilder, SslFiletype, SslMethod};
-use scylla::load_balancing::DefaultPolicy;
-use scylla::transport::session::PoolSize;
-use scylla::{ExecutionProfile, SessionBuilder};
+use scylla::client::execution_profile::ExecutionProfile;
+use scylla::client::session_builder::SessionBuilder;
+use scylla::client::PoolSize;
+use scylla::policies::load_balancing::DefaultPolicy;
 
-fn ssl_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
+fn tls_context(conf: &&ConnectionConf) -> Result<Option<SslContext>, CassError> {
     if conf.ssl {
         let mut ssl = SslContextBuilder::new(SslMethod::tls())?;
         if let Some(path) = &conf.ssl_ca_cert_file {
@@ -42,7 +43,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .known_nodes(&conf.addresses)
         .pool_size(PoolSize::PerShard(conf.count))
         .user(&conf.user, &conf.password)
-        .ssl_context(ssl_context(&conf)?)
+        .tls_context(tls_context(&conf)?)
         .default_execution_profile_handle(profile.into_handle())
         .build()
         .await

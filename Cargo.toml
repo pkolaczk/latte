@@ -15,38 +15,34 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
-rmp = "0.8"
 rmp-serde = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "cargo", "env"] }
-console = "0.15.0"
+console = "0.16"
 cpu-time = "1.0.0"
 futures = "0.3"
 hdrhistogram = "7.1.0"
 hytra = "0.1.2"
-itertools = "0.13"
+itertools = "0.14"
 jemallocator = "0.5"
-lazy_static = "1.4.0"
 metrohash = "1.0"
 more-asserts = "0.3"
 num_cpus = "1.13.0"
-openssl = "0.10.38"
+openssl = "0.10"
 parse_duration = "2.1.1"
 pin-project = "1.1"
 plotters = { version = "0.3", default-features = false, features = ["line_series", "svg_backend", "full_palette"] }
 rand = { version = "0.8", default-features = false, features = ["small_rng", "std"] }
 rand_distr = "0.4"
-regex = "1.5"
 rune = "0.13"
 rust-embed = "8"
-scylla = { version = "0.13", features = ["ssl"] }
+scylla = { version = "1", features = ["openssl-010"] }
 search_path = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-statrs = "0.17"
+statrs = "0.18"
 status-line = "0.2.0"
-strum = { version = "0.26", features = ["derive"] }
-time = "0.3"
+strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "parking_lot", "signal"] }
 tokio-stream = "0.1"
