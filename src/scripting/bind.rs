@@ -43,7 +43,7 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
             let timeuuid = CqlTimeuuid::from_str(timeuuid_str.as_str());
             match timeuuid {
                 Ok(timeuuid) => Ok(CqlValue::Timeuuid(timeuuid)),
-                Err(e) => Err(CassError(CassErrorKind::QueryParamConversion(
+                Err(e) => Err(CassError::new(CassErrorKind::QueryParamConversion(
                     format!("{:?}", v),
                     ColumnType::Timeuuid,
                     Some(format!("{}", e)),
@@ -58,7 +58,7 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
             let ipaddr = IpAddr::from_str(ipaddr_str.as_str());
             match ipaddr {
                 Ok(ipaddr) => Ok(CqlValue::Inet(ipaddr)),
-                Err(e) => Err(CassError(CassErrorKind::QueryParamConversion(
+                Err(e) => Err(CassError::new(CassErrorKind::QueryParamConversion(
                     format!("{:?}", v),
                     ColumnType::Inet,
                     Some(format!("{}", e)),
@@ -108,7 +108,7 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
                         map_vec.push((key, value));
                     }
                     _ => {
-                        return Err(CassError(CassErrorKind::QueryParamConversion(
+                        return Err(CassError::new(CassErrorKind::QueryParamConversion(
                             format!("{:?}", tuple),
                             ColumnType::Tuple(vec![
                                 key_elt.as_ref().clone(),
@@ -172,14 +172,14 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
                 let uuid: &Uuid = obj.downcast_borrow_ref().unwrap();
                 Ok(CqlValue::Uuid(uuid.0))
             } else {
-                Err(CassError(CassErrorKind::QueryParamConversion(
+                Err(CassError::new(CassErrorKind::QueryParamConversion(
                     format!("{:?}", v),
                     ColumnType::Uuid,
                     None,
                 )))
             }
         }
-        (value, typ) => Err(CassError(CassErrorKind::QueryParamConversion(
+        (value, typ) => Err(CassError::new(CassErrorKind::QueryParamConversion(
             format!("{:?}", value),
             typ.clone(),
             None,
@@ -193,7 +193,7 @@ fn convert_int<T: TryFrom<i64>, R>(
     f: impl Fn(T) -> R,
 ) -> Result<R, CassError> {
     let converted = value.try_into().map_err(|_| {
-        CassError(CassErrorKind::ValueOutOfRange(
+        CassError::new(CassErrorKind::ValueOutOfRange(
             value.to_string(),
             typ.clone(),
         ))
@@ -212,7 +212,7 @@ pub fn to_scylla_query_params(
             let mut values = Vec::new();
             let tuple = tuple.borrow_ref().unwrap();
             if tuple.len() != types.len() {
-                return Err(CassError(CassErrorKind::InvalidNumberOfQueryParams));
+                return Err(CassError::new(CassErrorKind::InvalidNumberOfQueryParams));
             }
             for (v, t) in tuple.iter().zip(types) {
                 values.push(to_scylla_value(v, &t.typ)?);
@@ -237,7 +237,7 @@ pub fn to_scylla_query_params(
             read_params(|f| obj.get(f), types)?
         }
         other => {
-            return Err(CassError(CassErrorKind::InvalidQueryParamsObject(
+            return Err(CassError::new(CassErrorKind::InvalidQueryParamsObject(
                 other.type_info().unwrap(),
             )));
         }

@@ -5,13 +5,18 @@ use rune::{vm_write, Any};
 use scylla::_macro_internal::{ColumnType, CqlValue};
 use scylla::transport::errors::{DbError, NewSessionError, QueryError};
 use std::fmt::{Display, Formatter};
+use std::ops::Deref;
 
 #[derive(Any, Debug)]
-pub struct CassError(pub CassErrorKind);
+pub struct CassError(pub Box<CassErrorKind>);
 
 impl CassError {
+    pub fn new(kind: CassErrorKind) -> Self {
+        CassError(Box::new(kind))
+    }
+
     pub fn prepare_error(cql: &str, err: QueryError) -> CassError {
-        CassError(CassErrorKind::Prepare(cql.to_string(), err))
+        CassError(Box::new(CassErrorKind::Prepare(cql.to_string(), err)))
     }
 
     pub fn query_execution_error(cql: &str, params: &[CqlValue], err: QueryError) -> CassError {
@@ -28,7 +33,7 @@ impl CassError {
             ) => CassErrorKind::Overloaded(query, err),
             _ => CassErrorKind::QueryExecution(query, err),
         };
-        CassError(kind)
+        CassError(Box::new(kind))
     }
 }
 
@@ -62,7 +67,7 @@ impl CassError {
 
     pub fn display(&self, buf: &mut String) -> std::fmt::Result {
         use std::fmt::Write;
-        match &self.0 {
+        match &self.0.deref() {
             CassErrorKind::SslConfiguration(e) => {
                 write!(buf, "SSL configuration error: {e}")
             }
@@ -113,7 +118,7 @@ impl Display for CassError {
 
 impl From<ErrorStack> for CassError {
     fn from(e: ErrorStack) -> CassError {
-        CassError(CassErrorKind::SslConfiguration(e))
+        CassError(Box::new(CassErrorKind::SslConfiguration(e)))
     }
 }
 

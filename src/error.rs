@@ -50,4 +50,10 @@ pub enum LatteError {
     OutOfMemory(#[from] alloc::Error),
 }
 
-pub type Result<T> = std::result::Result<T, LatteError>;
+pub type Result<T> = std::result::Result<T, Box<LatteError>>;
+
+impl From<CassError> for Box<LatteError> {
+    fn from(value: CassError) -> Self {
+        Box::new(value.into())
+    }
+}
