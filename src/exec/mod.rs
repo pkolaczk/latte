@@ -187,10 +187,10 @@ pub async fn par_execute(
     keep_log: bool,
 ) -> Result<BenchmarkStats> {
     if exec_options.cycle_range.1 <= exec_options.cycle_range.0 {
-        return Err(LatteError::Configuration(format!(
+        return Err(Box::new(LatteError::Configuration(format!(
             "End cycle {} must not be lower than start cycle {}",
             exec_options.cycle_range.1, exec_options.cycle_range.0
-        )));
+        ))));
     }
 
     let thread_count = exec_options.threads.get();

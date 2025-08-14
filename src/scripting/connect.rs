@@ -46,7 +46,7 @@ pub async fn connect(conf: &ConnectionConf) -> Result<Context, CassError> {
         .default_execution_profile_handle(profile.into_handle())
         .build()
         .await
-        .map_err(|e| CassError(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
+        .map_err(|e| CassError::new(CassErrorKind::FailedToConnect(conf.addresses.clone(), e)))?;
     Ok(Context::new(scylla_session, conf.retry_strategy))
 }
 

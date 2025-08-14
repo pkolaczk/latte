@@ -62,6 +62,7 @@ impl Context {
     /// The new clone gets fresh statistics.
     /// The user data gets passed through serialization and deserialization to avoid
     /// accidental data sharing.
+    #[allow(clippy::result_large_err)]
     pub fn clone(&self) -> Result<Self, LatteError> {
         let serialized = rmp_serde::to_vec(&self.data)?;
         let deserialized: Value = rmp_serde::from_slice(&serialized)?;
@@ -120,10 +121,9 @@ impl Context {
 
     /// Executes a statement prepared and registered earlier by a call to `prepare`.
     pub async fn execute_prepared(&self, key: &str, params: Value) -> Result<(), CassError> {
-        let statement = self
-            .statements
-            .get(key)
-            .ok_or_else(|| CassError(CassErrorKind::PreparedStatementNotFound(key.to_string())))?;
+        let statement = self.statements.get(key).ok_or_else(|| {
+            CassError::new(CassErrorKind::PreparedStatementNotFound(key.to_string()))
+        })?;
 
         let params = bind::to_scylla_query_params(&params, statement.get_variable_col_specs())?;
         let rs = self

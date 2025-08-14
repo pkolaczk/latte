@@ -89,7 +89,7 @@ fn find_workload(workload: &Path) -> PathBuf {
         return workload.to_path_buf();
     }
     let search_path = SearchPath::new("LATTE_WORKLOAD_PATH").unwrap_or_else(|_| {
-        let relative_to_exe = std::env::current_exe()
+        let relative_to_exe = env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .map(|p| p.join("workloads"));
@@ -180,7 +180,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
         &[(FnRef::new(LOAD_FN), 1.0)],
     );
     let load_options = ExecutionOptions {
-        duration: config::Interval::Count(load_count),
+        duration: Interval::Count(load_count),
         cycle_range: (0, i64::MAX),
         rate: conf.rate,
         threads: conf.threads,
@@ -189,7 +189,7 @@ async fn load(conf: LoadCommand) -> Result<()> {
     let result = par_execute(
         "Loading...",
         &load_options,
-        config::Interval::Unbounded,
+        Interval::Unbounded,
         loader,
         !conf.quiet,
         false,
@@ -454,18 +454,22 @@ async fn export_hdr_log(conf: HdrCommand) -> Result<()> {
     for sample in &report.result.log {
         let interval_start_time = Duration::from_millis((sample.time_s * 1000.0) as u64);
         let interval_duration = Duration::from_millis((sample.duration_s * 1000.0) as u64);
-        log_writer.write_histogram(
-            &sample.cycle_latency.histogram.0,
-            interval_start_time,
-            interval_duration,
-            Tag::new(format!("{tag_prefix}cycles").as_str()),
-        )?;
-        log_writer.write_histogram(
-            &sample.request_latency.histogram.0,
-            interval_start_time,
-            interval_duration,
-            Tag::new(format!("{tag_prefix}requests").as_str()),
-        )?;
+        log_writer
+            .write_histogram(
+                &sample.cycle_latency.histogram.0,
+                interval_start_time,
+                interval_duration,
+                Tag::new(format!("{tag_prefix}cycles").as_str()),
+            )
+            .map_err(LatteError::from)?;
+        log_writer
+            .write_histogram(
+                &sample.request_latency.histogram.0,
+                interval_start_time,
+                interval_duration,
+                Tag::new(format!("{tag_prefix}requests").as_str()),
+            )
+            .map_err(LatteError::from)?;
     }
     Ok(())
 }

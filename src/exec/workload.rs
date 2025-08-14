@@ -139,7 +139,7 @@ impl Program {
 
         Ok(Program {
             sources: Arc::new(sources),
-            context: Arc::new(context.runtime().unwrap()),
+            context: Arc::new(context.runtime()?),
             unit: Arc::new(unit),
             meta,
         })
@@ -195,24 +195,27 @@ impl Program {
     /// This is needed because execution of the function could actually run till completion just
     /// fine, but the function could return an error value, and in this case we should not
     /// ignore it.
-    fn convert_error(&self, function_name: &str, result: Value) -> Result<Value, LatteError> {
+    fn convert_error(&self, function_name: &str, result: Value) -> Result<Value, Box<LatteError>> {
         match result {
             Value::Result(result) => match result.take().unwrap() {
                 Ok(value) => Ok(value),
                 Err(Value::Any(e)) => {
                     if e.borrow_ref().unwrap().type_hash() == CassError::type_hash() {
                         let e = e.take_downcast::<CassError>().unwrap();
-                        return Err(LatteError::Cassandra(e));
+                        return Err(Box::new(LatteError::Cassandra(e)));
                     }
 
                     let e = Value::Any(e);
                     let msg = self.vm().with(|| format!("{e:?}"));
-                    Err(LatteError::FunctionResult(function_name.to_string(), msg))
+                    Err(Box::new(LatteError::FunctionResult(
+                        function_name.to_string(),
+                        msg,
+                    )))
                 }
-                Err(other) => Err(LatteError::FunctionResult(
+                Err(other) => Err(Box::new(LatteError::FunctionResult(
                     function_name.to_string(),
                     format!("{other:?}"),
-                )),
+                ))),
             },
             other => Ok(other),
         }
@@ -226,7 +229,7 @@ impl Program {
         &self,
         fun: &FnRef,
         args: impl Args + Send,
-    ) -> Result<Value, LatteError> {
+    ) -> Result<Value, Box<LatteError>> {
         let handle_err = |e: VmError| {
             let mut out = StandardStream::stderr(ColorChoice::Auto);
             let _ = e.emit(&mut out, &self.sources);
@@ -264,7 +267,7 @@ impl Program {
     /// Calls the script's `init` function.
     /// Called once at the beginning of the benchmark.
     /// Typically used to prepare statements.
-    pub async fn prepare(&mut self, context: &mut Context) -> Result<(), LatteError> {
+    pub async fn prepare(&mut self, context: &mut Context) -> Result<(), Box<LatteError>> {
         let context = ContextRefMut::new(context);
         self.async_call(&FnRef::new(PREPARE_FN), (context,)).await?;
         Ok(())
@@ -272,7 +275,7 @@ impl Program {
 
     /// Calls the script's `schema` function.
     /// Typically used to create database schema.
-    pub async fn schema(&mut self, context: &mut Context) -> Result<(), LatteError> {
+    pub async fn schema(&mut self, context: &mut Context) -> Result<(), Box<LatteError>> {
         let context = ContextRefMut::new(context);
         self.async_call(&FnRef::new(SCHEMA_FN), (context,)).await?;
         Ok(())
@@ -280,7 +283,7 @@ impl Program {
 
     /// Calls the script's `erase` function.
     /// Typically used to remove the data from the database before running the benchmark.
-    pub async fn erase(&mut self, context: &mut Context) -> Result<(), LatteError> {
+    pub async fn erase(&mut self, context: &mut Context) -> Result<(), Box<LatteError>> {
         let context = ContextRefMut::new(context);
         self.async_call(&FnRef::new(ERASE_FN), (context,)).await?;
         Ok(())
@@ -429,7 +432,7 @@ impl Workload {
         }
     }
 
-    pub fn clone(&self) -> Result<Self, LatteError> {
+    pub fn clone(&self) -> Result<Self, Box<LatteError>> {
         Ok(Workload {
             context: self.context.clone()?,
             // make a deep copy to avoid congestion on Arc ref counts used heavily by Rune
@@ -445,7 +448,7 @@ impl Workload {
     /// This should be idempotent –
     /// the generated action should be a function of the iteration number.
     /// Returns the cycle number and the end time of the query.
-    pub async fn run(&self, cycle: i64) -> Result<(i64, Instant), LatteError> {
+    pub async fn run(&self, cycle: i64) -> Result<(i64, Instant), Box<LatteError>> {
         let start_time = Instant::now();
         let mut rng = SmallRng::seed_from_u64(cycle as u64);
         let context = SessionRef::new(&self.context);
@@ -459,15 +462,21 @@ impl Workload {
                 state.operation_completed(function, duration);
                 Ok((cycle, end_time))
             }
-            Err(LatteError::Cassandra(CassError(CassErrorKind::Overloaded(_, _)))) => {
-                // don't stop on overload errors;
-                // they are being counted by the context stats anyways
-                state.operation_failed(function, duration);
-                Ok((cycle, end_time))
-            }
-            Err(e) => {
-                state.operation_failed(function, duration);
-                Err(e)
+            Err(err) => {
+                match *err {
+                    LatteError::Cassandra(CassError(kind))
+                        if matches!(*kind, CassErrorKind::Overloaded(_, _)) =>
+                    {
+                        // don't stop on overload errors;
+                        // they are being counted by the context stats anyway
+                        state.operation_failed(function, duration);
+                        Ok((cycle, end_time))
+                    }
+                    _ => {
+                        state.operation_failed(function, duration);
+                        Err(err)
+                    }
+                }
             }
         }
     }
