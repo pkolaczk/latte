@@ -159,8 +159,8 @@ pub async fn schema(ctx) {
 ### Prepared statements
 
 Calling `ctx.execute` is not optimal, because it doesn't use prepared statements. You can prepare statements and
-register them on the context object in the `prepare` function. 
-They will be executed during [the load step](#populating-the-database) before the actual database population 
+register them on the context object in the `prepare` function.
+They will be executed during [the load step](#populating-the-database) before the actual database population
 and the run step before executing the run function.
 An example of implementing and using prepare:
 
@@ -231,10 +231,13 @@ are pure, i.e. invoking them multiple times with the same parameters yields alwa
 - `latte::hash_select(i, vector)` – selects an item from a vector based on a hash
 - `latte::blob(i, len)` – generates a random binary blob of length `len`
 - `latte::normal(i, mean, std_dev)` – generates a floating point number from a normal distribution
+- `latte::normal_vec(i, length, mean, std_dev)` – generates a vector of floating point numbers from a normal
+  distribution
 - `latte::uniform(i, min, max)` – generates a floating point number from a uniform distribution
+- `latte::uniform_vec(i, length, min, max)` – generates a vector of floating point numbers from a uniform distribution
 - `latte::text(i, length)` – generates a random string
 - `latte::vector(length, function)` – generates a vector of given length with a function
-  that takes an integer element index and generates an element
+  that takes an integer element index and generates an element value
 - `latte::join(vector, separator)` – joins a collection of strings using a separator
 - `x.clamp(min, max)` – restricts the range of an integer or a float value to given range
 
