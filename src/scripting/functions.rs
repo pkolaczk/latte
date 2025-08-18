@@ -104,6 +104,28 @@ pub fn uniform(i: i64, min: f64, max: f64) -> VmResult<f64> {
     VmResult::Ok(distribution.sample(&mut rng))
 }
 
+#[rune::function]
+pub fn uniform_vec(i: i64, len: usize, min: f64, max: f64) -> VmResult<Value> {
+    let mut rng = SmallRng::seed_from_u64(i as u64);
+    let mut vec = vm_try!(rune::alloc::Vec::try_with_capacity(len));
+    for _ in 0..len {
+        vm_try!(vec.try_push(Value::Float(rng.gen_range(min..max))));
+    }
+    Value::vec(vec)
+}
+
+#[rune::function]
+pub fn normal_vec(i: i64, len: usize, mean: f64, std_dev: f64) -> VmResult<Value> {
+    let mut rng = SmallRng::seed_from_u64(i as u64);
+    let distribution =
+        vm_try!(Normal::new(mean, std_dev).map_err(|e| VmError::panic(format!("{e}"))));
+    let mut vec = vm_try!(rune::alloc::Vec::try_with_capacity(len));
+    for _ in 0..len {
+        vm_try!(vec.try_push(Value::Float(rng.sample(distribution))));
+    }
+    Value::vec(vec)
+}
+
 /// Generates random blob of data of given length.
 /// Parameter `seed` is used to seed the RNG.
 #[rune::function]

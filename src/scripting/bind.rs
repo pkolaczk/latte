@@ -3,16 +3,15 @@
 use crate::scripting::cass_error::{CassError, CassErrorKind};
 use crate::scripting::cql_types::Uuid;
 use rune::{Any, ToValue, Value};
+use scylla::cluster::metadata::{CollectionType, NativeType};
 use scylla::frame::response::result::ColumnSpec;
 use scylla::frame::response::result::ColumnType;
 use scylla::value::{CqlTimeuuid, CqlValue};
+
 use std::borrow::Cow;
 
 use std::net::IpAddr;
 use std::str::FromStr;
-
-use itertools::*;
-use scylla::cluster::metadata::{CollectionType, NativeType};
 
 fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
     // TODO: add support for the following native CQL types:
@@ -102,11 +101,11 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
             },
         ) => {
             let v = v.borrow_ref().unwrap();
-            let elements = v
-                .as_ref()
-                .iter()
-                .map(|v| to_scylla_value(v, elt))
-                .try_collect()?;
+            let mut elements = Vec::with_capacity(v.len());
+            for elem in v.iter() {
+                let elem = to_scylla_value(elem, elt)?;
+                elements.push(elem);
+            }
             Ok(CqlValue::List(elements))
         }
 
@@ -119,11 +118,11 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
             },
         ) => {
             let v = v.borrow_ref().unwrap();
-            let elements = v
-                .as_ref()
-                .iter()
-                .map(|v| to_scylla_value(v, elt))
-                .try_collect()?;
+            let mut elements = Vec::with_capacity(v.len());
+            for elem in v.iter() {
+                let elem = to_scylla_value(elem, elt)?;
+                elements.push(elem);
+            }
             Ok(CqlValue::Set(elements))
         }
 
@@ -175,6 +174,17 @@ fn to_scylla_value(v: &Value, typ: &ColumnType) -> Result<CqlValue, CassError> {
                 map_vec.push((key, value));
             }
             Ok(CqlValue::Map(map_vec))
+        }
+
+        // Vector
+        (Value::Vec(v), ColumnType::Vector { typ, .. }) => {
+            let v = v.borrow_ref().unwrap();
+            let mut elements = Vec::with_capacity(v.len());
+            for elem in v.iter() {
+                let elem = to_scylla_value(elem, typ)?;
+                elements.push(elem);
+            }
+            Ok(CqlValue::Vector(elements))
         }
 
         // UDTs
