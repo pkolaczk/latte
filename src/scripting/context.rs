@@ -176,7 +176,7 @@ impl Context {
         self.stats
             .try_lock()
             .unwrap()
-            .complete_request(duration, rs, attempts - 1);
+            .complete_request(duration, rs, attempts);
         Ok(())
     }
 
